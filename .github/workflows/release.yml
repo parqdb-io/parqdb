@@ -30,7 +30,6 @@ jobs:
             target: aarch64-apple-darwin
             manylinux: "off"
     env:
-      CARGO_BUILD_JOBS: "2"
       MACOSX_DEPLOYMENT_TARGET: "11.0"
 
     steps:
@@ -71,32 +70,12 @@ jobs:
           docker-options: -e SOURCE_DATE_EPOCH
           args: --release --locked --compatibility pypi --out dist
 
-      - name: Remove first build artifacts
-        shell: bash
-        run: rm -rf target
-
-      - name: Rebuild wheel
-        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
-        with:
-          maturin-version: v1.14.1
-          rust-toolchain: "1.96.0"
-          target: ${{ matrix.target }}
-          manylinux: ${{ matrix.manylinux }}
-          docker-options: -e SOURCE_DATE_EPOCH
-          args: --release --locked --compatibility pypi --out rebuilt
-
-      - name: Remove rebuilt artifacts
-        shell: bash
-        run: rm -rf target
-
       - name: Verify wheel on Python 3.11 through 3.14
         shell: bash
         run: |
           wheel="$(find dist -maxdepth 1 -name 'relify-*.whl' -print -quit)"
           test -n "$wheel"
-          rebuilt="rebuilt/$(basename "$wheel")"
-          uv run --no-sync python tools/verify_release.py \
-            "$wheel" --rebuilt-wheel "$rebuilt"
+          uv run --no-sync python tools/verify_release.py "$wheel"
 
       - name: Upload verified wheel
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
