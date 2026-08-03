@@ -57,8 +57,8 @@ this decision. They require separate native wheels and concurrency validation.
 This decision may move to `Accepted` only when:
 
 - Maturin produces one `cp310-abi3` wheel for each advertised platform;
-- the wheel passes existing metadata, license, SBOM, `RECORD`, reproducibility,
-  and isolated smoke verification;
+- the wheel passes existing metadata, license, SBOM, `RECORD`, and isolated
+  smoke verification;
 - the same wheel installs and passes the required test matrix on CPython 3.11,
   3.12, 3.13, and 3.14;
 - the dependency resolver finds supported PyArrow and optional-backend

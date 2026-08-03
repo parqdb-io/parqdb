@@ -19,8 +19,8 @@ The initial release includes:
 - independent DuckDB execution of the portable IVF fixtures;
 - reproducible persisted-build and large-k Recall-latency results with a Faiss
   baseline;
-- reproducible, verified wheels with locked dependency SBOMs and
-  installed-package smoke tests;
+- verified wheels with locked dependency SBOMs and installed-package smoke
+  tests;
 - immutable metadata publication and atomic refresh; and
 - reachability-based orphan removal.
 
