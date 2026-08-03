@@ -7,7 +7,7 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.1.0rc1] - 2026-08-03
+## [0.1.0rc1] - 2026-08-04
 
 ### Added
 
@@ -46,9 +46,9 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a capability-driven integration-test framework for optional environments.
 - Reproducible persisted-build and large-`k` recall-latency benchmarks with
   Faiss comparison.
-- Reproducible Maturin wheels with locked Python and Rust dependencies,
-  CycloneDX SBOMs, license and vulnerability audits, and isolated
-  build-and-search smoke tests.
+- Verified Maturin wheels with locked Python and Rust dependencies, CycloneDX
+  SBOMs, license and vulnerability audits, and isolated build-and-search smoke
+  tests.
 
 ### Security
 

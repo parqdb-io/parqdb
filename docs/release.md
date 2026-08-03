@@ -38,7 +38,7 @@ series. Product fixes land on `main` first and are then backported to the
 release branch. Delete the branch when the series is no longer maintained.
 
 All candidates, final releases, and patches in a release series use the same
-branch. Signed tags identify exact releases, for example:
+branch. Annotated tags identify exact releases, for example:
 
 ```text
 release/0.1
@@ -111,22 +111,21 @@ green. Free-threaded CPython requires separate artifacts and is not part of the
 0.1 target.
 
 `make verify-package` regenerates the locked CycloneDX SBOM, builds the wheel,
-validates package metadata, license files, typing markers, the native extension,
-SBOM contents, and every `RECORD` hash. It then rebuilds the wheel and requires
-an identical SHA-256 digest before installing the same artifact with all
-advertised extras into isolated CPython 3.11, 3.12, 3.13, and 3.14 environments
-and running the Python and interoperability suites plus a real local
+and validates package metadata, license files, typing markers, the native
+extension, SBOM contents, and every `RECORD` hash. It installs that artifact
+with all advertised extras into isolated CPython 3.11, 3.12, 3.13, and 3.14
+environments and runs the Python and interoperability suites plus a real local
 build-and-search smoke test in each one.
 
 ## Publish
 
 The `Release` workflow is the only supported PyPI publishing path. PyPI trusts
 `.github/workflows/release.yml` through the `pypi` GitHub environment and OIDC;
-the repository does not store a PyPI API token. The workflow rebuilds and
+the repository does not store a PyPI API token. The workflow builds and
 verifies both platform wheels, publishes them together, and retains the exact
 wheels and `SHA256SUMS` as one GitHub Actions artifact.
 
-1. Create and push the signed tag using the canonical Python version, for
+1. Create and push the annotated tag using the canonical Python version, for
    example `v0.1.0rc1` or `v0.1.0`, on the verified commit.
 2. Require the `Release` workflow to complete successfully. Do not upload
    another build manually when the workflow fails.
