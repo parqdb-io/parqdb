@@ -120,11 +120,19 @@ build-and-search smoke test in each one.
 
 ## Publish
 
-1. Create the signed tag using the canonical Python version, for example
-   `v0.1.0rc1` or `v0.1.0`, on the verified commit.
-2. Publish the exact verified wheel files to PyPI.
-3. Create the GitHub release from the changelog entry, attach the wheels and
-   checksums, and mark release candidates as pre-releases.
+The `Release` workflow is the only supported PyPI publishing path. PyPI trusts
+`.github/workflows/release.yml` through the `pypi` GitHub environment and OIDC;
+the repository does not store a PyPI API token. The workflow rebuilds and
+verifies both platform wheels, publishes them together, and retains the exact
+wheels and `SHA256SUMS` as one GitHub Actions artifact.
+
+1. Create and push the signed tag using the canonical Python version, for
+   example `v0.1.0rc1` or `v0.1.0`, on the verified commit.
+2. Require the `Release` workflow to complete successfully. Do not upload
+   another build manually when the workflow fails.
+3. Download the `release-<tag>` workflow artifact and create the GitHub release
+   from the changelog entry. Attach the two wheels and `SHA256SUMS`, and mark
+   release candidates as pre-releases.
 4. Verify the exact version from PyPI in a new environment, for example with
    `python -m pip install relify==0.1.0rc1`.
 5. Restore an empty `Unreleased` section in the changelog.
