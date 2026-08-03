@@ -1,0 +1,52 @@
+name: Question
+description: Ask a focused installation, API, or usage question.
+title: "[Question] "
+labels:
+  - question
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Relify version
+      description: Package version, commit SHA, or branch.
+      placeholder: Package version or commit SHA
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, Python version, storage, and backend.
+      placeholder: macOS 15, Python 3.12, local filesystem, DataFusion
+    validations:
+      required: true
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: What are you trying to do?
+      description: Describe the concrete workflow and expected result.
+    validations:
+      required: true
+
+  - type: textarea
+    id: code
+    attributes:
+      label: Minimal code
+      description: Include the smallest example that shows the question.
+      render: python
+
+  - type: textarea
+    id: attempts
+    attributes:
+      label: What have you tried?
+      description: Include relevant documentation, output, or workarounds.
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Code of Conduct
+      options:
+        - label: I agree to follow the project's Code of Conduct.
+          required: true

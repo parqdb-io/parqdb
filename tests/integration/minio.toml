@@ -1,0 +1,7 @@
+# Managed by `make test-s3`. These credentials are local test fixtures.
+[s3]
+uri = "s3://relify-tests"
+endpoint = "http://127.0.0.1:9000"
+access_key = "relify"
+secret_key = "relify-secret"
+region = "us-east-1"

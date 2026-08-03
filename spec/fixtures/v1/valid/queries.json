@@ -1,0 +1,131 @@
+[
+  {
+    "expected": [
+      {
+        "_distance": 0.0,
+        "document_id": "a"
+      },
+      {
+        "_distance": 1.0,
+        "document_id": "b"
+      }
+    ],
+    "filter": null,
+    "k": 2,
+    "name": "one-cluster",
+    "nprobe": 1,
+    "projection": [
+      "document_id"
+    ],
+    "query-vector": [
+      0.0,
+      0.0
+    ]
+  },
+  {
+    "expected": [
+      {
+        "_distance": 0.0,
+        "document_id": "a"
+      },
+      {
+        "_distance": 100.0,
+        "document_id": "c"
+      }
+    ],
+    "filter": {
+      "status": "published"
+    },
+    "k": 2,
+    "name": "prefilter",
+    "nprobe": 2,
+    "projection": [
+      "document_id"
+    ],
+    "query-vector": [
+      0.0,
+      0.0
+    ]
+  },
+  {
+    "expected": [
+      {
+        "_distance": 0.25,
+        "document_id": "a"
+      },
+      {
+        "_distance": 0.25,
+        "document_id": "b"
+      }
+    ],
+    "filter": null,
+    "k": 2,
+    "name": "equal-distance-results",
+    "nprobe": 2,
+    "projection": [
+      "document_id"
+    ],
+    "query-vector": [
+      0.5,
+      0.0
+    ]
+  },
+  {
+    "expected": [
+      {
+        "_distance": 18.0625,
+        "document_id": "b"
+      },
+      {
+        "_distance": 27.5625,
+        "document_id": "a"
+      }
+    ],
+    "filter": null,
+    "k": 3,
+    "name": "centroid-id-tie-break",
+    "nprobe": 1,
+    "projection": [
+      "document_id"
+    ],
+    "query-vector": [
+      5.25,
+      0.0
+    ]
+  },
+  {
+    "expected": [
+      {
+        "_distance": 0.0,
+        "document_id": "c"
+      }
+    ],
+    "filter": null,
+    "k": 10,
+    "name": "k-exceeds-selected-candidates",
+    "nprobe": 1,
+    "projection": [
+      "document_id"
+    ],
+    "query-vector": [
+      10.0,
+      0.0
+    ]
+  },
+  {
+    "expected": [],
+    "filter": {
+      "status": "missing"
+    },
+    "k": 3,
+    "name": "filter-excludes-all",
+    "nprobe": 2,
+    "projection": [
+      "document_id"
+    ],
+    "query-vector": [
+      0.0,
+      0.0
+    ]
+  }
+]

@@ -1,0 +1,59 @@
+[
+  {
+    "expected": [
+      {
+        "_distance": 0.0,
+        "document_id": "a",
+        "tenant_id": 1
+      },
+      {
+        "_distance": 0.0,
+        "document_id": "b",
+        "tenant_id": 1
+      },
+      {
+        "_distance": 100.0,
+        "document_id": "a",
+        "tenant_id": 2
+      }
+    ],
+    "filter": null,
+    "k": 3,
+    "name": "composite-equal-distance-results",
+    "nprobe": 2,
+    "projection": [
+      "tenant_id",
+      "document_id"
+    ],
+    "query-vector": [
+      0.0,
+      0.0
+    ]
+  },
+  {
+    "expected": [
+      {
+        "_distance": 0.0,
+        "document_id": "a",
+        "tenant_id": 1
+      },
+      {
+        "_distance": 0.0,
+        "document_id": "b",
+        "tenant_id": 1
+      }
+    ],
+    "filter": null,
+    "k": 10,
+    "name": "composite-index-without-stored-vectors",
+    "nprobe": 1,
+    "projection": [
+      "tenant_id",
+      "document_id"
+    ],
+    "query-vector": [
+      0.0,
+      0.0
+    ]
+  }
+]

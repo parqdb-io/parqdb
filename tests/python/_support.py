@@ -1,0 +1,109 @@
+from __future__ import annotations
+
+import json
+from collections.abc import Mapping
+from datetime import timedelta
+from pathlib import Path
+from typing import Any
+from urllib.parse import unquote, urlparse
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+import relify
+
+WAIT = timedelta(seconds=30)
+
+
+def vector_type(*, nullable_elements: bool = False) -> pa.ListType:
+    return pa.list_(pa.field("element", pa.float32(), nullable=nullable_elements))
+
+
+def write_vectors(
+    path: Path,
+    ids: list[int],
+    vectors: list[list[float]],
+    *,
+    vector_column: str = "embedding",
+) -> None:
+    schema = pa.schema(
+        [
+            pa.field("id", pa.int64(), nullable=False),
+            pa.field("payload", pa.string(), nullable=False),
+            pa.field(vector_column, vector_type(), nullable=False),
+        ]
+    )
+    pq.write_table(
+        pa.Table.from_arrays(
+            [
+                pa.array(ids, type=pa.int64()),
+                pa.array([f"row-{value}" for value in ids], type=pa.string()),
+                pa.array(vectors, type=vector_type()),
+            ],
+            schema=schema,
+        ),
+        path,
+    )
+
+
+def build_index(
+    table: relify.SourceTable,
+    name: str = "vectors_embedding",
+    *,
+    column: str = "embedding",
+    key: list[str] | None = None,
+    nlist: int = 2,
+    store_vectors: bool = True,
+    builder: relify.Local | None = None,
+    writer_options: relify.WriteOptions | None = None,
+) -> None:
+    table.create_index(
+        name,
+        column=column,
+        key=key if key is not None else ["id"],
+        config=relify.IVF(nlist=nlist, store_vectors=store_vectors),
+        builder=builder,
+        writer_options=writer_options,
+        wait_timeout=WAIT,
+    )
+
+
+def register_source(
+    session: relify.Session,
+    source: str | Path,
+    name: str = "vectors",
+) -> relify.SourceTable:
+    session.register_parquet(name, source)
+    table = session.table(name)
+    assert isinstance(table, relify.SourceTable)
+    return table
+
+
+def relation_root(reference: Mapping[str, Any]) -> Path:
+    parsed = urlparse(reference["uri"])
+    assert reference["profile"] == "parquet"
+    assert parsed.scheme == "file"
+    return Path(unquote(parsed.path))
+
+
+def relation_files(reference: Mapping[str, Any]) -> list[Path]:
+    return sorted(relation_root(reference).rglob("*.parquet"))
+
+
+def relation_path(reference: Mapping[str, Any]) -> Path:
+    files = relation_files(reference)
+    assert files
+    return files[0]
+
+
+def thaw_json(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {key: thaw_json(child) for key, child in value.items()}
+    if isinstance(value, tuple):
+        return [thaw_json(child) for child in value]
+    return value
+
+
+def load_metadata_file(location: str) -> object:
+    parsed = urlparse(location)
+    assert parsed.scheme == "file"
+    return json.loads(Path(unquote(parsed.path)).read_text())

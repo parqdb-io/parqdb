@@ -1,0 +1,27 @@
+[package]
+name = "relify-catalog"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Relify catalog abstraction, identifiers, and SQLite implementation"
+repository.workspace = true
+publish = false
+
+[features]
+default = ["sqlite"]
+sqlite = ["dep:rusqlite", "dep:serde_json"]
+
+[lints]
+workspace = true
+
+[dependencies]
+relify-meta = { version = "0.1.0-rc.1", path = "../relify-meta" }
+rusqlite = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+url.workspace = true
+uuid.workspace = true

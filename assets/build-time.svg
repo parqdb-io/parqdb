@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="430" viewBox="0 0 1280 430" role="img" aria-labelledby="title description">
+<title id="title">Persisted IVF-Flat Build Time</title>
+<desc id="description">Embedded build time from one shared Parquet source through persisted IVF-Flat indexes. Lower is better.</desc>
+<rect width="1280" height="430" rx="24" fill="#f8fafc"/>
+<text x="58" y="58" font-size="30" font-weight="700" fill="#0f172a">Persisted IVF-Flat Build Time</text>
+<text x="58" y="88" font-size="15" fill="#475569">Same uncompressed Parquet source · nlist=4,096 · lower is better</text>
+<line x1="224.0" y1="132" x2="224.0" y2="320" stroke="#e2e8f0"/>
+<text x="224.0" y="342" text-anchor="middle" font-size="11" fill="#64748b">0s</text>
+<line x1="417.2" y1="132" x2="417.2" y2="320" stroke="#e2e8f0"/>
+<text x="417.2" y="342" text-anchor="middle" font-size="11" fill="#64748b">10s</text>
+<line x1="610.4" y1="132" x2="610.4" y2="320" stroke="#e2e8f0"/>
+<text x="610.4" y="342" text-anchor="middle" font-size="11" fill="#64748b">20s</text>
+<line x1="803.6" y1="132" x2="803.6" y2="320" stroke="#e2e8f0"/>
+<text x="803.6" y="342" text-anchor="middle" font-size="11" fill="#64748b">30s</text>
+<line x1="996.8" y1="132" x2="996.8" y2="320" stroke="#e2e8f0"/>
+<text x="996.8" y="342" text-anchor="middle" font-size="11" fill="#64748b">40s</text>
+<line x1="1190.0" y1="132" x2="1190.0" y2="320" stroke="#e2e8f0"/>
+<text x="1190.0" y="342" text-anchor="middle" font-size="11" fill="#64748b">50s</text>
+<text x="190" y="196" text-anchor="end" font-size="17" font-weight="700" fill="#334155">Relify</text>
+<rect x="224" y="167.0" width="554.5" height="46" rx="8" fill="#0f766e"/>
+<text x="790.5" y="196" font-size="14" font-weight="700" fill="#334155">28.70s</text>
+<text x="190" y="286" text-anchor="end" font-size="17" font-weight="700" fill="#334155">Faiss</text>
+<rect x="224" y="257.0" width="953.0" height="46" rx="8" fill="#f59e0b"/>
+<text x="1189.0" y="286" font-size="14" font-weight="700" fill="#334155">49.33s</text>
+<text x="58" y="385" font-size="12" fill="#475569">Timers start from the shared Parquet source and stop after index persistence.</text>
+<text x="58" y="409" font-size="11" fill="#64748b">1,000,000 vectors · d=128 · nlist=4,096 · arm64 · 10 logical CPUs</text>
+</svg>

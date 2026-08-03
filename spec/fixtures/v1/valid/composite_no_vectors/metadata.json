@@ -1,0 +1,55 @@
+{
+  "current-snapshot-id": 801,
+  "format-version": 1,
+  "index-uuid": "8e51cf0a-c749-4894-83e7-5e9be2c373b7",
+  "last-sequence-number": 1,
+  "last-updated-ms": 1750000000000,
+  "location": "s3://relify-fixtures/v1/metadata/8e51cf0a-c749-4894-83e7-5e9be2c373b7/",
+  "properties": {
+    "fixture": "ivf-parquet-composite-no-vectors-v1"
+  },
+  "snapshot-log": [
+    {
+      "snapshot-id": 801,
+      "timestamp-ms": 1750000000000
+    }
+  ],
+  "snapshots": [
+    {
+      "index-family": "ivf",
+      "index-relations": {
+        "ivf_centroids": {
+          "profile": "parquet",
+          "uri": "s3://relify-fixtures/v1/valid/composite_no_vectors/ivf_centroids/"
+        },
+        "ivf_postings": {
+          "profile": "parquet",
+          "uri": "s3://relify-fixtures/v1/valid/composite_no_vectors/ivf_postings/"
+        }
+      },
+      "index-schema-version": 1,
+      "metric": "l2_squared",
+      "parameters": {
+        "dimension": "2",
+        "nlist": "2",
+        "ntotal": "3",
+        "store_vectors": "false"
+      },
+      "sequence-number": 1,
+      "snapshot-id": 801,
+      "source": {
+        "profile": "parquet",
+        "uri": "s3://relify-fixtures/v1/valid/composite_no_vectors/source/"
+      },
+      "source-key-fields": [
+        "tenant_id",
+        "document_id"
+      ],
+      "summary": {
+        "operation": "create"
+      },
+      "timestamp-ms": 1750000000000,
+      "vector-field": "embedding"
+    }
+  ]
+}

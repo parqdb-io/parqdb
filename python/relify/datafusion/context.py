@@ -1,0 +1,2112 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+""":py:class:`SessionContext` — entry point for running DataFusion queries.
+
+A :py:class:`SessionContext` holds registered tables, catalogs, and
+configuration for the current session. It is the first object most programs
+create: from it you register data, run SQL strings
+(:py:meth:`SessionContext.sql`), read files
+(:py:meth:`SessionContext.read_csv`,
+:py:meth:`SessionContext.read_parquet`, ...), and construct
+:py:class:`~datafusion.dataframe.DataFrame` objects in memory
+(:py:meth:`SessionContext.from_pydict`,
+:py:meth:`SessionContext.from_arrow`).
+
+Session behavior (memory limits, batch size, configured optimizer passes,
+...) is controlled by :py:class:`SessionConfig` and
+:py:class:`RuntimeEnvBuilder`; SQL dialect limits are controlled by
+:py:class:`SQLOptions`.
+
+Examples:
+    >>> ctx = dfn.SessionContext()
+    >>> df = ctx.from_pydict({"a": [1, 2, 3]})
+    >>> ctx.sql("SELECT 1 AS n").to_pydict()
+    {'n': [1]}
+
+See :ref:`user_guide_concepts` in the online documentation for the broader
+execution model.
+"""
+
+from __future__ import annotations
+
+import uuid
+import warnings
+from typing import TYPE_CHECKING, Any, Protocol
+
+try:
+    from warnings import deprecated  # Python 3.13+
+except ImportError:
+    from typing_extensions import deprecated  # Python 3.12
+
+
+import pyarrow as pa
+
+from relify.datafusion.catalog import (
+    Catalog,
+    CatalogList,
+    CatalogProviderExportable,
+    CatalogProviderList,
+    CatalogProviderListExportable,
+    TableProviderFactory,
+    TableProviderFactoryExportable,
+)
+from relify.datafusion.dataframe import DataFrame
+from relify.datafusion.expr import sort_list_to_raw_sort_list
+from relify.datafusion.options import (
+    DEFAULT_MAX_INFER_SCHEMA,
+    CsvReadOptions,
+    _convert_table_partition_cols,
+)
+from relify.datafusion.record_batch import RecordBatchStream
+
+from ._internal import RuntimeEnvBuilder as RuntimeEnvBuilderInternal
+from ._internal import SessionConfig as SessionConfigInternal
+from ._internal import SessionContext as SessionContextInternal
+from ._internal import SQLOptions as SQLOptionsInternal
+from ._internal import expr as expr_internal
+
+if TYPE_CHECKING:
+    import pathlib
+    from collections.abc import Iterable, Sequence
+
+    import pandas as pd
+    import polars as pl  # type: ignore[import]
+    from _typeshed import CapsuleType as _PyCapsule
+
+    from relify.datafusion.catalog import CatalogProvider, Table
+    from relify.datafusion.common import DFSchema
+    from relify.datafusion.expr import Expr, SortKey
+    from relify.datafusion.plan import ExecutionPlan, LogicalPlan
+    from relify.datafusion.user_defined import (
+        AggregateUDF,
+        LogicalExtensionCodecExportable,
+        PhysicalExtensionCodecExportable,
+        ScalarUDF,
+        TableFunction,
+        WindowUDF,
+    )
+
+
+class ArrowStreamExportable(Protocol):
+    """Type hint for object exporting Arrow C Stream via Arrow PyCapsule Interface.
+
+    https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
+    """
+
+    def __arrow_c_stream__(  # noqa: D105
+        self, requested_schema: object | None = None
+    ) -> object: ...
+
+
+class ArrowArrayExportable(Protocol):
+    """Type hint for object exporting Arrow C Array via Arrow PyCapsule Interface.
+
+    https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
+    """
+
+    def __arrow_c_array__(  # noqa: D105
+        self, requested_schema: object | None = None
+    ) -> tuple[object, object]: ...
+
+
+class TableProviderExportable(Protocol):
+    """Type hint for object that has __datafusion_table_provider__ PyCapsule.
+
+    https://datafusion.apache.org/python/user-guide/io/table_provider.html
+    """
+
+    def __datafusion_table_provider__(self, session: Any) -> object: ...  # noqa: D105
+
+
+class PhysicalOptimizerRuleExportable(Protocol):
+    """Type hint for object that has __datafusion_physical_optimizer_rule__ PyCapsule.
+
+    The method returns a PyCapsule wrapping an ``FFI_PhysicalOptimizerRule``,
+    typically produced by a separate compiled extension.
+    """
+
+    def __datafusion_physical_optimizer_rule__(self) -> object: ...  # noqa: D105
+
+
+class SessionConfig:
+    """Session configuration options."""
+
+    def __init__(self, config_options: dict[str, str] | None = None) -> None:
+        """Create a new :py:class:`SessionConfig` with the given configuration options.
+
+        Args:
+            config_options: Configuration options.
+        """
+        self.config_internal = SessionConfigInternal(config_options)
+
+    def with_create_default_catalog_and_schema(
+        self, enabled: bool = True
+    ) -> SessionConfig:
+        """Control if the default catalog and schema will be automatically created.
+
+        Args:
+            enabled: Whether the default catalog and schema will be
+                automatically created.
+
+        Returns:
+            A new :py:class:`SessionConfig` object with the updated setting.
+        """
+        self.config_internal = (
+            self.config_internal.with_create_default_catalog_and_schema(enabled)
+        )
+        return self
+
+    def with_default_catalog_and_schema(
+        self, catalog: str, schema: str
+    ) -> SessionConfig:
+        """Select a name for the default catalog and schema.
+
+        Args:
+            catalog: Catalog name.
+            schema: Schema name.
+
+        Returns:
+            A new :py:class:`SessionConfig` object with the updated setting.
+        """
+        self.config_internal = self.config_internal.with_default_catalog_and_schema(
+            catalog, schema
+        )
+        return self
+
+    def with_information_schema(self, enabled: bool = True) -> SessionConfig:
+        """Enable or disable the inclusion of ``information_schema`` virtual tables.
+
+        Args:
+            enabled: Whether to include ``information_schema`` virtual tables.
+
+        Returns:
+            A new :py:class:`SessionConfig` object with the updated setting.
+        """
+        self.config_internal = self.config_internal.with_information_schema(enabled)
+        return self
+
+    def with_batch_size(self, batch_size: int) -> SessionConfig:
+        """Customize batch size.
+
+        Args:
+            batch_size: Batch size.
+
+        Returns:
+            A new :py:class:`SessionConfig` object with the updated setting.
+        """
+        self.config_internal = self.config_internal.with_batch_size(batch_size)
+        return self
+
+    def with_target_partitions(self, target_partitions: int) -> SessionConfig:
+        """Customize the number of target partitions for query execution.
+
+        Increasing partitions can increase concurrency.
+
+        Args:
+            target_partitions: Number of target partitions.
+
+        Returns:
+            A new :py:class:`SessionConfig` object with the updated setting.
+        """
+        self.config_internal = self.config_internal.with_target_partitions(
+            target_partitions
+        )
+        return self
+
+    def with_repartition_aggregations(self, enabled: bool = True) -> SessionConfig:
+        """Enable or disable the use of repartitioning for aggregations.
+
+        Enabling this improves parallelism.
+
+        Args:
+            enabled: Whether to use repartitioning for aggregations.
+
+        Returns:
+            A new :py:class:`SessionConfig` object with the updated setting.
+        """
+        self.config_internal = self.config_internal.with_repartition_aggregations(
+            enabled
+        )
+        return self
+
+    def with_repartition_joins(self, enabled: bool = True) -> SessionConfig:
+        """Enable or disable the use of repartitioning for joins to improve parallelism.
+
+        Args:
+            enabled: Whether to use repartitioning for joins.
+
+        Returns:
+            A new :py:class:`SessionConfig` object with the updated setting.
+        """
+        self.config_internal = self.config_internal.with_repartition_joins(enabled)
+        return self
+
+    def with_repartition_windows(self, enabled: bool = True) -> SessionConfig:
+        """Enable or disable the use of repartitioning for window functions.
+
+        This may improve parallelism.
+
+        Args:
+            enabled: Whether to use repartitioning for window functions.
+
+        Returns:
+            A new :py:class:`SessionConfig` object with the updated setting.
+        """
+        self.config_internal = self.config_internal.with_repartition_windows(enabled)
+        return self
+
+    def with_repartition_sorts(self, enabled: bool = True) -> SessionConfig:
+        """Enable or disable the use of repartitioning for window functions.
+
+        This may improve parallelism.
+
+        Args:
+            enabled: Whether to use repartitioning for window functions.
+
+        Returns:
+            A new :py:class:`SessionConfig` object with the updated setting.
+        """
+        self.config_internal = self.config_internal.with_repartition_sorts(enabled)
+        return self
+
+    def with_repartition_file_scans(self, enabled: bool = True) -> SessionConfig:
+        """Enable or disable the use of repartitioning for file scans.
+
+        Args:
+            enabled: Whether to use repartitioning for file scans.
+
+        Returns:
+            A new :py:class:`SessionConfig` object with the updated setting.
+        """
+        self.config_internal = self.config_internal.with_repartition_file_scans(enabled)
+        return self
+
+    def with_repartition_file_min_size(self, size: int) -> SessionConfig:
+        """Set minimum file range size for repartitioning scans.
+
+        Args:
+            size: Minimum file range size.
+
+        Returns:
+            A new :py:class:`SessionConfig` object with the updated setting.
+        """
+        self.config_internal = self.config_internal.with_repartition_file_min_size(size)
+        return self
+
+    def with_parquet_pruning(self, enabled: bool = True) -> SessionConfig:
+        """Enable or disable the use of pruning predicate for parquet readers.
+
+        Pruning predicates will enable the reader to skip row groups.
+
+        Args:
+            enabled: Whether to use pruning predicate for parquet readers.
+
+        Returns:
+            A new :py:class:`SessionConfig` object with the updated setting.
+        """
+        self.config_internal = self.config_internal.with_parquet_pruning(enabled)
+        return self
+
+    def set(self, key: str, value: str) -> SessionConfig:
+        """Set a configuration option.
+
+        Args:
+        key: Option key.
+        value: Option value.
+
+        Returns:
+            A new :py:class:`SessionConfig` object with the updated setting.
+        """
+        self.config_internal = self.config_internal.set(key, value)
+        return self
+
+    def with_extension(self, extension: Any) -> SessionConfig:
+        """Create a new configuration using an extension.
+
+        Args:
+            extension: A custom configuration extension object. These are
+            shared from another DataFusion extension library.
+
+        Returns:
+            A new :py:class:`SessionConfig` object with the updated setting.
+        """
+        self.config_internal = self.config_internal.with_extension(extension)
+        return self
+
+
+class RuntimeEnvBuilder:
+    """Runtime configuration options."""
+
+    def __init__(self) -> None:
+        """Create a new :py:class:`RuntimeEnvBuilder` with default values."""
+        self.config_internal = RuntimeEnvBuilderInternal()
+
+    def with_disk_manager_disabled(self) -> RuntimeEnvBuilder:
+        """Disable the disk manager, attempts to create temporary files will error.
+
+        Returns:
+            A new :py:class:`RuntimeEnvBuilder` object with the updated setting.
+        """
+        self.config_internal = self.config_internal.with_disk_manager_disabled()
+        return self
+
+    def with_disk_manager_os(self) -> RuntimeEnvBuilder:
+        """Use the operating system's temporary directory for disk manager.
+
+        Returns:
+            A new :py:class:`RuntimeEnvBuilder` object with the updated setting.
+        """
+        self.config_internal = self.config_internal.with_disk_manager_os()
+        return self
+
+    def with_disk_manager_specified(
+        self, *paths: str | pathlib.Path
+    ) -> RuntimeEnvBuilder:
+        """Use the specified paths for the disk manager's temporary files.
+
+        Args:
+            paths: Paths to use for the disk manager's temporary files.
+
+        Returns:
+            A new :py:class:`RuntimeEnvBuilder` object with the updated setting.
+        """
+        paths_list = [str(p) for p in paths]
+        self.config_internal = self.config_internal.with_disk_manager_specified(
+            paths_list
+        )
+        return self
+
+    def with_unbounded_memory_pool(self) -> RuntimeEnvBuilder:
+        """Use an unbounded memory pool.
+
+        Returns:
+            A new :py:class:`RuntimeEnvBuilder` object with the updated setting.
+        """
+        self.config_internal = self.config_internal.with_unbounded_memory_pool()
+        return self
+
+    def with_fair_spill_pool(self, size: int) -> RuntimeEnvBuilder:
+        """Use a fair spill pool with the specified size.
+
+        This pool works best when you know beforehand the query has multiple spillable
+        operators that will likely all need to spill. Sometimes it will cause spills
+        even when there was sufficient memory (reserved for other operators) to avoid
+        doing so::
+
+            ┌───────────────────────z──────────────────────z───────────────┐
+            │                       z                      z               │
+            │                       z                      z               │
+            │       Spillable       z       Unspillable    z     Free      │
+            │        Memory         z        Memory        z    Memory     │
+            │                       z                      z               │
+            │                       z                      z               │
+            └───────────────────────z──────────────────────z───────────────┘
+
+        Args:
+            size: Size of the memory pool in bytes.
+
+        Returns:
+            A new :py:class:`RuntimeEnvBuilder` object with the updated setting.
+
+        Examples:
+            >>> config = dfn.RuntimeEnvBuilder().with_fair_spill_pool(1024)
+        """
+        self.config_internal = self.config_internal.with_fair_spill_pool(size)
+        return self
+
+    def with_greedy_memory_pool(self, size: int) -> RuntimeEnvBuilder:
+        """Use a greedy memory pool with the specified size.
+
+        This pool works well for queries that do not need to spill or have a single
+        spillable operator. See :py:func:`with_fair_spill_pool` if there are
+        multiple spillable operators that all will spill.
+
+        Args:
+            size: Size of the memory pool in bytes.
+
+        Returns:
+            A new :py:class:`RuntimeEnvBuilder` object with the updated setting.
+
+        Examples:
+            >>> config = dfn.RuntimeEnvBuilder().with_greedy_memory_pool(1024)
+        """
+        self.config_internal = self.config_internal.with_greedy_memory_pool(size)
+        return self
+
+    def with_temp_file_path(self, path: str | pathlib.Path) -> RuntimeEnvBuilder:
+        """Use the specified path to create any needed temporary files.
+
+        Args:
+            path: Path to use for temporary files.
+
+        Returns:
+            A new :py:class:`RuntimeEnvBuilder` object with the updated setting.
+
+        Examples:
+            >>> config = dfn.RuntimeEnvBuilder().with_temp_file_path("/tmp")
+        """
+        self.config_internal = self.config_internal.with_temp_file_path(str(path))
+        return self
+
+
+class SQLOptions:
+    """Options to be used when performing SQL queries."""
+
+    def __init__(self) -> None:
+        """Create a new :py:class:`SQLOptions` with default values.
+
+        The default values are:
+        - DDL commands are allowed
+        - DML commands are allowed
+        - Statements are allowed
+        """
+        self.options_internal = SQLOptionsInternal()
+
+    def with_allow_ddl(self, allow: bool = True) -> SQLOptions:
+        """Should DDL (Data Definition Language) commands be run?
+
+        Examples of DDL commands include ``CREATE TABLE`` and ``DROP TABLE``.
+
+        Args:
+            allow: Allow DDL commands to be run.
+
+        Returns:
+            A new :py:class:`SQLOptions` object with the updated setting.
+
+        Examples:
+            >>> options = dfn.SQLOptions().with_allow_ddl(True)
+        """
+        self.options_internal = self.options_internal.with_allow_ddl(allow)
+        return self
+
+    def with_allow_dml(self, allow: bool = True) -> SQLOptions:
+        """Should DML (Data Manipulation Language) commands be run?
+
+        Examples of DML commands include ``INSERT INTO`` and ``DELETE``.
+
+        Args:
+            allow: Allow DML commands to be run.
+
+        Returns:
+            A new :py:class:`SQLOptions` object with the updated setting.
+
+        Examples:
+            >>> options = dfn.SQLOptions().with_allow_dml(True)
+        """
+        self.options_internal = self.options_internal.with_allow_dml(allow)
+        return self
+
+    def with_allow_statements(self, allow: bool = True) -> SQLOptions:
+        """Should statements such as ``SET VARIABLE`` and ``BEGIN TRANSACTION`` be run?
+
+        Args:
+            allow: Allow statements to be run.
+
+        Returns:
+            A new :py:class:SQLOptions` object with the updated setting.
+
+        Examples:
+            >>> options = dfn.SQLOptions().with_allow_statements(True)
+        """
+        self.options_internal = self.options_internal.with_allow_statements(allow)
+        return self
+
+
+class SessionContext:
+    """This is the main interface for executing queries and creating DataFrames.
+
+    See :ref:`user_guide_concepts` in the online documentation for more information.
+    """
+
+    def __init__(
+        self,
+        config: SessionConfig | None = None,
+        runtime: RuntimeEnvBuilder | None = None,
+    ) -> None:
+        """Main interface for executing queries with DataFusion.
+
+        Maintains the state of the connection between a user and an instance
+        of the connection between a user and an instance of the DataFusion
+        engine.
+
+        Args:
+            config: Session configuration options.
+            runtime: Runtime configuration options.
+
+        Example usage:
+
+        The following example demonstrates how to use the context to execute
+        a query against a CSV data source using the :py:class:`DataFrame` API::
+
+            from relify.datafusion import SessionContext
+
+            ctx = SessionContext()
+            df = ctx.read_csv("data.csv")
+        """
+        config = config.config_internal if config is not None else None
+        runtime = runtime.config_internal if runtime is not None else None
+
+        self.ctx = SessionContextInternal(config, runtime)
+
+    def __repr__(self) -> str:
+        """Print a string representation of the Session Context."""
+        return self.ctx.__repr__()
+
+    @classmethod
+    def global_ctx(cls) -> SessionContext:
+        """Retrieve the global context as a `SessionContext` wrapper.
+
+        Returns:
+            A `SessionContext` object that wraps the global `SessionContextInternal`.
+        """
+        internal_ctx = SessionContextInternal.global_ctx()
+        wrapper = cls()
+        wrapper.ctx = internal_ctx
+        return wrapper
+
+    def enable_url_table(self) -> SessionContext:
+        """Control if local files can be queried as tables.
+
+        Returns:
+            A new :py:class:`SessionContext` object with url table enabled.
+        """
+        klass = self.__class__
+        obj = klass.__new__(klass)
+        obj.ctx = self.ctx.enable_url_table()
+        return obj
+
+    def register_object_store(
+        self, schema: str, store: Any, host: str | None = None
+    ) -> None:
+        """Add a new object store into the session.
+
+        Args:
+            schema: The data source schema.
+            store: The :py:class:`~datafusion.object_store.ObjectStore` to register.
+            host: URL for the host.
+        """
+        self.ctx.register_object_store(schema, store, host)
+
+    def deregister_object_store(self, schema: str, host: str | None = None) -> None:
+        """Remove an object store from the session.
+
+        Args:
+            schema: The data source schema (e.g. ``"s3://"``).
+            host: URL for the host (e.g. bucket name).
+        """
+        self.ctx.deregister_object_store(schema, host)
+
+    def register_listing_table(
+        self,
+        name: str,
+        path: str | pathlib.Path,
+        table_partition_cols: list[tuple[str, str | pa.DataType]] | None = None,
+        file_extension: str = ".parquet",
+        schema: pa.Schema | None = None,
+        file_sort_order: Sequence[Sequence[SortKey]] | None = None,
+    ) -> None:
+        """Register multiple files as a single table.
+
+        Registers a :py:class:`~datafusion.catalog.Table` that can assemble multiple
+        files from locations in an :py:class:`~datafusion.object_store.ObjectStore`
+        instance.
+
+        Args:
+            name: Name of the resultant table.
+            path: Path to the file to register.
+            table_partition_cols: Partition columns.
+            file_extension: File extension of the provided table.
+            schema: The data source schema.
+            file_sort_order: Sort order for the file. Each sort key can be
+                specified as a column name (``str``), an expression
+                (``Expr``), or a ``SortExpr``.
+        """
+        if table_partition_cols is None:
+            table_partition_cols = []
+        table_partition_cols = _convert_table_partition_cols(table_partition_cols)
+        self.ctx.register_listing_table(
+            name,
+            path,
+            table_partition_cols,
+            file_extension,
+            schema,
+            self._convert_file_sort_order(file_sort_order),
+        )
+
+    def sql(
+        self,
+        query: str,
+        options: SQLOptions | None = None,
+        param_values: dict[str, Any] | None = None,
+        **named_params: Any,
+    ) -> DataFrame:
+        """Create a :py:class:`~datafusion.DataFrame` from SQL query text.
+
+        See the online documentation for a description of how to perform
+        parameterized substitution via either the ``param_values`` option
+        or passing in ``named_params``.
+
+        Note: This API implements DDL statements such as ``CREATE TABLE`` and
+        ``CREATE VIEW`` and DML statements such as ``INSERT INTO`` with in-memory
+        default implementation.See
+        :py:func:`~datafusion.context.SessionContext.sql_with_options`.
+
+        Args:
+            query: SQL query text.
+            options: If provided, the query will be validated against these options.
+            param_values: Provides substitution of scalar values in the query
+                after parsing.
+            named_params: Provides string or DataFrame substitution in the query string.
+
+        Returns:
+            DataFrame representation of the SQL query.
+        """
+
+        def value_to_scalar(value: Any) -> pa.Scalar:
+            if isinstance(value, pa.Scalar):
+                return value
+            return pa.scalar(value)
+
+        def value_to_string(value: Any) -> str:
+            if isinstance(value, DataFrame):
+                view_name = str(uuid.uuid4()).replace("-", "_")
+                view_name = f"view_{view_name}"
+                view = value.df.into_view(temporary=True)
+                self.ctx.register_table(view_name, view)
+                return view_name
+            return str(value)
+
+        param_values = (
+            {name: value_to_scalar(value) for (name, value) in param_values.items()}
+            if param_values is not None
+            else {}
+        )
+        param_strings = (
+            {name: value_to_string(value) for (name, value) in named_params.items()}
+            if named_params is not None
+            else {}
+        )
+
+        options_raw = options.options_internal if options is not None else None
+
+        return DataFrame(
+            self.ctx.sql_with_options(
+                query,
+                options=options_raw,
+                param_values=param_values,
+                param_strings=param_strings,
+            )
+        )
+
+    def sql_with_options(
+        self,
+        query: str,
+        options: SQLOptions,
+        param_values: dict[str, Any] | None = None,
+        **named_params: Any,
+    ) -> DataFrame:
+        """Create a :py:class:`~datafusion.dataframe.DataFrame` from SQL query text.
+
+        This function will first validate that the query is allowed by the
+        provided options.
+
+        Args:
+            query: SQL query text.
+            options: SQL options.
+            param_values: Provides substitution of scalar values in the query
+                after parsing.
+            named_params: Provides string or DataFrame substitution in the query string.
+
+        Returns:
+            DataFrame representation of the SQL query.
+        """
+        return self.sql(
+            query, options=options, param_values=param_values, **named_params
+        )
+
+    def create_dataframe(
+        self,
+        partitions: list[list[pa.RecordBatch]],
+        name: str | None = None,
+        schema: pa.Schema | None = None,
+    ) -> DataFrame:
+        """Create and return a dataframe using the provided partitions.
+
+        Args:
+            partitions: :py:class:`pa.RecordBatch` partitions to register.
+            name: Resultant dataframe name.
+            schema: Schema for the partitions.
+
+        Returns:
+            DataFrame representation of the SQL query.
+        """
+        return DataFrame(self.ctx.create_dataframe(partitions, name, schema))
+
+    def create_dataframe_from_logical_plan(self, plan: LogicalPlan) -> DataFrame:
+        """Create a :py:class:`~datafusion.dataframe.DataFrame` from an existing plan.
+
+        Args:
+            plan: Logical plan.
+
+        Returns:
+            DataFrame representation of the logical plan.
+        """
+        return DataFrame(self.ctx.create_dataframe_from_logical_plan(plan._raw_plan))
+
+    def from_pylist(
+        self, data: list[dict[str, Any]], name: str | None = None
+    ) -> DataFrame:
+        """Create a :py:class:`~datafusion.dataframe.DataFrame` from a list.
+
+        Args:
+            data: List of dictionaries.
+            name: Name of the DataFrame.
+
+        Returns:
+            DataFrame representation of the list of dictionaries.
+        """
+        return DataFrame(self.ctx.from_pylist(data, name))
+
+    def from_pydict(
+        self, data: dict[str, list[Any]], name: str | None = None
+    ) -> DataFrame:
+        """Create a :py:class:`~datafusion.dataframe.DataFrame` from a dictionary.
+
+        Args:
+            data: Dictionary of lists.
+            name: Name of the DataFrame.
+
+        Returns:
+            DataFrame representation of the dictionary of lists.
+        """
+        return DataFrame(self.ctx.from_pydict(data, name))
+
+    def from_arrow(
+        self,
+        data: ArrowStreamExportable | ArrowArrayExportable,
+        name: str | None = None,
+    ) -> DataFrame:
+        """Create a :py:class:`~datafusion.dataframe.DataFrame` from an Arrow source.
+
+        The Arrow data source can be any object that implements either
+        ``__arrow_c_stream__`` or ``__arrow_c_array__``. For the latter, it must return
+        a struct array.
+
+        Arrow data can be Polars, Pandas, Pyarrow etc.
+
+        Args:
+            data: Arrow data source.
+            name: Name of the DataFrame.
+
+        Returns:
+            DataFrame representation of the Arrow table.
+        """
+        return DataFrame(self.ctx.from_arrow(data, name))
+
+    def from_pandas(self, data: pd.DataFrame, name: str | None = None) -> DataFrame:
+        """Create a :py:class:`~datafusion.dataframe.DataFrame` from a Pandas DataFrame.
+
+        Args:
+            data: Pandas DataFrame.
+            name: Name of the DataFrame.
+
+        Returns:
+            DataFrame representation of the Pandas DataFrame.
+        """
+        return DataFrame(self.ctx.from_pandas(data, name))
+
+    def from_polars(self, data: pl.DataFrame, name: str | None = None) -> DataFrame:
+        """Create a :py:class:`~datafusion.dataframe.DataFrame` from a Polars DataFrame.
+
+        Args:
+            data: Polars DataFrame.
+            name: Name of the DataFrame.
+
+        Returns:
+            DataFrame representation of the Polars DataFrame.
+        """
+        return DataFrame(self.ctx.from_polars(data, name))
+
+    # https://github.com/apache/datafusion-python/pull/1016#discussion_r1983239116
+    # is the discussion on how we arrived at adding register_view
+    def register_view(self, name: str, df: DataFrame) -> None:
+        """Register a :py:class:`~datafusion.dataframe.DataFrame` as a view.
+
+        Args:
+            name (str): The name to register the view under.
+            df (DataFrame): The DataFrame to be converted into a view and registered.
+        """
+        view = df.into_view()
+        self.ctx.register_table(name, view)
+
+    def register_table(
+        self,
+        name: str,
+        table: Table | TableProviderExportable | DataFrame | pa.dataset.Dataset,
+    ) -> None:
+        """Register a :py:class:`~datafusion.Table` with this context.
+
+        The registered table can be referenced from SQL statements executed against
+        this context.
+
+        Args:
+            name: Name of the resultant table.
+            table: Any object that can be converted into a :class:`Table`.
+        """
+        self.ctx.register_table(name, table)
+
+    def deregister_table(self, name: str) -> None:
+        """Remove a table from the session."""
+        self.ctx.deregister_table(name)
+
+    def register_table_factory(
+        self,
+        format: str,
+        factory: TableProviderFactory | TableProviderFactoryExportable,
+    ) -> None:
+        """Register a :py:class:`~datafusion.TableProviderFactoryExportable`.
+
+        The registered factory can be referenced from SQL DDL statements executed
+        against this context.
+
+        Args:
+            format: The value to be used in `STORED AS ${format}` clause.
+            factory: A PyCapsule that implements :class:`TableProviderFactoryExportable`
+        """
+        self.ctx.register_table_factory(format, factory)
+
+    def catalog_names(self) -> set[str]:
+        """Returns the list of catalogs in this context."""
+        return self.ctx.catalog_names()
+
+    def register_catalog_provider_list(
+        self,
+        provider: CatalogProviderListExportable | CatalogProviderList | CatalogList,
+    ) -> None:
+        """Register a catalog provider list."""
+        if isinstance(provider, CatalogList):
+            self.ctx.register_catalog_provider_list(provider.catalog)
+        else:
+            self.ctx.register_catalog_provider_list(provider)
+
+    def register_catalog_provider(
+        self, name: str, provider: CatalogProviderExportable | CatalogProvider | Catalog
+    ) -> None:
+        """Register a catalog provider."""
+        if isinstance(provider, Catalog):
+            self.ctx.register_catalog_provider(name, provider.catalog)
+        else:
+            self.ctx.register_catalog_provider(name, provider)
+
+    @deprecated("Use register_table() instead.")
+    def register_table_provider(
+        self,
+        name: str,
+        provider: Table | TableProviderExportable | DataFrame | pa.dataset.Dataset,
+    ) -> None:
+        """Register a table provider.
+
+        Deprecated: use :meth:`register_table` instead.
+        """
+        self.register_table(name, provider)
+
+    def register_udtf(self, func: TableFunction) -> None:
+        """Register a user defined table function."""
+        self.ctx.register_udtf(func._udtf)
+
+    def register_batch(self, name: str, batch: pa.RecordBatch) -> None:
+        """Register a single :py:class:`pa.RecordBatch` as a table.
+
+        Args:
+            name: Name of the resultant table.
+            batch: Record batch to register as a table.
+
+        Examples:
+            >>> ctx = dfn.SessionContext()
+            >>> batch = pa.RecordBatch.from_pydict({"a": [1, 2, 3]})
+            >>> ctx.register_batch("batch_tbl", batch)
+            >>> ctx.sql("SELECT * FROM batch_tbl").collect()[0].column(0)
+            <pyarrow.lib.Int64Array object at ...>
+            [
+              1,
+              2,
+              3
+            ]
+        """
+        self.ctx.register_batch(name, batch)
+
+    def deregister_udtf(self, name: str) -> None:
+        """Remove a user-defined table function from the session.
+
+        Args:
+            name: Name of the UDTF to deregister.
+        """
+        self.ctx.deregister_udtf(name)
+
+    def register_record_batches(
+        self, name: str, partitions: list[list[pa.RecordBatch]]
+    ) -> None:
+        """Register record batches as a table.
+
+        This function will convert the provided partitions into a table and
+        register it into the session using the given name.
+
+        Args:
+            name: Name of the resultant table.
+            partitions: Record batches to register as a table.
+        """
+        self.ctx.register_record_batches(name, partitions)
+
+    def read_batch(self, batch: pa.RecordBatch) -> DataFrame:
+        """Return a :py:class:`~datafusion.DataFrame` reading a single batch.
+
+        Convenience wrapper around :py:meth:`read_batches` for the single-batch
+        case. Unlike :py:meth:`register_batch`, this does not register the
+        batch as a named table; it returns an anonymous
+        :py:class:`~datafusion.DataFrame` directly.
+
+        Args:
+            batch: Record batch to wrap as a DataFrame.
+
+        Examples:
+            >>> ctx = dfn.SessionContext()
+            >>> batch = pa.RecordBatch.from_pydict({"a": [1, 2, 3]})
+            >>> ctx.read_batch(batch).to_pydict()
+            {'a': [1, 2, 3]}
+        """
+        return self.read_batches([batch])
+
+    def read_batches(self, batches: Iterable[pa.RecordBatch]) -> DataFrame:
+        """Return a :py:class:`~datafusion.DataFrame` reading the given batches.
+
+        All batches must share the same schema. Any iterable of
+        :py:class:`pa.RecordBatch` is accepted (list, tuple, generator);
+        it is materialized into a list before being handed to the
+        underlying Rust binding. Unlike :py:meth:`register_record_batches`,
+        this does not register the batches as a named table; it returns
+        an anonymous :py:class:`~datafusion.DataFrame` directly.
+
+        Args:
+            batches: Record batches to wrap as a DataFrame.
+
+        Examples:
+            >>> ctx = dfn.SessionContext()
+            >>> b1 = pa.RecordBatch.from_pydict({"a": [1, 2]})
+            >>> b2 = pa.RecordBatch.from_pydict({"a": [3, 4]})
+            >>> ctx.read_batches([b1, b2]).to_pydict()
+            {'a': [1, 2, 3, 4]}
+
+            A generator works too:
+
+            >>> ctx.read_batches(b for b in [b1, b2]).to_pydict()
+            {'a': [1, 2, 3, 4]}
+        """
+        return DataFrame(self.ctx.read_batches(list(batches)))
+
+    def register_parquet(
+        self,
+        name: str,
+        path: str | pathlib.Path,
+        table_partition_cols: list[tuple[str, str | pa.DataType]] | None = None,
+        parquet_pruning: bool = True,
+        file_extension: str = ".parquet",
+        skip_metadata: bool = True,
+        schema: pa.Schema | None = None,
+        file_sort_order: Sequence[Sequence[SortKey]] | None = None,
+    ) -> None:
+        """Register a Parquet file as a table.
+
+        The registered table can be referenced from SQL statement executed
+        against this context.
+
+        Args:
+            name: Name of the table to register.
+            path: Path to the Parquet file.
+            table_partition_cols: Partition columns.
+            parquet_pruning: Whether the parquet reader should use the
+                predicate to prune row groups.
+            file_extension: File extension; only files with this extension are
+                selected for data input.
+            skip_metadata: Whether the parquet reader should skip any metadata
+                that may be in the file schema. This can help avoid schema
+                conflicts due to metadata.
+            schema: The data source schema.
+            file_sort_order: Sort order for the file. Each sort key can be
+                specified as a column name (``str``), an expression
+                (``Expr``), or a ``SortExpr``.
+        """
+        if table_partition_cols is None:
+            table_partition_cols = []
+        table_partition_cols = _convert_table_partition_cols(table_partition_cols)
+        self.ctx.register_parquet(
+            name,
+            path,
+            table_partition_cols,
+            parquet_pruning,
+            file_extension,
+            skip_metadata,
+            schema,
+            self._convert_file_sort_order(file_sort_order),
+        )
+
+    def register_csv(
+        self,
+        name: str,
+        path: str | pathlib.Path | list[str | pathlib.Path],
+        schema: pa.Schema | None = None,
+        has_header: bool = True,
+        delimiter: str = ",",
+        schema_infer_max_records: int = DEFAULT_MAX_INFER_SCHEMA,
+        file_extension: str = ".csv",
+        file_compression_type: str | None = None,
+        options: CsvReadOptions | None = None,
+    ) -> None:
+        """Register a CSV file as a table.
+
+        The registered table can be referenced from SQL statement executed against.
+
+        Args:
+            name: Name of the table to register.
+            path: Path to the CSV file. It also accepts a list of Paths.
+            schema: An optional schema representing the CSV file. If None, the
+                CSV reader will try to infer it based on data in file.
+            has_header: Whether the CSV file have a header. If schema inference
+                is run on a file with no headers, default column names are
+                created.
+            delimiter: An optional column delimiter.
+            schema_infer_max_records: Maximum number of rows to read from CSV
+                files for schema inference if needed.
+            file_extension: File extension; only files with this extension are
+                selected for data input.
+            file_compression_type: File compression type.
+            options: Set advanced options for CSV reading. This cannot be
+                combined with any of the other options in this method.
+        """
+        if options is not None and (
+            schema is not None
+            or not has_header
+            or delimiter != ","
+            or schema_infer_max_records != DEFAULT_MAX_INFER_SCHEMA
+            or file_extension != ".csv"
+            or file_compression_type is not None
+        ):
+            message = (
+                "Combining CsvReadOptions parameter with additional options "
+                "is not supported. Use CsvReadOptions to set parameters."
+            )
+            warnings.warn(
+                message,
+                category=UserWarning,
+                stacklevel=2,
+            )
+
+        options = (
+            options
+            if options is not None
+            else CsvReadOptions(
+                schema=schema,
+                has_header=has_header,
+                delimiter=delimiter,
+                schema_infer_max_records=schema_infer_max_records,
+                file_extension=file_extension,
+                file_compression_type=file_compression_type,
+            )
+        )
+
+        self.ctx.register_csv(
+            name,
+            path,
+            options.to_inner(),
+        )
+
+    def register_json(
+        self,
+        name: str,
+        path: str | pathlib.Path,
+        schema: pa.Schema | None = None,
+        schema_infer_max_records: int = 1000,
+        file_extension: str = ".json",
+        table_partition_cols: list[tuple[str, str | pa.DataType]] | None = None,
+        file_compression_type: str | None = None,
+    ) -> None:
+        """Register a JSON file as a table.
+
+        The registered table can be referenced from SQL statement executed
+        against this context.
+
+        Args:
+            name: Name of the table to register.
+            path: Path to the JSON file.
+            schema: The data source schema.
+            schema_infer_max_records: Maximum number of rows to read from JSON
+                files for schema inference if needed.
+            file_extension: File extension; only files with this extension are
+                selected for data input.
+            table_partition_cols: Partition columns.
+            file_compression_type: File compression type.
+        """
+        if table_partition_cols is None:
+            table_partition_cols = []
+        table_partition_cols = _convert_table_partition_cols(table_partition_cols)
+        self.ctx.register_json(
+            name,
+            path,
+            schema,
+            schema_infer_max_records,
+            file_extension,
+            table_partition_cols,
+            file_compression_type,
+        )
+
+    def register_avro(
+        self,
+        name: str,
+        path: str | pathlib.Path,
+        schema: pa.Schema | None = None,
+        file_extension: str = ".avro",
+        table_partition_cols: list[tuple[str, str | pa.DataType]] | None = None,
+    ) -> None:
+        """Register an Avro file as a table.
+
+        The registered table can be referenced from SQL statement executed against
+        this context.
+
+        Args:
+            name: Name of the table to register.
+            path: Path to the Avro file.
+            schema: The data source schema.
+            file_extension: File extension to select.
+            table_partition_cols:  Partition columns.
+        """
+        if table_partition_cols is None:
+            table_partition_cols = []
+        table_partition_cols = _convert_table_partition_cols(table_partition_cols)
+        self.ctx.register_avro(name, path, schema, file_extension, table_partition_cols)
+
+    def register_arrow(
+        self,
+        name: str,
+        path: str | pathlib.Path,
+        schema: pa.Schema | None = None,
+        file_extension: str = ".arrow",
+        table_partition_cols: list[tuple[str, str | pa.DataType]] | None = None,
+    ) -> None:
+        """Register an Arrow IPC file as a table.
+
+        The registered table can be referenced from SQL statements executed
+        against this context.
+
+        Args:
+            name: Name of the table to register.
+            path: Path to the Arrow IPC file.
+            schema: The data source schema.
+            file_extension: File extension to select.
+            table_partition_cols: Partition columns.
+
+        Examples:
+            >>> import tempfile, os
+            >>> ctx = dfn.SessionContext()
+            >>> table = pa.table({"x": [10, 20, 30]})
+            >>> with tempfile.TemporaryDirectory() as tmpdir:
+            ...     path = os.path.join(tmpdir, "data.arrow")
+            ...     with pa.ipc.new_file(path, table.schema) as writer:
+            ...         writer.write_table(table)
+            ...     ctx.register_arrow("arrow_tbl", path)
+            ...     ctx.sql("SELECT * FROM arrow_tbl").collect()[0].column(0)
+            <pyarrow.lib.Int64Array object at ...>
+            [
+              10,
+              20,
+              30
+            ]
+
+            Provide an explicit ``schema`` to override schema inference:
+
+            >>> with tempfile.TemporaryDirectory() as tmpdir:
+            ...     path = os.path.join(tmpdir, "data.arrow")
+            ...     with pa.ipc.new_file(path, table.schema) as writer:
+            ...         writer.write_table(table)
+            ...     ctx.register_arrow(
+            ...         "arrow_schema",
+            ...         path,
+            ...         schema=pa.schema([("x", pa.int64())]),
+            ...     )
+            ...     ctx.sql("SELECT * FROM arrow_schema").collect()[0].column(0)
+            <pyarrow.lib.Int64Array object at ...>
+            [
+              10,
+              20,
+              30
+            ]
+
+            Use ``file_extension`` to read files with a non-default extension:
+
+            >>> with tempfile.TemporaryDirectory() as tmpdir:
+            ...     path = os.path.join(tmpdir, "data.ipc")
+            ...     with pa.ipc.new_file(path, table.schema) as writer:
+            ...         writer.write_table(table)
+            ...     ctx.register_arrow(
+            ...         "arrow_ipc", path, file_extension=".ipc"
+            ...     )
+            ...     ctx.sql("SELECT * FROM arrow_ipc").collect()[0].column(0)
+            <pyarrow.lib.Int64Array object at ...>
+            [
+              10,
+              20,
+              30
+            ]
+        """
+        if table_partition_cols is None:
+            table_partition_cols = []
+        table_partition_cols = _convert_table_partition_cols(table_partition_cols)
+        self.ctx.register_arrow(
+            name, path, schema, file_extension, table_partition_cols
+        )
+
+    def register_dataset(self, name: str, dataset: pa.dataset.Dataset) -> None:
+        """Register a :py:class:`pa.dataset.Dataset` as a table.
+
+        Args:
+            name: Name of the table to register.
+            dataset: PyArrow dataset.
+        """
+        self.ctx.register_dataset(name, dataset)
+
+    def register_udf(self, udf: ScalarUDF) -> None:
+        """Register a user-defined function (UDF) with the context."""
+        self.ctx.register_udf(udf._udf)
+
+    def deregister_udf(self, name: str) -> None:
+        """Remove a user-defined scalar function from the session.
+
+        Args:
+            name: Name of the UDF to deregister.
+        """
+        self.ctx.deregister_udf(name)
+
+    def register_udaf(self, udaf: AggregateUDF) -> None:
+        """Register a user-defined aggregation function (UDAF) with the context."""
+        self.ctx.register_udaf(udaf._udaf)
+
+    def enable_spark_functions(self) -> None:
+        """Register all Spark-compatible functions for SQL access.
+
+        Registers every UDF/UDAF/UDWF from the ``datafusion-spark`` crate,
+        overriding any DataFusion built-ins of the same name with their
+        Spark-semantics version (e.g. ``substring`` becomes 1-indexed,
+        ``concat`` propagates NULL, ``round`` uses HALF_UP rounding).
+
+        For DataFrame use, import the typed wrappers from
+        :py:mod:`datafusion.functions.spark` directly; this method is only
+        needed for SQL queries.
+
+        Examples:
+            >>> ctx = dfn.SessionContext()
+            >>> ctx.enable_spark_functions()
+            >>> ctx.sql(
+            ...     "SELECT sha2('hello', 256) AS h"
+            ... ).collect_column("h")[0].as_py()
+            '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'
+        """
+        self.ctx.enable_spark_functions()
+
+    def deregister_udaf(self, name: str) -> None:
+        """Remove a user-defined aggregate function from the session.
+
+        Args:
+            name: Name of the UDAF to deregister.
+        """
+        self.ctx.deregister_udaf(name)
+
+    def register_udwf(self, udwf: WindowUDF) -> None:
+        """Register a user-defined window function (UDWF) with the context."""
+        self.ctx.register_udwf(udwf._udwf)
+
+    def deregister_udwf(self, name: str) -> None:
+        """Remove a user-defined window function from the session.
+
+        Args:
+            name: Name of the UDWF to deregister.
+        """
+        self.ctx.deregister_udwf(name)
+
+    def udf(self, name: str) -> ScalarUDF:
+        """Look up a registered scalar UDF by name.
+
+        Returns the same ``ScalarUDF`` wrapper that :py:meth:`register_udf`
+        accepts, so it can be invoked as an expression in the DataFrame API
+        or re-registered into a different :py:class:`SessionContext`.
+        Built-in scalar functions from the session's function registry are
+        also looked up.
+
+        Args:
+            name: Name of the registered scalar UDF.
+
+        Raises:
+            KeyError: If no scalar UDF is registered under ``name``.
+
+        Examples:
+            Register a UDF, then look it up by name and use it in the
+            DataFrame API:
+
+            >>> ctx = dfn.SessionContext()
+            >>> nullcheck = dfn.udf(
+            ...     lambda x: x.is_null(),
+            ...     [pa.int64()],
+            ...     pa.bool_(),
+            ...     volatility="immutable",
+            ...     name="nullcheck",
+            ... )
+            >>> ctx.register_udf(nullcheck)
+            >>> fn = ctx.udf("nullcheck")
+            >>> df = ctx.from_pydict({"a": [1, None, 3]})
+            >>> df.select(fn(col("a")).alias("is_null")).to_pydict()
+            {'is_null': [False, True, False]}
+
+            Late-binding: the function name can come from configuration
+            rather than an imported symbol, which is useful when the set
+            of UDFs is plugin-driven or chosen at runtime:
+
+            >>> config = {"null_check": "nullcheck"}
+            >>> fn = ctx.udf(config["null_check"])
+            >>> df.select(fn(col("a")).alias("is_null")).to_pydict()
+            {'is_null': [False, True, False]}
+        """
+        from relify.datafusion.user_defined import ScalarUDF as _ScalarUDF  # noqa: PLC0415
+
+        return _ScalarUDF._from_internal(self.ctx.udf(name))
+
+    def udaf(self, name: str) -> AggregateUDF:
+        """Look up a registered aggregate UDF by name.
+
+        Returns the same ``AggregateUDF`` wrapper that :py:meth:`register_udaf`
+        accepts. Built-in aggregate functions such as ``sum`` or ``avg`` are
+        also discoverable through this lookup. See :py:meth:`udf` for a worked
+        late-binding example; the pattern is identical for aggregates.
+
+        Args:
+            name: Name of the registered aggregate UDF.
+
+        Raises:
+            KeyError: If no aggregate UDF is registered under ``name``.
+
+        Examples:
+            Look up a built-in aggregate by name and use it in
+            :py:meth:`~datafusion.DataFrame.aggregate`:
+
+            >>> ctx = dfn.SessionContext()
+            >>> sum_fn = ctx.udaf("sum")
+            >>> df = ctx.from_pydict({"a": [1, 2, 3]})
+            >>> df.aggregate([], [sum_fn(col("a")).alias("total")]).to_pydict()
+            {'total': [6]}
+        """
+        from relify.datafusion.user_defined import (  # noqa: PLC0415
+            AggregateUDF as _AggregateUDF,
+        )
+
+        return _AggregateUDF._from_internal(self.ctx.udaf(name))
+
+    def udwf(self, name: str) -> WindowUDF:
+        """Look up a registered window UDF by name.
+
+        Returns the same ``WindowUDF`` wrapper that :py:meth:`register_udwf`
+        accepts. Built-in window functions such as ``row_number`` or ``rank``
+        are also discoverable through this lookup. See :py:meth:`udf` for a
+        worked late-binding example; the pattern is identical for window
+        functions.
+
+        Args:
+            name: Name of the registered window UDF.
+
+        Raises:
+            KeyError: If no window UDF is registered under ``name``.
+
+        Examples:
+            Look up a built-in window function by name and use it in
+            ``select``:
+
+            >>> ctx = dfn.SessionContext()
+            >>> rn = ctx.udwf("row_number")
+            >>> df = ctx.from_pydict({"a": [10, 20, 30]})
+            >>> df.select(col("a"), rn().alias("rn")).to_pydict()
+            {'a': [10, 20, 30], 'rn': [1, 2, 3]}
+        """
+        from relify.datafusion.user_defined import WindowUDF as _WindowUDF  # noqa: PLC0415
+
+        return _WindowUDF._from_internal(self.ctx.udwf(name))
+
+    def udfs(self) -> list[str]:
+        """Return the sorted names of all registered scalar UDFs.
+
+        Includes both user-registered and built-in scalar functions. Pair
+        with :py:meth:`udf` to drive discovery, validation, or config-based
+        dispatch.
+
+        Examples:
+            >>> ctx = dfn.SessionContext()
+            >>> "abs" in ctx.udfs()
+            True
+        """
+        return self.ctx.udfs()
+
+    def udafs(self) -> list[str]:
+        """Return the sorted names of all registered aggregate UDFs.
+
+        Examples:
+            >>> ctx = dfn.SessionContext()
+            >>> "sum" in ctx.udafs()
+            True
+        """
+        return self.ctx.udafs()
+
+    def udwfs(self) -> list[str]:
+        """Return the sorted names of all registered window UDFs.
+
+        Examples:
+            >>> ctx = dfn.SessionContext()
+            >>> "row_number" in ctx.udwfs()
+            True
+        """
+        return self.ctx.udwfs()
+
+    def catalog(self, name: str = "datafusion") -> Catalog:
+        """Retrieve a catalog by name."""
+        return Catalog(self.ctx.catalog(name))
+
+    def table(self, name: str) -> DataFrame:
+        """Retrieve a previously registered table by name."""
+        return DataFrame(self.ctx.table(name))
+
+    def table_exist(self, name: str) -> bool:
+        """Return whether a table with the given name exists."""
+        return self.ctx.table_exist(name)
+
+    def empty_table(self) -> DataFrame:
+        """Create an empty :py:class:`~datafusion.dataframe.DataFrame`."""
+        return DataFrame(self.ctx.empty_table())
+
+    def session_id(self) -> str:
+        """Return an id that uniquely identifies this :py:class:`SessionContext`."""
+        return self.ctx.session_id()
+
+    def session_start_time(self) -> str:
+        """Return the session start time as an RFC 3339 formatted string.
+
+        Examples:
+            >>> ctx = SessionContext()
+            >>> ctx.session_start_time()  # doctest: +SKIP
+            '2026-01-01T12:34:56.123456789+00:00'
+        """
+        return self.ctx.session_start_time()
+
+    def enable_ident_normalization(self) -> bool:
+        """Return whether identifier normalization (lowercasing) is enabled.
+
+        Examples:
+            >>> ctx = SessionContext()
+            >>> ctx.enable_ident_normalization()
+            True
+        """
+        return self.ctx.enable_ident_normalization()
+
+    def copied_config(self) -> SessionConfig:
+        """Return a copy of the active :py:class:`SessionConfig`.
+
+        Mutating the returned config does not affect this context; use
+        the result when you need a starting point for a new context or
+        want to inspect the current settings independent of further
+        changes here.
+
+        Examples:
+            >>> ctx = SessionContext(SessionConfig().with_batch_size(1024))
+            >>> isinstance(ctx.copied_config(), SessionConfig)
+            True
+        """
+        config = SessionConfig()
+        config.config_internal = self.ctx.copied_config()
+        return config
+
+    @staticmethod
+    def parse_capacity_limit(config_name: str, limit: str) -> int:
+        """Parse a size string into a byte count.
+
+        Accepts strings like ``"100M"``, ``"1.5G"``, or ``"512K"``.
+        ``"0"`` is accepted and returns 0. ``config_name`` is used purely
+        for error messages and identifies which configuration setting the
+        limit belongs to. Use this helper when constructing a
+        :py:class:`RuntimeEnvBuilder` from a human-friendly size string.
+
+        Examples:
+            >>> SessionContext.parse_capacity_limit(
+            ...     "datafusion.runtime.memory_limit", "1M"
+            ... )
+            1048576
+            >>> SessionContext.parse_capacity_limit(
+            ...     "datafusion.runtime.memory_limit", "0"
+            ... )
+            0
+        """
+        return SessionContextInternal.parse_capacity_limit(config_name, limit)
+
+    def parse_sql_expr(self, sql: str, schema: DFSchema) -> Expr:
+        """Parse a SQL expression string into a logical expression.
+
+        Args:
+            sql: SQL expression string.
+            schema: Schema to use for resolving column references.
+
+        Returns:
+            Parsed expression.
+
+        Examples:
+            >>> from relify.datafusion.common import DFSchema
+            >>> ctx = SessionContext()
+            >>> schema = DFSchema.empty()
+            >>> ctx.parse_sql_expr("1 + 2", schema=schema)
+            Expr(Int64(1) + Int64(2))
+        """
+        from relify.datafusion.expr import Expr  # noqa: PLC0415
+
+        return Expr(self.ctx.parse_sql_expr(sql, schema))
+
+    def execute_logical_plan(self, plan: LogicalPlan) -> DataFrame:
+        """Execute a :py:class:`~datafusion.plan.LogicalPlan` and return a DataFrame.
+
+        Args:
+            plan: Logical plan to execute.
+
+        Returns:
+            DataFrame resulting from the execution.
+
+        Examples:
+            >>> ctx = SessionContext()
+            >>> df = ctx.from_pydict({"a": [1, 2, 3]})
+            >>> plan = df.logical_plan()
+            >>> df2 = ctx.execute_logical_plan(plan)
+            >>> df2.collect()[0].column(0)
+            <pyarrow.lib.Int64Array object at ...>
+            [
+              1,
+              2,
+              3
+            ]
+        """
+        return DataFrame(self.ctx.execute_logical_plan(plan._raw_plan))
+
+    def refresh_catalogs(self) -> None:
+        """Refresh catalog metadata.
+
+        Examples:
+            >>> ctx = SessionContext()
+            >>> ctx.refresh_catalogs()
+        """
+        self.ctx.refresh_catalogs()
+
+    def remove_optimizer_rule(self, name: str) -> bool:
+        """Remove an optimizer rule by name.
+
+        Args:
+            name: Name of the optimizer rule to remove.
+
+        Returns:
+            True if a rule with the given name was found and removed.
+
+        Examples:
+            >>> ctx = SessionContext()
+            >>> ctx.remove_optimizer_rule("nonexistent_rule")
+            False
+        """
+        return self.ctx.remove_optimizer_rule(name)
+
+    def add_physical_optimizer_rule(
+        self, rule: PhysicalOptimizerRuleExportable
+    ) -> None:
+        """Append a user-defined physical optimizer rule to the session.
+
+        The rule is imported via its ``__datafusion_physical_optimizer_rule__``
+        PyCapsule, typically produced by a separate compiled extension. The
+        underlying :class:`SessionState` is rebuilt from its current state
+        with the new rule appended, so previously registered tables, UDFs,
+        and catalogs are preserved.
+
+        Args:
+            rule: Object exposing ``__datafusion_physical_optimizer_rule__``,
+                a :class:`PhysicalOptimizerRuleExportable`.
+
+        Examples:
+            >>> from relify.datafusion import SessionContext
+            >>> ctx = SessionContext()
+            >>> from my_extension import MyPhysicalOptimizerRule  # doctest: +SKIP
+            >>> rule = MyPhysicalOptimizerRule()  # doctest: +SKIP
+            >>> ctx.add_physical_optimizer_rule(rule)  # doctest: +SKIP
+        """
+        self.ctx.add_physical_optimizer_rule(rule)
+
+    def table_provider(self, name: str) -> Table:
+        """Return the :py:class:`~datafusion.catalog.Table` for the given table name.
+
+        Args:
+            name: Name of the table.
+
+        Returns:
+            The table provider.
+
+        Raises:
+            KeyError: If the table is not found.
+
+        Examples:
+            >>> import pyarrow as pa
+            >>> ctx = SessionContext()
+            >>> batch = pa.RecordBatch.from_pydict({"x": [1, 2]})
+            >>> ctx.register_record_batches("my_table", [[batch]])
+            >>> tbl = ctx.table_provider("my_table")
+            >>> tbl.schema
+            x: int64
+        """
+        from relify.datafusion.catalog import Table  # noqa: PLC0415
+
+        return Table(self.ctx.table_provider(name))
+
+    def read_json(
+        self,
+        path: str | pathlib.Path,
+        schema: pa.Schema | None = None,
+        schema_infer_max_records: int = 1000,
+        file_extension: str = ".json",
+        table_partition_cols: list[tuple[str, str | pa.DataType]] | None = None,
+        file_compression_type: str | None = None,
+    ) -> DataFrame:
+        """Read a line-delimited JSON data source.
+
+        Args:
+            path: Path to the JSON file.
+            schema: The data source schema.
+            schema_infer_max_records: Maximum number of rows to read from JSON
+                files for schema inference if needed.
+            file_extension: File extension; only files with this extension are
+                selected for data input.
+            table_partition_cols: Partition columns.
+            file_compression_type: File compression type.
+
+        Returns:
+            DataFrame representation of the read JSON files.
+        """
+        if table_partition_cols is None:
+            table_partition_cols = []
+        table_partition_cols = _convert_table_partition_cols(table_partition_cols)
+        return DataFrame(
+            self.ctx.read_json(
+                path,
+                schema,
+                schema_infer_max_records,
+                file_extension,
+                table_partition_cols,
+                file_compression_type,
+            )
+        )
+
+    def read_csv(
+        self,
+        path: str | pathlib.Path | list[str] | list[pathlib.Path],
+        schema: pa.Schema | None = None,
+        has_header: bool = True,
+        delimiter: str = ",",
+        schema_infer_max_records: int = DEFAULT_MAX_INFER_SCHEMA,
+        file_extension: str = ".csv",
+        table_partition_cols: list[tuple[str, str | pa.DataType]] | None = None,
+        file_compression_type: str | None = None,
+        options: CsvReadOptions | None = None,
+    ) -> DataFrame:
+        """Read a CSV data source.
+
+        Args:
+            path: Path to the CSV file
+            schema: An optional schema representing the CSV files. If None, the
+                CSV reader will try to infer it based on data in file.
+            has_header: Whether the CSV file have a header. If schema inference
+                is run on a file with no headers, default column names are
+                created.
+            delimiter: An optional column delimiter.
+            schema_infer_max_records: Maximum number of rows to read from CSV
+                files for schema inference if needed.
+            file_extension:  File extension; only files with this extension are
+                selected for data input.
+            table_partition_cols:  Partition columns.
+            file_compression_type:  File compression type.
+            options: Set advanced options for CSV reading. This cannot be
+                combined with any of the other options in this method.
+
+        Returns:
+            DataFrame representation of the read CSV files
+        """
+        if options is not None and (
+            schema is not None
+            or not has_header
+            or delimiter != ","
+            or schema_infer_max_records != DEFAULT_MAX_INFER_SCHEMA
+            or file_extension != ".csv"
+            or table_partition_cols is not None
+            or file_compression_type is not None
+        ):
+            message = (
+                "Combining CsvReadOptions parameter with additional options "
+                "is not supported. Use CsvReadOptions to set parameters."
+            )
+            warnings.warn(
+                message,
+                category=UserWarning,
+                stacklevel=2,
+            )
+
+        options = (
+            options
+            if options is not None
+            else CsvReadOptions(
+                schema=schema,
+                has_header=has_header,
+                delimiter=delimiter,
+                schema_infer_max_records=schema_infer_max_records,
+                file_extension=file_extension,
+                table_partition_cols=table_partition_cols,
+                file_compression_type=file_compression_type,
+            )
+        )
+
+        return DataFrame(
+            self.ctx.read_csv(
+                path,
+                options.to_inner(),
+            )
+        )
+
+    def read_parquet(
+        self,
+        path: str | pathlib.Path,
+        table_partition_cols: list[tuple[str, str | pa.DataType]] | None = None,
+        parquet_pruning: bool = True,
+        file_extension: str = ".parquet",
+        skip_metadata: bool = True,
+        schema: pa.Schema | None = None,
+        file_sort_order: Sequence[Sequence[SortKey]] | None = None,
+    ) -> DataFrame:
+        """Read a Parquet source into a :py:class:`~datafusion.dataframe.Dataframe`.
+
+        Args:
+            path: Path to the Parquet file.
+            table_partition_cols: Partition columns.
+            parquet_pruning: Whether the parquet reader should use the predicate
+                to prune row groups.
+            file_extension: File extension; only files with this extension are
+                selected for data input.
+            skip_metadata: Whether the parquet reader should skip any metadata
+                that may be in the file schema. This can help avoid schema
+                conflicts due to metadata.
+            schema: An optional schema representing the parquet files. If None,
+                the parquet reader will try to infer it based on data in the
+                file.
+            file_sort_order: Sort order for the file. Each sort key can be
+                specified as a column name (``str``), an expression
+                (``Expr``), or a ``SortExpr``.
+
+        Returns:
+            DataFrame representation of the read Parquet files
+        """
+        if table_partition_cols is None:
+            table_partition_cols = []
+        table_partition_cols = _convert_table_partition_cols(table_partition_cols)
+        file_sort_order = self._convert_file_sort_order(file_sort_order)
+        return DataFrame(
+            self.ctx.read_parquet(
+                path,
+                table_partition_cols,
+                parquet_pruning,
+                file_extension,
+                skip_metadata,
+                schema,
+                file_sort_order,
+            )
+        )
+
+    def read_avro(
+        self,
+        path: str | pathlib.Path,
+        schema: pa.Schema | None = None,
+        file_partition_cols: list[tuple[str, str | pa.DataType]] | None = None,
+        file_extension: str = ".avro",
+    ) -> DataFrame:
+        """Create a :py:class:`DataFrame` for reading Avro data source.
+
+        Args:
+            path: Path to the Avro file.
+            schema: The data source schema.
+            file_partition_cols: Partition columns.
+            file_extension: File extension to select.
+
+        Returns:
+            DataFrame representation of the read Avro file
+        """
+        if file_partition_cols is None:
+            file_partition_cols = []
+        file_partition_cols = _convert_table_partition_cols(file_partition_cols)
+        return DataFrame(
+            self.ctx.read_avro(path, schema, file_partition_cols, file_extension)
+        )
+
+    def read_arrow(
+        self,
+        path: str | pathlib.Path,
+        schema: pa.Schema | None = None,
+        file_extension: str = ".arrow",
+        file_partition_cols: list[tuple[str, str | pa.DataType]] | None = None,
+    ) -> DataFrame:
+        """Create a :py:class:`DataFrame` for reading an Arrow IPC data source.
+
+        Args:
+            path: Path to the Arrow IPC file.
+            schema: The data source schema.
+            file_extension: File extension to select.
+            file_partition_cols: Partition columns.
+
+        Returns:
+            DataFrame representation of the read Arrow IPC file.
+
+        Examples:
+            >>> import tempfile, os
+            >>> ctx = dfn.SessionContext()
+            >>> table = pa.table({"a": [1, 2, 3]})
+            >>> with tempfile.TemporaryDirectory() as tmpdir:
+            ...     path = os.path.join(tmpdir, "data.arrow")
+            ...     with pa.ipc.new_file(path, table.schema) as writer:
+            ...         writer.write_table(table)
+            ...     df = ctx.read_arrow(path)
+            ...     df.collect()[0].column(0)
+            <pyarrow.lib.Int64Array object at ...>
+            [
+              1,
+              2,
+              3
+            ]
+
+            Provide an explicit ``schema`` to override schema inference:
+
+            >>> with tempfile.TemporaryDirectory() as tmpdir:
+            ...     path = os.path.join(tmpdir, "data.arrow")
+            ...     with pa.ipc.new_file(path, table.schema) as writer:
+            ...         writer.write_table(table)
+            ...     df = ctx.read_arrow(path, schema=pa.schema([("a", pa.int64())]))
+            ...     df.collect()[0].column(0)
+            <pyarrow.lib.Int64Array object at ...>
+            [
+              1,
+              2,
+              3
+            ]
+
+            Use ``file_extension`` to read files with a non-default extension:
+
+            >>> with tempfile.TemporaryDirectory() as tmpdir:
+            ...     path = os.path.join(tmpdir, "data.ipc")
+            ...     with pa.ipc.new_file(path, table.schema) as writer:
+            ...         writer.write_table(table)
+            ...     df = ctx.read_arrow(path, file_extension=".ipc")
+            ...     df.collect()[0].column(0)
+            <pyarrow.lib.Int64Array object at ...>
+            [
+              1,
+              2,
+              3
+            ]
+        """
+        if file_partition_cols is None:
+            file_partition_cols = []
+        file_partition_cols = _convert_table_partition_cols(file_partition_cols)
+        return DataFrame(
+            self.ctx.read_arrow(path, schema, file_extension, file_partition_cols)
+        )
+
+    def read_empty(self) -> DataFrame:
+        """Create an empty :py:class:`DataFrame` with no columns or rows.
+
+        See Also:
+            This is an alias for :meth:`empty_table`.
+        """
+        return self.empty_table()
+
+    def read_table(
+        self, table: Table | TableProviderExportable | DataFrame | pa.dataset.Dataset
+    ) -> DataFrame:
+        """Creates a :py:class:`~datafusion.dataframe.DataFrame` from a table."""
+        return DataFrame(self.ctx.read_table(table))
+
+    def execute(self, plan: ExecutionPlan, partitions: int) -> RecordBatchStream:
+        """Execute the ``plan`` and return the results."""
+        return RecordBatchStream(self.ctx.execute(plan._raw_plan, partitions))
+
+    @staticmethod
+    def _convert_file_sort_order(
+        file_sort_order: Sequence[Sequence[SortKey]] | None,
+    ) -> list[list[expr_internal.SortExpr]] | None:
+        """Convert nested ``SortKey`` sequences into raw sort expressions.
+
+        Each ``SortKey`` can be a column name string, an ``Expr``, or a
+        ``SortExpr`` and will be converted using
+        :func:`datafusion.expr.sort_list_to_raw_sort_list`.
+        """
+        # Convert each ``SortKey`` in the provided sort order to the low-level
+        # representation expected by the Rust bindings.
+        return (
+            [sort_list_to_raw_sort_list(f) for f in file_sort_order]
+            if file_sort_order is not None
+            else None
+        )
+
+    @staticmethod
+    def _convert_table_partition_cols(
+        table_partition_cols: list[tuple[str, str | pa.DataType]],
+    ) -> list[tuple[str, pa.DataType]]:
+        warn = False
+        converted_table_partition_cols = []
+
+        for col, data_type in table_partition_cols:
+            if isinstance(data_type, str):
+                warn = True
+                if data_type == "string":
+                    converted_data_type = pa.string()
+                elif data_type == "int":
+                    converted_data_type = pa.int32()
+                else:
+                    message = (
+                        f"Unsupported literal data type '{data_type}' for partition "
+                        "column. Supported types are 'string' and 'int'"
+                    )
+                    raise ValueError(message)
+            else:
+                converted_data_type = data_type
+
+            converted_table_partition_cols.append((col, converted_data_type))
+
+        if warn:
+            message = (
+                "using literals for table_partition_cols data types is deprecated,"
+                "use pyarrow types instead"
+            )
+            warnings.warn(
+                message,
+                category=DeprecationWarning,
+                stacklevel=2,
+            )
+
+        return converted_table_partition_cols
+
+    def __datafusion_task_context_provider__(self) -> Any:
+        """Access the PyCapsule FFI_TaskContextProvider."""
+        return self.ctx.__datafusion_task_context_provider__()
+
+    def __datafusion_logical_extension_codec__(self) -> Any:
+        """Access the PyCapsule FFI_LogicalExtensionCodec."""
+        return self.ctx.__datafusion_logical_extension_codec__()
+
+    def with_logical_extension_codec(
+        self, codec: LogicalExtensionCodecExportable | _PyCapsule
+    ) -> SessionContext:
+        """Create a new session context with specified codec.
+
+        Only FFI codecs are supported. Pass any object implementing
+        ``__datafusion_logical_extension_codec__`` (see
+        :py:class:`~datafusion.user_defined.LogicalExtensionCodecExportable`).
+        """
+        new_internal = self.ctx.with_logical_extension_codec(codec)
+        new = SessionContext.__new__(SessionContext)
+        new.ctx = new_internal
+        return new
+
+    def __datafusion_physical_extension_codec__(self) -> Any:
+        """Access the PyCapsule FFI_PhysicalExtensionCodec."""
+        return self.ctx.__datafusion_physical_extension_codec__()
+
+    def with_physical_extension_codec(
+        self, codec: PhysicalExtensionCodecExportable | _PyCapsule
+    ) -> SessionContext:
+        """Create a new session context with the specified physical codec.
+
+        Only FFI codecs are supported. Pass any object implementing
+        ``__datafusion_physical_extension_codec__`` (see
+        :py:class:`~datafusion.user_defined.PhysicalExtensionCodecExportable`).
+        """
+        new_internal = self.ctx.with_physical_extension_codec(codec)
+        new = SessionContext.__new__(SessionContext)
+        new.ctx = new_internal
+        return new
+
+    def with_python_udf_inlining(self, *, enabled: bool) -> SessionContext:
+        """Control whether Python UDFs are embedded in serialized expressions.
+
+        ``enabled`` is keyword-only and required: callers must pick a
+        mode explicitly. Fresh sessions inline UDFs (``enabled=True``
+        behavior) until this method overrides the toggle.
+
+        With ``enabled=True``, serialized expressions carry the Python
+        code for any scalar, aggregate, or window UDFs they reference.
+        The receiver rebuilds the UDFs from those bytes and does not
+        need to register them first.
+
+        With ``enabled=False``, serialized expressions store only the
+        UDF names. This has two uses:
+
+        * **Cross-language portability.** The bytes can be decoded by a
+          non-Python receiver, which must already have UDFs registered
+          under matching names.
+        * **Safer deserialization.** :meth:`Expr.from_bytes` will refuse
+          to rebuild Python UDFs rather than call ``cloudpickle.loads``
+          on untrusted input.
+
+        The setting affects :meth:`Expr.to_bytes` and
+        :meth:`Expr.from_bytes` whenever this session is passed as the
+        ``ctx`` argument. :func:`pickle.dumps` and :func:`pickle.loads`
+        do not pass a context, so to apply the setting through pickle,
+        register this session with
+        :func:`datafusion.ipc.set_sender_ctx` on the sender and
+        :func:`datafusion.ipc.set_worker_ctx` on the receiver.
+
+        .. warning:: Security
+            This setting narrows only :meth:`Expr.from_bytes`. Calling
+            :func:`pickle.loads` on untrusted bytes remains unsafe
+            regardless of the toggle.
+
+        Returns a new :class:`SessionContext` with the toggle applied;
+        the original session is unchanged.
+
+        Examples:
+            >>> import pyarrow as pa
+            >>> from relify.datafusion import SessionContext, Expr, col, udf
+            >>> ctx = SessionContext()
+            >>> identity = udf(lambda a: a, [pa.int64()], pa.int64(),
+            ...                volatility="immutable", name="identity_demo")
+            >>> ctx.register_udf(identity)
+            >>> blob = identity(col("x")).to_bytes(ctx)
+            >>> strict = SessionContext().with_python_udf_inlining(enabled=False)
+            >>> try:
+            ...     Expr.from_bytes(blob, strict)
+            ... except Exception as e:
+            ...     print("Refusing to deserialize" in str(e))
+            True
+        """
+        new_internal = self.ctx.with_python_udf_inlining(enabled)
+        new = SessionContext.__new__(SessionContext)
+        new.ctx = new_internal
+        return new

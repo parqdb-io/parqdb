@@ -1,0 +1,637 @@
+from __future__ import annotations
+
+import copy
+import json
+import shutil
+from pathlib import Path
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+ROOT = Path(__file__).parent
+VALID = ROOT / "valid"
+COMPOSITE = VALID / "composite_no_vectors"
+INVALID = ROOT / "invalid"
+
+INDEX_UUID = "2f1c7f5e-3c43-4a44-8f2a-cf560c4db8d1"
+COMPOSITE_INDEX_UUID = "8e51cf0a-c749-4894-83e7-5e9be2c373b7"
+SNAPSHOT_ID = 701
+NEXT_SNAPSHOT_ID = 702
+COMPOSITE_SNAPSHOT_ID = 801
+
+
+def write_json(path: Path, value: object) -> None:
+    path.write_text(
+        json.dumps(value, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def write_postings(directory: Path, table: pa.Table) -> None:
+    root = directory / "ivf_postings"
+    shutil.rmtree(root, ignore_errors=True)
+    (directory / "ivf_postings.parquet").unlink(missing_ok=True)
+    pq.write_to_dataset(
+        table,
+        root_path=root,
+        partition_cols=["cid"],
+        basename_template="part-{i}.parquet",
+        compression="NONE",
+    )
+
+
+def metadata() -> dict[str, object]:
+    return {
+        "format-version": 1,
+        "index-uuid": INDEX_UUID,
+        "location": f"s3://relify-fixtures/v1/metadata/{INDEX_UUID}/",
+        "last-updated-ms": 1_750_000_000_000,
+        "last-sequence-number": 1,
+        "current-snapshot-id": SNAPSHOT_ID,
+        "snapshots": [
+            {
+                "snapshot-id": SNAPSHOT_ID,
+                "sequence-number": 1,
+                "timestamp-ms": 1_750_000_000_000,
+                "summary": {"operation": "create"},
+                "source": {
+                    "profile": "parquet",
+                    "uri": "s3://relify-fixtures/v1/valid/source/",
+                },
+                "vector-field": "embedding",
+                "source-key-fields": ["document_id"],
+                "index-family": "ivf",
+                "index-schema-version": 1,
+                "metric": "l2_squared",
+                "parameters": {
+                    "dimension": "2",
+                    "nlist": "2",
+                    "ntotal": "3",
+                    "store_vectors": "true",
+                },
+                "index-relations": {
+                    "ivf_centroids": {
+                        "profile": "parquet",
+                        "uri": "s3://relify-fixtures/v1/valid/ivf_centroids/",
+                    },
+                    "ivf_postings": {
+                        "profile": "parquet",
+                        "uri": "s3://relify-fixtures/v1/valid/ivf_postings/",
+                    },
+                },
+            }
+        ],
+        "snapshot-log": [
+            {
+                "timestamp-ms": 1_750_000_000_000,
+                "snapshot-id": SNAPSHOT_ID,
+            }
+        ],
+        "properties": {"fixture": "ivf-parquet-v1"},
+    }
+
+
+def next_metadata(base: dict[str, object]) -> dict[str, object]:
+    value = copy.deepcopy(base)
+    timestamp_ms = value["last-updated-ms"] + 1
+    snapshot = copy.deepcopy(value["snapshots"][0])
+    snapshot["snapshot-id"] = NEXT_SNAPSHOT_ID
+    snapshot["sequence-number"] = 2
+    snapshot["timestamp-ms"] = timestamp_ms
+    snapshot["summary"] = {"operation": "refresh"}
+    value["last-updated-ms"] = timestamp_ms
+    value["last-sequence-number"] = 2
+    value["current-snapshot-id"] = NEXT_SNAPSHOT_ID
+    value["snapshots"].append(snapshot)
+    value["snapshot-log"].append(
+        {
+            "timestamp-ms": timestamp_ms,
+            "snapshot-id": NEXT_SNAPSHOT_ID,
+        }
+    )
+    return value
+
+
+def catalog_operations() -> dict[str, object]:
+    return {
+        "identifier": {
+            "namespace": ["analytics"],
+            "name": "documents",
+        },
+        "metadata": {
+            "base": "valid/metadata.json",
+            "next": "valid/metadata-v2.json",
+        },
+        "locations": {
+            "base": "s3://relify-fixtures/v1/catalog/metadata-v1.json",
+            "next": "s3://relify-fixtures/v1/catalog/metadata-v2.json",
+        },
+        "operations": [
+            {
+                "operation": "load",
+                "expect": "INDEX_NOT_FOUND",
+            },
+            {
+                "operation": "register",
+                "metadata": "base",
+                "location": "base",
+                "expect": "OK",
+            },
+            {
+                "operation": "register",
+                "metadata": "base",
+                "location": "base",
+                "expect": "ALREADY_EXISTS",
+            },
+            {
+                "operation": "load",
+                "expect-location": "base",
+                "expect": "OK",
+            },
+            {
+                "operation": "commit",
+                "base-metadata": "base",
+                "base-location": "base",
+                "new-metadata": "next",
+                "new-location": "next",
+                "expect": "OK",
+            },
+            {
+                "operation": "commit",
+                "base-metadata": "base",
+                "base-location": "base",
+                "new-metadata": "next",
+                "new-location": "next",
+                "expect": "COMMIT_CONFLICT",
+            },
+            {
+                "operation": "load",
+                "expect-location": "next",
+                "expect": "OK",
+            },
+            {
+                "operation": "drop",
+                "expect": "OK",
+            },
+            {
+                "operation": "load",
+                "expect": "INDEX_NOT_FOUND",
+            },
+        ],
+    }
+
+
+def write_tables() -> None:
+    vector = pa.list_(pa.field("element", pa.float32(), nullable=False))
+    source_schema = pa.schema(
+        [
+            pa.field("document_id", pa.string(), nullable=False),
+            pa.field("title", pa.string(), nullable=False),
+            pa.field("tenant_id", pa.int32(), nullable=False),
+            pa.field("status", pa.string(), nullable=False),
+            pa.field("embedding", vector, nullable=False),
+        ]
+    )
+    source = pa.Table.from_arrays(
+        [
+            pa.array(["a", "b", "c"], type=pa.string()),
+            pa.array(["Alpha", "Beta", "Gamma"], type=pa.string()),
+            pa.array([1, 1, 2], type=pa.int32()),
+            pa.array(["published", "draft", "published"], type=pa.string()),
+            pa.array([[0.0, 0.0], [1.0, 0.0], [10.0, 0.0]], type=vector),
+        ],
+        schema=source_schema,
+    )
+    centroids = pa.Table.from_arrays(
+        [
+            pa.array([0, 1], type=pa.int32()),
+            pa.array([[0.5, 0.0], [10.0, 0.0]], type=vector),
+        ],
+        schema=pa.schema(
+            [
+                pa.field("cid", pa.int32(), nullable=False),
+                pa.field("centroid", vector, nullable=False),
+            ]
+        ),
+    )
+    postings = pa.Table.from_arrays(
+        [
+            pa.array([0, 0, 1], type=pa.int32()),
+            pa.array(["a", "b", "c"], type=pa.string()),
+            pa.array([[0.0, 0.0], [1.0, 0.0], [10.0, 0.0]], type=vector),
+        ],
+        schema=pa.schema(
+            [
+                pa.field("cid", pa.int32(), nullable=False),
+                pa.field("key_1", pa.string(), nullable=False),
+                pa.field("vector", vector, nullable=False),
+            ]
+        ),
+    )
+    for name, table in (
+        ("source.parquet", source),
+        ("ivf_centroids.parquet", centroids),
+    ):
+        pq.write_table(table, VALID / name, compression="NONE")
+    write_postings(VALID, postings)
+
+
+def composite_metadata() -> dict[str, object]:
+    value = metadata()
+    value["index-uuid"] = COMPOSITE_INDEX_UUID
+    value["location"] = f"s3://relify-fixtures/v1/metadata/{COMPOSITE_INDEX_UUID}/"
+    value["current-snapshot-id"] = COMPOSITE_SNAPSHOT_ID
+    value["snapshot-log"] = [
+        {
+            "timestamp-ms": 1_750_000_000_000,
+            "snapshot-id": COMPOSITE_SNAPSHOT_ID,
+        }
+    ]
+    value["properties"] = {"fixture": "ivf-parquet-composite-no-vectors-v1"}
+    snapshot = value["snapshots"][0]  # type: ignore[index]
+    snapshot["snapshot-id"] = COMPOSITE_SNAPSHOT_ID
+    snapshot["source"] = {
+        "profile": "parquet",
+        "uri": "s3://relify-fixtures/v1/valid/composite_no_vectors/source/",
+    }
+    snapshot["source-key-fields"] = ["tenant_id", "document_id"]
+    snapshot["parameters"]["store_vectors"] = "false"
+    snapshot["index-relations"] = {
+        "ivf_centroids": {
+            "profile": "parquet",
+            "uri": (
+                "s3://relify-fixtures/v1/valid/composite_no_vectors/ivf_centroids/"
+            ),
+        },
+        "ivf_postings": {
+            "profile": "parquet",
+            "uri": ("s3://relify-fixtures/v1/valid/composite_no_vectors/ivf_postings/"),
+        },
+    }
+    return value
+
+
+def write_composite_tables() -> None:
+    vector = pa.list_(pa.field("element", pa.float32(), nullable=False))
+    source = pa.Table.from_arrays(
+        [
+            pa.array([1, 1, 2], type=pa.int32()),
+            pa.array(["b", "a", "a"], type=pa.string()),
+            pa.array(["One B", "One A", "Two A"], type=pa.string()),
+            pa.array([[0.0, 0.0], [0.0, 0.0], [10.0, 0.0]], type=vector),
+        ],
+        schema=pa.schema(
+            [
+                pa.field("tenant_id", pa.int32(), nullable=False),
+                pa.field("document_id", pa.string(), nullable=False),
+                pa.field("title", pa.string(), nullable=False),
+                pa.field("embedding", vector, nullable=False),
+            ]
+        ),
+    )
+    centroids = pa.Table.from_arrays(
+        [
+            pa.array([0, 1], type=pa.int32()),
+            pa.array([[0.0, 0.0], [10.0, 0.0]], type=vector),
+        ],
+        schema=pa.schema(
+            [
+                pa.field("cid", pa.int32(), nullable=False),
+                pa.field("centroid", vector, nullable=False),
+            ]
+        ),
+    )
+    postings = pa.Table.from_arrays(
+        [
+            pa.array([0, 0, 1], type=pa.int32()),
+            pa.array([1, 1, 2], type=pa.int32()),
+            pa.array(["b", "a", "a"], type=pa.string()),
+        ],
+        schema=pa.schema(
+            [
+                pa.field("cid", pa.int32(), nullable=False),
+                pa.field("key_1", pa.int32(), nullable=False),
+                pa.field("key_2", pa.string(), nullable=False),
+            ]
+        ),
+    )
+    for name, table in (
+        ("source.parquet", source),
+        ("ivf_centroids.parquet", centroids),
+    ):
+        pq.write_table(table, COMPOSITE / name, compression="NONE")
+    write_postings(COMPOSITE, postings)
+
+
+def write_invalid_documents(base: dict[str, object]) -> None:
+    cases: list[dict[str, str]] = []
+
+    def write_case(
+        filename: str,
+        value: object,
+        violates: str,
+    ) -> None:
+        write_json(INVALID / filename, value)
+        cases.append({"file": filename, "violates": violates})
+
+    noncanonical = copy.deepcopy(base)
+    noncanonical["snapshots"][0]["source"]["uri"] = (  # type: ignore[index]
+        "S3://relify-fixtures/v1/valid/source/"
+    )
+    write_case(
+        "noncanonical-parquet-uri.metadata.json",
+        noncanonical,
+        "Parquet relation URIs use a lowercase canonical scheme",
+    )
+
+    unknown_role = copy.deepcopy(base)
+    unknown_role["snapshots"][0]["index-relations"]["unknown"] = {  # type: ignore[index]
+        "profile": "parquet",
+        "uri": "s3://relify-fixtures/v1/valid/unknown/",
+    }
+    write_case(
+        "unknown-ivf-role.metadata.json",
+        unknown_role,
+        "IVF schema version 1 defines exactly two index relation roles",
+    )
+
+    unsupported_format = copy.deepcopy(base)
+    unsupported_format["format-version"] = 2
+    write_case(
+        "unsupported-format-version.metadata.json",
+        unsupported_format,
+        "format-version must be 1",
+    )
+
+    missing_current = copy.deepcopy(base)
+    missing_current["current-snapshot-id"] = 999
+    write_case(
+        "current-snapshot-not-retained.metadata.json",
+        missing_current,
+        "current-snapshot-id must identify one retained snapshot",
+    )
+
+    duplicate_source_key = copy.deepcopy(base)
+    duplicate_source_key["snapshots"][0]["source-key-fields"] = [  # type: ignore[index]
+        "document_id",
+        "document_id",
+    ]
+    write_case(
+        "duplicate-source-key-field.metadata.json",
+        duplicate_source_key,
+        "source-key-fields must not contain duplicates",
+    )
+
+    missing_role = copy.deepcopy(base)
+    del missing_role["snapshots"][0]["index-relations"]["ivf_postings"]  # type: ignore[index]
+    write_case(
+        "missing-ivf-role.metadata.json",
+        missing_role,
+        "every IVF snapshot requires ivf_centroids and ivf_postings",
+    )
+
+    leading_zero = copy.deepcopy(base)
+    leading_zero["snapshots"][0]["parameters"]["nlist"] = "02"  # type: ignore[index]
+    write_case(
+        "noncanonical-positive-parameter.metadata.json",
+        leading_zero,
+        "positive integer parameters must use canonical base-10 representation",
+    )
+
+    invalid_boolean = copy.deepcopy(base)
+    invalid_boolean["snapshots"][0]["parameters"]["store_vectors"] = "True"  # type: ignore[index]
+    write_case(
+        "noncanonical-store-vectors.metadata.json",
+        invalid_boolean,
+        "store_vectors must be exactly true or false",
+    )
+
+    unsupported_metric = copy.deepcopy(base)
+    unsupported_metric["snapshots"][0]["metric"] = "l2"  # type: ignore[index]
+    write_case(
+        "unsupported-metric.metadata.json",
+        unsupported_metric,
+        "IVF schema version 1 supports only l2_squared",
+    )
+
+    unsupported_profile = copy.deepcopy(base)
+    unsupported_profile["snapshots"][0]["source"]["profile"] = "delta"  # type: ignore[index]
+    write_case(
+        "unsupported-relation-profile.metadata.json",
+        unsupported_profile,
+        "format version 1 supports only declared relation profiles",
+    )
+
+    missing_field = copy.deepcopy(base)
+    del missing_field["snapshots"][0]["metric"]  # type: ignore[index]
+    write_case(
+        "missing-required-field.metadata.json",
+        missing_field,
+        "index snapshot metric is required",
+    )
+
+    uppercase_uuid = copy.deepcopy(base)
+    uppercase_uuid["index-uuid"] = INDEX_UUID.upper()
+    write_case(
+        "noncanonical-index-uuid.metadata.json",
+        uppercase_uuid,
+        "UUIDs use lowercase hexadecimal strings",
+    )
+
+    out_of_order_log = copy.deepcopy(base)
+    out_of_order_log["snapshot-log"].append(  # type: ignore[union-attr]
+        {
+            "timestamp-ms": 1_749_999_999_999,
+            "snapshot-id": SNAPSHOT_ID,
+        }
+    )
+    write_case(
+        "decreasing-snapshot-log.metadata.json",
+        out_of_order_log,
+        "snapshot-log timestamps must be non-decreasing",
+    )
+
+    duplicate_snapshot = copy.deepcopy(base)
+    second = copy.deepcopy(duplicate_snapshot["snapshots"][0])  # type: ignore[index]
+    second["sequence-number"] = 2
+    duplicate_snapshot["snapshots"].append(second)  # type: ignore[union-attr]
+    duplicate_snapshot["last-sequence-number"] = 2
+    write_case(
+        "duplicate-snapshot-id.metadata.json",
+        duplicate_snapshot,
+        "snapshot IDs must be unique within the index",
+    )
+
+    changed_identity = copy.deepcopy(base)
+    second = copy.deepcopy(changed_identity["snapshots"][0])  # type: ignore[index]
+    second["snapshot-id"] = 702
+    second["sequence-number"] = 2
+    second["vector-field"] = "other_embedding"
+    changed_identity["snapshots"].append(second)  # type: ignore[union-attr]
+    changed_identity["last-sequence-number"] = 2
+    changed_identity["current-snapshot-id"] = 702
+    changed_identity["snapshot-log"].append(  # type: ignore[union-attr]
+        {"timestamp-ms": 1_750_000_000_000, "snapshot-id": 702}
+    )
+    write_case(
+        "changed-snapshot-identity.metadata.json",
+        changed_identity,
+        "logical identity fields remain equal across snapshots",
+    )
+
+    valid_json = json.dumps(base, indent=2, sort_keys=True)
+    duplicate = valid_json.replace(
+        '"dimension": "2",',
+        '"dimension": "2",\n          "dimension": "3",',
+        1,
+    )
+    (INVALID / "duplicate-map-key.metadata.json").write_text(
+        duplicate + "\n",
+        encoding="utf-8",
+    )
+    cases.append(
+        {
+            "file": "duplicate-map-key.metadata.json",
+            "violates": "JSON maps must contain unique keys",
+        }
+    )
+
+    unknown_field = valid_json.replace(
+        '"profile": "parquet",',
+        '"profile": "parquet",\n        "unexpected": "value",',
+        1,
+    )
+    (INVALID / "unknown-relation-field.metadata.json").write_text(
+        unknown_field + "\n",
+        encoding="utf-8",
+    )
+    cases.append(
+        {
+            "file": "unknown-relation-field.metadata.json",
+            "violates": "relation references contain exactly profile-defined fields",
+        }
+    )
+    write_json(INVALID / "manifest.json", cases)
+
+
+def main() -> None:
+    VALID.mkdir(parents=True, exist_ok=True)
+    COMPOSITE.mkdir(parents=True, exist_ok=True)
+    INVALID.mkdir(parents=True, exist_ok=True)
+    for path in INVALID.glob("*.metadata.json"):
+        path.unlink()
+    base = metadata()
+    write_json(VALID / "metadata.json", base)
+    write_json(VALID / "metadata-v2.json", next_metadata(base))
+    write_json(ROOT / "catalog.json", catalog_operations())
+    write_json(
+        VALID / "queries.json",
+        [
+            {
+                "name": "one-cluster",
+                "query-vector": [0.0, 0.0],
+                "nprobe": 1,
+                "k": 2,
+                "filter": None,
+                "projection": ["document_id"],
+                "expected": [
+                    {"document_id": "a", "_distance": 0.0},
+                    {"document_id": "b", "_distance": 1.0},
+                ],
+            },
+            {
+                "name": "prefilter",
+                "query-vector": [0.0, 0.0],
+                "nprobe": 2,
+                "k": 2,
+                "filter": {"status": "published"},
+                "projection": ["document_id"],
+                "expected": [
+                    {"document_id": "a", "_distance": 0.0},
+                    {"document_id": "c", "_distance": 100.0},
+                ],
+            },
+            {
+                "name": "equal-distance-results",
+                "query-vector": [0.5, 0.0],
+                "nprobe": 2,
+                "k": 2,
+                "filter": None,
+                "projection": ["document_id"],
+                "expected": [
+                    {"document_id": "a", "_distance": 0.25},
+                    {"document_id": "b", "_distance": 0.25},
+                ],
+            },
+            {
+                "name": "centroid-id-tie-break",
+                "query-vector": [5.25, 0.0],
+                "nprobe": 1,
+                "k": 3,
+                "filter": None,
+                "projection": ["document_id"],
+                "expected": [
+                    {"document_id": "b", "_distance": 18.0625},
+                    {"document_id": "a", "_distance": 27.5625},
+                ],
+            },
+            {
+                "name": "k-exceeds-selected-candidates",
+                "query-vector": [10.0, 0.0],
+                "nprobe": 1,
+                "k": 10,
+                "filter": None,
+                "projection": ["document_id"],
+                "expected": [
+                    {"document_id": "c", "_distance": 0.0},
+                ],
+            },
+            {
+                "name": "filter-excludes-all",
+                "query-vector": [0.0, 0.0],
+                "nprobe": 2,
+                "k": 3,
+                "filter": {"status": "missing"},
+                "projection": ["document_id"],
+                "expected": [],
+            },
+        ],
+    )
+    write_json(COMPOSITE / "metadata.json", composite_metadata())
+    write_json(
+        COMPOSITE / "queries.json",
+        [
+            {
+                "name": "composite-equal-distance-results",
+                "query-vector": [0.0, 0.0],
+                "nprobe": 2,
+                "k": 3,
+                "filter": None,
+                "projection": ["tenant_id", "document_id"],
+                "expected": [
+                    {"tenant_id": 1, "document_id": "a", "_distance": 0.0},
+                    {"tenant_id": 1, "document_id": "b", "_distance": 0.0},
+                    {"tenant_id": 2, "document_id": "a", "_distance": 100.0},
+                ],
+            },
+            {
+                "name": "composite-index-without-stored-vectors",
+                "query-vector": [0.0, 0.0],
+                "nprobe": 1,
+                "k": 10,
+                "filter": None,
+                "projection": ["tenant_id", "document_id"],
+                "expected": [
+                    {"tenant_id": 1, "document_id": "a", "_distance": 0.0},
+                    {"tenant_id": 1, "document_id": "b", "_distance": 0.0},
+                ],
+            },
+        ],
+    )
+    write_tables()
+    write_composite_tables()
+    write_invalid_documents(base)
+
+
+if __name__ == "__main__":
+    main()

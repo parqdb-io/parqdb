@@ -1,0 +1,25 @@
+[package]
+name = "relify-iceberg"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Exact Apache Iceberg snapshot resolution for Relify"
+repository.workspace = true
+publish = false
+
+[lib]
+name = "relify_iceberg"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+datafusion.workspace = true
+iceberg.workspace = true
+iceberg-datafusion.workspace = true
+iceberg-storage-opendal.workspace = true
+relify-meta = { version = "0.1.0-rc.1", path = "../relify-meta" }
+thiserror.workspace = true
+uuid.workspace = true

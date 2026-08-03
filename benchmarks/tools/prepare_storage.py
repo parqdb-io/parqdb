@@ -1,0 +1,266 @@
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import tempfile
+import time
+from datetime import timedelta
+from pathlib import Path
+from typing import Any
+
+import relify
+
+from benchmarks.tools.datasets import (
+    ParquetSource,
+    inspect_parquet_source,
+    iter_parquet_vector_batches,
+    sample_parquet_vectors,
+)
+from benchmarks.tools.harness import (
+    KMEANS_MAX_ITERATIONS,
+    KMEANS_SEED,
+    directory_bytes,
+    evict_tree,
+    sync_file,
+    sync_tree,
+)
+
+
+def prepare_relify(
+    source: ParquetSource,
+    destination: Path,
+    *,
+    nlist: int,
+    threads: int,
+) -> dict[str, Any]:
+    if destination.exists():
+        raise FileExistsError(f"Relify destination already exists: {destination}")
+    try:
+        session = relify.connect(destination)
+        session.sql(
+            f"SET datafusion.execution.target_partitions = '{threads}'"
+        ).collect()
+        session.register_parquet("benchmark", source.path)
+        table = session.table("benchmark")
+        assert isinstance(table, relify.SourceTable)
+        started = time.perf_counter()
+        table.create_index(
+            "benchmark_embedding",
+            column="embedding",
+            key=["id"],
+            config=relify.IVF(nlist=nlist),
+            builder=relify.Local(threads=threads),
+            wait_timeout=timedelta(hours=24),
+        )
+        sync_tree(destination)
+        result = {
+            "root": str(destination),
+            "table": "benchmark",
+            "index": "benchmark_embedding",
+            "build_seconds": time.perf_counter() - started,
+            "payload_bytes": directory_bytes(destination / "indexes"),
+            "managed_bytes": directory_bytes(destination),
+            "store_vectors": True,
+        }
+        evict_tree(destination / "indexes")
+        result["page_cache_evicted_after_build"] = True
+        return result
+    except BaseException:
+        shutil.rmtree(destination, ignore_errors=True)
+        raise
+
+
+def prepare_faiss(
+    source: ParquetSource,
+    destination: Path,
+    *,
+    nlist: int,
+    threads: int,
+    shard_rows: int,
+    batch_rows: int,
+) -> dict[str, Any]:
+    if destination.exists():
+        raise FileExistsError(f"Faiss destination already exists: {destination}")
+    destination.mkdir(parents=True)
+    try:
+        import faiss  # pyright: ignore[reportMissingImports]
+        from faiss.contrib.ondisk import merge_ondisk
+
+        faiss.omp_set_num_threads(threads)
+        training_rows = min(source.rows, nlist * 256)
+        training = sample_parquet_vectors(
+            source,
+            training_rows,
+            seed=KMEANS_SEED,
+            batch_rows=batch_rows,
+        )
+        index = faiss.IndexIVFFlat(
+            faiss.IndexFlatL2(source.dimension),
+            source.dimension,
+            nlist,
+        )
+        index.cp.niter = KMEANS_MAX_ITERATIONS
+        index.cp.seed = KMEANS_SEED
+        started = time.perf_counter()
+        index.train(training)
+        del training
+        trained_path = destination / "trained.faiss"
+        faiss.write_index(index, str(trained_path))
+
+        shard_directory = destination / "shards"
+        shard_directory.mkdir()
+        shard_paths = []
+        shard = faiss.clone_index(index)
+        shard_number = 0
+        for ids, vectors in iter_parquet_vector_batches(
+            source,
+            batch_rows=batch_rows,
+        ):
+            shard.add_with_ids(vectors, ids)
+            if shard.ntotal >= shard_rows:
+                shard_path = shard_directory / f"part-{shard_number:05d}.faiss"
+                faiss.write_index(shard, str(shard_path))
+                shard_paths.append(shard_path)
+                shard_number += 1
+                shard = faiss.clone_index(index)
+        if shard.ntotal:
+            shard_path = shard_directory / f"part-{shard_number:05d}.faiss"
+            faiss.write_index(shard, str(shard_path))
+            shard_paths.append(shard_path)
+
+        inverted_lists_path = destination / "inverted-lists.bin"
+        merge_ondisk(
+            index,
+            [str(path) for path in shard_paths],
+            str(inverted_lists_path),
+        )
+        index_path = destination / "index.faiss"
+        faiss.write_index(index, str(index_path))
+        sync_file(inverted_lists_path)
+        sync_file(index_path)
+        shutil.rmtree(shard_directory)
+        trained_path.unlink()
+        result = {
+            "index": str(index_path),
+            "inverted_lists": str(inverted_lists_path),
+            "build_seconds": time.perf_counter() - started,
+            "payload_bytes": inverted_lists_path.stat().st_size,
+            "metadata_bytes": index_path.stat().st_size,
+            "inverted_lists_type": "OnDiskInvertedLists",
+            "training_rows": training_rows,
+            "shard_rows": shard_rows,
+            "shards": len(shard_paths),
+        }
+        evict_tree(destination)
+        result["page_cache_evicted_after_build"] = True
+        return result
+    except BaseException:
+        shutil.rmtree(destination)
+        raise
+
+
+def _write_metadata(path: Path, metadata: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        delete=False,
+    ) as stream:
+        json.dump(metadata, stream, indent=2, sort_keys=True)
+        stream.write("\n")
+        temporary = Path(stream.name)
+    os.replace(temporary, path)
+    path.chmod(0o644)
+
+
+def prepare(args: argparse.Namespace) -> dict[str, Any]:
+    source = inspect_parquet_source(args.source_parquet)
+    if not 1 <= args.nlist <= source.rows:
+        raise ValueError(f"nlist must be in 1..={source.rows}")
+    if args.threads <= 0 or args.shard_rows <= 0 or args.batch_rows <= 0:
+        raise ValueError("threads, shard-rows, and batch-rows must be positive")
+    output = args.output.expanduser().resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    metadata_path = output / "storage-indexes.json"
+    if metadata_path.exists():
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        expected = metadata["source"]
+        if (
+            expected["path"] != str(source.path)
+            or expected["rows"] != source.rows
+            or expected["dimension"] != source.dimension
+            or metadata["parameters"]["nlist"] != args.nlist
+            or metadata["parameters"]["threads"] != args.threads
+        ):
+            raise ValueError("existing storage preparation uses different inputs")
+    else:
+        metadata = {
+            "schema_version": 1,
+            "source": {
+                "path": str(source.path),
+                "rows": source.rows,
+                "dimension": source.dimension,
+                "bytes": source.bytes,
+            },
+            "parameters": {
+                "nlist": args.nlist,
+                "kmeans_seed": KMEANS_SEED,
+                "kmeans_max_iterations": KMEANS_MAX_ITERATIONS,
+                "threads": args.threads,
+            },
+            "indexes": {},
+        }
+    if args.implementation in metadata["indexes"]:
+        raise ValueError(f"{args.implementation} is already prepared")
+
+    if args.implementation == "relify":
+        result = prepare_relify(
+            source,
+            output / "relify",
+            nlist=args.nlist,
+            threads=args.threads,
+        )
+    else:
+        result = prepare_faiss(
+            source,
+            output / "faiss",
+            nlist=args.nlist,
+            threads=args.threads,
+            shard_rows=args.shard_rows,
+            batch_rows=args.batch_rows,
+        )
+    metadata["indexes"][args.implementation] = result
+    _write_metadata(metadata_path, metadata)
+    return metadata
+
+
+def parser() -> argparse.ArgumentParser:
+    command = argparse.ArgumentParser(
+        prog="python -m benchmarks.tools.prepare_storage",
+        description="Prepare persistent indexes for the storage-backed suite.",
+    )
+    command.add_argument(
+        "--implementation",
+        choices=("relify", "faiss"),
+        required=True,
+    )
+    command.add_argument("--source-parquet", type=Path, required=True)
+    command.add_argument("--output", type=Path, required=True)
+    command.add_argument("--nlist", type=int, default=8_192)
+    command.add_argument("--threads", type=int, default=32)
+    command.add_argument("--shard-rows", type=int, default=1_048_576)
+    command.add_argument("--batch-rows", type=int, default=65_536)
+    return command
+
+
+def main(argv: list[str] | None = None) -> None:
+    metadata = prepare(parser().parse_args(argv))
+    print(json.dumps(metadata, indent=2, sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()

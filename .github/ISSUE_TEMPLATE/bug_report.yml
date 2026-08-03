@@ -1,0 +1,73 @@
+name: Bug report
+description: Report reproducible incorrect behavior in Relify.
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Relify. Please provide a minimal reproduction whenever possible.
+
+  - type: input
+    id: version
+    attributes:
+      label: Relify version
+      description: Package version, commit SHA, or branch.
+      placeholder: Package version or commit SHA
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, Python and Rust versions, storage, and backend.
+      placeholder: macOS 15, Python 3.12, Rust 1.96, local filesystem, DataFusion
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Problem
+      description: Describe the incorrect behavior and its impact.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include the smallest code sample, data shape, and commands needed to reproduce the problem.
+      render: python
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or error output
+      description: Remove credentials, tokens, and private data.
+      render: shell
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add relevant metadata, schema details, screenshots, or links.
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Code of Conduct
+      options:
+        - label: I agree to follow the project's Code of Conduct.
+          required: true

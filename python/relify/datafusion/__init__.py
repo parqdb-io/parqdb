@@ -1,0 +1,200 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+"""DataFusion: an in-process query engine built on Apache Arrow.
+
+DataFusion is not a database -- it has no server and no external dependencies.
+You create a :py:class:`SessionContext`, point it at data sources (Parquet, CSV,
+JSON, Arrow IPC, Pandas, Polars, or raw Python dicts/lists), and run queries
+using either SQL or the DataFrame API.
+
+Core abstractions
+-----------------
+- **SessionContext** -- entry point for loading data, running SQL, and creating
+  DataFrames.
+- **DataFrame** -- lazy query builder. Every method returns a new DataFrame;
+  call :py:meth:`~datafusion.dataframe.DataFrame.collect` or a ``to_*``
+  method to execute.
+- **Expr** -- expression tree node for column references, literals, and function
+  calls. Build with :py:func:`col` and :py:func:`lit`.
+- **functions** -- 290+ built-in scalar, aggregate, and window functions.
+
+Quick start
+-----------
+
+>>> from relify.datafusion import SessionContext, col
+>>> from relify.datafusion import functions as F
+>>> ctx = SessionContext()
+>>> df = ctx.from_pydict({"a": [1, 2, 3], "b": [4, 5, 6]})
+>>> result = (
+...     df.filter(col("a") > 1)
+...       .with_column("total", col("a") + col("b"))
+...       .aggregate([], [F.sum(col("total")).alias("grand_total")])
+... )
+>>> result.to_pydict()
+{'grand_total': [16]}
+
+User guide and full documentation: https://datafusion.apache.org/python
+
+AI agent reference (SQL-to-DataFrame mappings, expression-building patterns,
+common pitfalls), written in a dense, skill-oriented format:
+https://github.com/apache/datafusion-python/blob/main/skills/datafusion_python/SKILL.md
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from . import _internal as _internal
+
+# Public submodules
+from . import functions, ipc, object_store, substrait, unparser
+
+# The following imports are okay to remain as opaque to the user.
+from .catalog import (
+    Catalog,
+    Table,
+    TableProviderFactory,
+    TableProviderFactoryExportable,
+)
+from .col import col, column
+from .common import DFSchema
+from .context import (
+    RuntimeEnvBuilder,
+    SessionConfig,
+    SessionContext,
+    SQLOptions,
+)
+from .dataframe import (
+    DataFrame,
+    DataFrameWriteOptions,
+    ExplainFormat,
+    InsertOp,
+    ParquetColumnOptions,
+    ParquetWriterOptions,
+)
+from .dataframe_formatter import configure_formatter
+from .expr import Expr, WindowFrame
+from .io import read_avro, read_csv, read_json, read_parquet
+from .options import CsvReadOptions
+from .plan import ExecutionPlan, LogicalPlan, Metric, MetricsSet
+from .record_batch import RecordBatch, RecordBatchStream
+from .user_defined import (
+    Accumulator,
+    AggregateUDF,
+    ScalarUDF,
+    TableFunction,
+    WindowUDF,
+    udaf,
+    udf,
+    udtf,
+    udwf,
+)
+
+__version__ = "54.0.0"
+
+__all__ = [
+    "Accumulator",
+    "AggregateUDF",
+    "Catalog",
+    "CsvReadOptions",
+    "DFSchema",
+    "DataFrame",
+    "DataFrameWriteOptions",
+    "ExecutionPlan",
+    "ExplainFormat",
+    "Expr",
+    "InsertOp",
+    "LogicalPlan",
+    "Metric",
+    "MetricsSet",
+    "ParquetColumnOptions",
+    "ParquetWriterOptions",
+    "RecordBatch",
+    "RecordBatchStream",
+    "RuntimeEnvBuilder",
+    "SQLOptions",
+    "ScalarUDF",
+    "SessionConfig",
+    "SessionContext",
+    "Table",
+    "TableFunction",
+    "TableProviderFactory",
+    "TableProviderFactoryExportable",
+    "WindowFrame",
+    "WindowUDF",
+    "catalog",
+    "col",
+    "column",
+    "common",
+    "configure_formatter",
+    "expr",
+    "functions",
+    "ipc",
+    "lit",
+    "literal",
+    "object_store",
+    "options",
+    "read_avro",
+    "read_csv",
+    "read_json",
+    "read_parquet",
+    "substrait",
+    "udaf",
+    "udf",
+    "udtf",
+    "udwf",
+    "unparser",
+]
+
+
+def literal(value: Any) -> Expr:
+    """Create a literal expression."""
+    return Expr.literal(value)
+
+
+def string_literal(value: str) -> Expr:
+    """Create a UTF8 literal expression.
+
+    It differs from `literal` which creates a UTF8view literal.
+    """
+    return Expr.string_literal(value)
+
+
+def str_lit(value: str) -> Expr:
+    """Alias for `string_literal`."""
+    return string_literal(value)
+
+
+def lit(value: Any) -> Expr:
+    """Create a literal expression."""
+    return Expr.literal(value)
+
+
+def literal_with_metadata(value: Any, metadata: dict[str, str]) -> Expr:
+    """Creates a new expression representing a scalar value with metadata.
+
+    Args:
+        value: A valid PyArrow scalar value or easily castable to one.
+        metadata: Metadata to attach to the expression.
+    """
+    return Expr.literal_with_metadata(value, metadata)
+
+
+def lit_with_metadata(value: Any, metadata: dict[str, str]) -> Expr:
+    """Alias for literal_with_metadata."""
+    return literal_with_metadata(value, metadata)

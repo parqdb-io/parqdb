@@ -1,0 +1,72 @@
+[workspace]
+exclude = ["vendor/datafusion-python"]
+members = [
+    "rust/parallite",
+    "rust/relify-catalog",
+    "rust/relify-core",
+    "rust/relify-kmeans",
+    "rust/relify-kernels",
+    "rust/relify-iceberg",
+    "rust/relify-local",
+    "rust/relify-meta",
+    "rust/relify-index",
+    "rust/relify-storage",
+    "python",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0-rc.1"
+edition = "2024"
+rust-version = "1.96"
+license = "MIT"
+repository = "https://github.com/petrizhang/relify"
+
+[workspace.dependencies]
+arrow = "58.3.0"
+arrow-ipc = "58.3.0"
+async-trait = "0.1.89"
+base64 = "0.22.1"
+bytes = "1.11.1"
+datafusion = { version = "=54.0.0", default-features = false, features = [
+  "nested_expressions",
+  "parquet",
+  "sql",
+] }
+datafusion-python = { path = "vendor/datafusion-python", version = "=54.0.0", default-features = false, features = [
+  "abi3",
+  "protoc",
+  "substrait",
+] }
+futures = "0.3.31"
+hdfs-native-object-store = "0.16.0"
+iceberg = { version = "=0.10.0", git = "https://github.com/apache/iceberg-rust.git", rev = "875fdb7463f0a2d685fa3c61c70527469bcd4407" }
+iceberg-datafusion = { version = "=0.10.0", git = "https://github.com/apache/iceberg-rust.git", rev = "875fdb7463f0a2d685fa3c61c70527469bcd4407" }
+iceberg-storage-opendal = { version = "=0.10.0", git = "https://github.com/apache/iceberg-rust.git", rev = "875fdb7463f0a2d685fa3c61c70527469bcd4407", default-features = false, features = [
+  "opendal-fs",
+  "opendal-s3",
+] }
+matrixmultiply = "0.3.10"
+object_store = { version = "0.13.2", features = ["aws", "fs"] }
+parquet = { version = "58.3.0", features = ["arrow"] }
+pyo3 = "0.28.2"
+rayon = "1.12.0"
+rusqlite = { version = "0.38.0", features = ["bundled"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+tempfile = "3.23.0"
+thiserror = "2.0.17"
+tokio = { version = "1.48.0", features = ["rt-multi-thread", "sync"] }
+url = "2.5.7"
+uuid = { version = "1.18.1", features = ["serde", "v4", "v5"] }
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unsafe_code = "deny"
+unnameable_types = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+module_name_repetitions = "allow"

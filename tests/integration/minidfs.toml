@@ -1,0 +1,3 @@
+# Managed by the relify-storage integration test.
+[hdfs]
+mode = "managed"

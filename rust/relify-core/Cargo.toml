@@ -1,0 +1,20 @@
+[package]
+name = "relify-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Backend-neutral index and query models for Relify"
+repository.workspace = true
+publish = false
+
+[lib]
+name = "relify_core"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+relify-catalog = { version = "0.1.0-rc.1", path = "../relify-catalog", default-features = false }
+relify-meta = { version = "0.1.0-rc.1", path = "../relify-meta" }

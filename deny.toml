@@ -1,0 +1,56 @@
+[graph]
+all-features = true
+
+[advisories]
+ignore = [
+    {
+        id = "RUSTSEC-2024-0436",
+        reason = "Arrow Parquet 58 still uses paste for compile-time identifier generation; this is an unmaintained notice, not a runtime vulnerability",
+    },
+    {
+        id = "RUSTSEC-2026-0194",
+        reason = "DataFusion 54 requires object_store 0.13, whose latest compatible release pins quick-xml 0.39; remove after an object_store 0.13 patch or DataFusion upgrade",
+    },
+    {
+        id = "RUSTSEC-2026-0195",
+        reason = "DataFusion 54 requires object_store 0.13, whose latest compatible release pins quick-xml 0.39; remove after an object_store 0.13 patch or DataFusion upgrade",
+    },
+    {
+        id = "RUSTSEC-2026-0176",
+        reason = "DataFusion Python 54 and Arrow PyArrow 58 require PyO3 0.28; the audited dependency graph does not call the affected BoundListIterator or BoundTupleIterator nth APIs; remove when the binding supports PyO3 0.29",
+    },
+    {
+        id = "RUSTSEC-2026-0177",
+        reason = "DataFusion Python 54 and Arrow PyArrow 58 require PyO3 0.28; the audited dependency graph does not call PyCFunction::new_closure; remove when the binding supports PyO3 0.29",
+    },
+]
+
+[licenses]
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "bzip2-1.0.6",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = ["https://github.com/apache/iceberg-rust.git"]

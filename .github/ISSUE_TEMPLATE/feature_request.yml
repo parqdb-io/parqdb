@@ -1,0 +1,58 @@
+name: Feature request
+description: Propose a focused capability or specification change.
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the user or integration problem before proposing an API.
+    validations:
+      required: true
+
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Use case
+      description: Show the concrete workflow this capability should enable.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed direction
+      description: Describe a possible solution, including API or format examples when useful.
+    validations:
+      required: true
+
+  - type: textarea
+    id: specification
+    attributes:
+      label: Specification impact
+      description: Identify affected metadata, catalog, storage, index schema, or query semantics.
+      placeholder: None, or spec/catalog.md and spec/ivf/query.md
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Explain existing workarounds or other designs that were considered.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add relevant examples, prior art, or links.
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Code of Conduct
+      options:
+        - label: I agree to follow the project's Code of Conduct.
+          required: true

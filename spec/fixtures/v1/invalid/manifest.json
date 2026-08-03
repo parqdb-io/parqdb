@@ -1,0 +1,70 @@
+[
+  {
+    "file": "noncanonical-parquet-uri.metadata.json",
+    "violates": "Parquet relation URIs use a lowercase canonical scheme"
+  },
+  {
+    "file": "unknown-ivf-role.metadata.json",
+    "violates": "IVF schema version 1 defines exactly two index relation roles"
+  },
+  {
+    "file": "unsupported-format-version.metadata.json",
+    "violates": "format-version must be 1"
+  },
+  {
+    "file": "current-snapshot-not-retained.metadata.json",
+    "violates": "current-snapshot-id must identify one retained snapshot"
+  },
+  {
+    "file": "duplicate-source-key-field.metadata.json",
+    "violates": "source-key-fields must not contain duplicates"
+  },
+  {
+    "file": "missing-ivf-role.metadata.json",
+    "violates": "every IVF snapshot requires ivf_centroids and ivf_postings"
+  },
+  {
+    "file": "noncanonical-positive-parameter.metadata.json",
+    "violates": "positive integer parameters must use canonical base-10 representation"
+  },
+  {
+    "file": "noncanonical-store-vectors.metadata.json",
+    "violates": "store_vectors must be exactly true or false"
+  },
+  {
+    "file": "unsupported-metric.metadata.json",
+    "violates": "IVF schema version 1 supports only l2_squared"
+  },
+  {
+    "file": "unsupported-relation-profile.metadata.json",
+    "violates": "format version 1 supports only declared relation profiles"
+  },
+  {
+    "file": "missing-required-field.metadata.json",
+    "violates": "index snapshot metric is required"
+  },
+  {
+    "file": "noncanonical-index-uuid.metadata.json",
+    "violates": "UUIDs use lowercase hexadecimal strings"
+  },
+  {
+    "file": "decreasing-snapshot-log.metadata.json",
+    "violates": "snapshot-log timestamps must be non-decreasing"
+  },
+  {
+    "file": "duplicate-snapshot-id.metadata.json",
+    "violates": "snapshot IDs must be unique within the index"
+  },
+  {
+    "file": "changed-snapshot-identity.metadata.json",
+    "violates": "logical identity fields remain equal across snapshots"
+  },
+  {
+    "file": "duplicate-map-key.metadata.json",
+    "violates": "JSON maps must contain unique keys"
+  },
+  {
+    "file": "unknown-relation-field.metadata.json",
+    "violates": "relation references contain exactly profile-defined fields"
+  }
+]

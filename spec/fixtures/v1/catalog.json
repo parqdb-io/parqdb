@@ -1,0 +1,68 @@
+{
+  "identifier": {
+    "name": "documents",
+    "namespace": [
+      "analytics"
+    ]
+  },
+  "locations": {
+    "base": "s3://relify-fixtures/v1/catalog/metadata-v1.json",
+    "next": "s3://relify-fixtures/v1/catalog/metadata-v2.json"
+  },
+  "metadata": {
+    "base": "valid/metadata.json",
+    "next": "valid/metadata-v2.json"
+  },
+  "operations": [
+    {
+      "expect": "INDEX_NOT_FOUND",
+      "operation": "load"
+    },
+    {
+      "expect": "OK",
+      "location": "base",
+      "metadata": "base",
+      "operation": "register"
+    },
+    {
+      "expect": "ALREADY_EXISTS",
+      "location": "base",
+      "metadata": "base",
+      "operation": "register"
+    },
+    {
+      "expect": "OK",
+      "expect-location": "base",
+      "operation": "load"
+    },
+    {
+      "base-location": "base",
+      "base-metadata": "base",
+      "expect": "OK",
+      "new-location": "next",
+      "new-metadata": "next",
+      "operation": "commit"
+    },
+    {
+      "base-location": "base",
+      "base-metadata": "base",
+      "expect": "COMMIT_CONFLICT",
+      "new-location": "next",
+      "new-metadata": "next",
+      "operation": "commit"
+    },
+    {
+      "expect": "OK",
+      "expect-location": "next",
+      "operation": "load"
+    },
+    {
+      "expect": "OK",
+      "operation": "drop"
+    },
+    {
+      "expect": "INDEX_NOT_FOUND",
+      "operation": "load"
+    }
+  ]
+}

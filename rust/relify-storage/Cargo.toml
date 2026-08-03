@@ -1,0 +1,28 @@
+[package]
+name = "relify-storage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "URI-based storage registry and warehouse layout for Relify"
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+hdfs-integration = ["hdfs-native-object-store/integration-test"]
+
+[dependencies]
+bytes.workspace = true
+futures.workspace = true
+hdfs-native-object-store.workspace = true
+object_store.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros"] }
