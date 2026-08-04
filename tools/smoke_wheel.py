@@ -3,12 +3,18 @@ from __future__ import annotations
 import os
 from importlib import import_module
 from importlib.metadata import version
+from importlib.util import find_spec
 from tempfile import TemporaryDirectory
 
 import relify
 
 
 def main() -> None:
+    if find_spec("datafusion") is not None:
+        raise RuntimeError(
+            "wheel smoke must not rely on an external datafusion package"
+        )
+
     for module in (
         "adbc_driver_flightsql",
         "pyiceberg",
@@ -21,6 +27,12 @@ def main() -> None:
     with TemporaryDirectory(prefix="relify-wheel-smoke-") as directory:
         session = relify.connect(os.path.join(directory, "relify-data"))
         session.register_parquet("documents", relify.datasets.uri("documents"))
+        dataframe = session.sql("SELECT document_id FROM documents LIMIT 1")
+        if (
+            "document_id" not in repr(dataframe)
+            or "<table" not in dataframe._repr_html_()
+        ):
+            raise RuntimeError("embedded DataFusion repr is unavailable")
         table = session.table("documents")
         table.create_index(
             "smoke",

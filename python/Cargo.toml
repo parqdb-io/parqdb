@@ -17,12 +17,12 @@ workspace = true
 arrow.workspace = true
 datafusion-python.workspace = true
 pyo3 = { workspace = true, features = ["abi3-py310", "extension-module"] }
-relify-catalog = { version = "0.1.0-rc.1", path = "../rust/relify-catalog" }
-relify-core = { version = "0.1.0-rc.1", path = "../rust/relify-core" }
-relify-index = { version = "0.1.0-rc.1", path = "../rust/relify-index" }
-relify-local = { version = "0.1.0-rc.1", path = "../rust/relify-local" }
-relify-meta = { version = "0.1.0-rc.1", path = "../rust/relify-meta" }
-relify-storage = { version = "0.1.0-rc.1", path = "../rust/relify-storage" }
+relify-catalog = { version = "0.1.0-rc.2", path = "../rust/relify-catalog" }
+relify-core = { version = "0.1.0-rc.2", path = "../rust/relify-core" }
+relify-index = { version = "0.1.0-rc.2", path = "../rust/relify-index" }
+relify-local = { version = "0.1.0-rc.2", path = "../rust/relify-local" }
+relify-meta = { version = "0.1.0-rc.2", path = "../rust/relify-meta" }
+relify-storage = { version = "0.1.0-rc.2", path = "../rust/relify-storage" }
 serde_json.workspace = true
 tokio.workspace = true
 uuid.workspace = true

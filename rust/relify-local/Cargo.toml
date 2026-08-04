@@ -25,15 +25,15 @@ datafusion.workspace = true
 futures.workspace = true
 object_store.workspace = true
 parquet.workspace = true
-parallite = { version = "0.1.0-rc.1", path = "../parallite" }
-relify-catalog = { version = "0.1.0-rc.1", path = "../relify-catalog" }
-relify-core = { version = "0.1.0-rc.1", path = "../relify-core" }
-relify-index = { version = "0.1.0-rc.1", path = "../relify-index" }
-relify-iceberg = { version = "0.1.0-rc.1", path = "../relify-iceberg" }
-relify-kernels = { version = "0.1.0-rc.1", path = "../relify-kernels" }
-relify-kmeans = { version = "0.1.0-rc.1", path = "../relify-kmeans" }
-relify-meta = { version = "0.1.0-rc.1", path = "../relify-meta" }
-relify-storage = { version = "0.1.0-rc.1", path = "../relify-storage" }
+parallite = { version = "0.1.0-rc.2", path = "../parallite" }
+relify-catalog = { version = "0.1.0-rc.2", path = "../relify-catalog" }
+relify-core = { version = "0.1.0-rc.2", path = "../relify-core" }
+relify-index = { version = "0.1.0-rc.2", path = "../relify-index" }
+relify-iceberg = { version = "0.1.0-rc.2", path = "../relify-iceberg" }
+relify-kernels = { version = "0.1.0-rc.2", path = "../relify-kernels" }
+relify-kmeans = { version = "0.1.0-rc.2", path = "../relify-kmeans" }
+relify-meta = { version = "0.1.0-rc.2", path = "../relify-meta" }
+relify-storage = { version = "0.1.0-rc.2", path = "../relify-storage" }
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

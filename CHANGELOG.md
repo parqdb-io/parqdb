@@ -7,6 +7,13 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0rc2] - 2026-08-04
+
+### Fixed
+
+- Embedded DataFusion DataFrame text and HTML representations now resolve the
+  bundled formatter from the Relify namespace in clean wheel installations.
+
 ## [0.1.0rc1] - 2026-08-04
 
 ### Added

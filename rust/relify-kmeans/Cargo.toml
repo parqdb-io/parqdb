@@ -16,6 +16,6 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-parallite = { version = "0.1.0-rc.1", path = "../parallite" }
-relify-kernels = { version = "0.1.0-rc.1", path = "../relify-kernels" }
+parallite = { version = "0.1.0-rc.2", path = "../parallite" }
+relify-kernels = { version = "0.1.0-rc.2", path = "../relify-kernels" }
 thiserror.workspace = true

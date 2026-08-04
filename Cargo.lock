@@ -3764,7 +3764,7 @@ dependencies = [
 
 [[package]]
 name = "parallite"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "rayon",
 ]
@@ -4493,7 +4493,7 @@ dependencies = [
 
 [[package]]
 name = "relify-catalog"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "relify-meta",
  "rusqlite",
@@ -4506,7 +4506,7 @@ dependencies = [
 
 [[package]]
 name = "relify-core"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "relify-catalog",
  "relify-meta",
@@ -4514,7 +4514,7 @@ dependencies = [
 
 [[package]]
 name = "relify-iceberg"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "datafusion",
  "iceberg",
@@ -4527,7 +4527,7 @@ dependencies = [
 
 [[package]]
 name = "relify-index"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "bytes",
  "relify-catalog",
@@ -4544,7 +4544,7 @@ dependencies = [
 
 [[package]]
 name = "relify-kernels"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "matrixmultiply",
  "thiserror",
@@ -4552,7 +4552,7 @@ dependencies = [
 
 [[package]]
 name = "relify-kmeans"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "parallite",
  "relify-kernels",
@@ -4561,7 +4561,7 @@ dependencies = [
 
 [[package]]
 name = "relify-local"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "arrow",
  "arrow-ipc",
@@ -4592,7 +4592,7 @@ dependencies = [
 
 [[package]]
 name = "relify-meta"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -4602,7 +4602,7 @@ dependencies = [
 
 [[package]]
 name = "relify-python"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "arrow",
  "datafusion-python",
@@ -4620,7 +4620,7 @@ dependencies = [
 
 [[package]]
 name = "relify-storage"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "bytes",
  "futures",
