@@ -1,6 +1,6 @@
 # Relify patch
 
-The vendored crate is unchanged except that its private `_internal` module initializer is exposed as `init_internal_module`. Relify uses that function to install the complete binding surface inside `relify._native`, ensuring that Python and Rust share one `SessionContext` implementation.
+The vendored crate exposes its private `_internal` module initializer as `init_internal_module` and redirects runtime imports from `datafusion.*` to `relify.datafusion.*`. Relify uses the initializer to install the complete binding surface inside `relify._native`, ensuring that Python and Rust share one `SessionContext` implementation.
 
 ## Upgrade
 
@@ -9,4 +9,4 @@ The vendored crate is unchanged except that its private `_internal` module initi
 3. Run `python tools/sync_datafusion.py <version> --check`.
 4. Review the generated diff and run the full project checks.
 
-The synchronizer verifies the upstream checksums and fails if its single Rust patch no longer applies exactly. Generated files must not be edited by hand. This vendor boundary can be removed when upstream DataFusion exposes a stable `SessionContext` FFI that supports the same one-context model.
+The synchronizer verifies the upstream checksums and fails if its Rust embedding patches no longer apply exactly. Generated files must not be edited by hand. This vendor boundary can be removed when upstream DataFusion exposes a stable `SessionContext` FFI that supports the same one-context model.

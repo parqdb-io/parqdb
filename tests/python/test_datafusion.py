@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import textwrap
+import types
 from pathlib import Path
 from typing import Any, cast
 
@@ -53,6 +54,14 @@ def test_session_is_its_native_context(tmp_path: Path) -> None:
     assert session.sql("SELECT SUM(value) AS total FROM values").to_pydict() == {
         "total": [3]
     }
+
+
+def test_embedded_dataframe_repr_uses_embedded_formatter(tmp_path: Path) -> None:
+    session = relify.connect(tmp_path / "relify-data")
+    result = session.sql("SELECT 1 AS value")
+
+    assert "value" in repr(result)
+    assert "<table" in result._repr_html_()
 
 
 def test_context_derivation_does_not_create_an_incomplete_relify_session(
@@ -119,6 +128,30 @@ def test_native_types_belong_to_relify_datafusion() -> None:
     assert type(context.ctx).__module__ == "relify.datafusion"
     assert datafusion.__version__ == "54.0.0"
     assert hasattr(datafusion.substrait, "Serde")
+
+
+def test_all_native_type_modules_are_embedded() -> None:
+    pending = [datafusion._internal]
+    visited: set[int] = set()
+    native_types: list[type[Any]] = []
+
+    while pending:
+        module = pending.pop()
+        if id(module) in visited:
+            continue
+        visited.add(id(module))
+        for value in vars(module).values():
+            if isinstance(value, type):
+                native_types.append(value)
+            elif isinstance(value, types.ModuleType):
+                pending.append(value)
+
+    assert native_types
+    assert all(
+        value.__module__ != "datafusion"
+        and not value.__module__.startswith("datafusion.")
+        for value in native_types
+    )
 
 
 def test_embedded_datafusion_does_not_replace_top_level_package(

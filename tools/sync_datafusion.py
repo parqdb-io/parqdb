@@ -49,6 +49,21 @@ fn _internal(py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
 
 #[cfg(feature = "substrait")]
 fn setup_substrait_module"""
+RUST_IMPORT_REWRITES = (
+    ('py.import("datafusion', 'py.import("relify.datafusion'),
+    ('py.import_bound("datafusion', 'py.import_bound("relify.datafusion'),
+    ('PyModule::import(py, "datafusion', 'PyModule::import(py, "relify.datafusion'),
+    (
+        'PyModule::import_bound(py, "datafusion',
+        'PyModule::import_bound(py, "relify.datafusion',
+    ),
+)
+RUST_IMPORT_DOC_REWRITES = (
+    (
+        "the datafusion.dataframe_formatter module",
+        "the relify.datafusion.dataframe_formatter module",
+    ),
+)
 
 VERSION_IMPORT = """try:
     import importlib.metadata as importlib_metadata
@@ -144,6 +159,31 @@ def patch_rust_initializer(crate_root: Path) -> None:
     lib_rs.write_text(source)
 
 
+def rewrite_rust_imports(crate_root: Path) -> None:
+    replacements = 0
+    for path in sorted(crate_root.rglob("*.rs")):
+        source = path.read_text()
+        for original, embedded in RUST_IMPORT_REWRITES:
+            replacements += source.count(original)
+            source = source.replace(original, embedded)
+        for original, embedded in RUST_IMPORT_DOC_REWRITES:
+            source = source.replace(original, embedded)
+        path.write_text(source)
+
+    if replacements == 0:
+        raise RuntimeError("DataFusion has no runtime module imports to relocate")
+
+    remaining = []
+    for path in sorted(crate_root.rglob("*.rs")):
+        for line_number, line in enumerate(path.read_text().splitlines(), 1):
+            if any(original in line for original, _ in RUST_IMPORT_REWRITES):
+                remaining.append(f"{path}:{line_number}: {line}")
+    if remaining:
+        raise RuntimeError(
+            "unconverted runtime DataFusion imports:\n" + "\n".join(remaining)
+        )
+
+
 def rewrite_python_imports(package_root: Path, version: str) -> None:
     import_patterns = (
         (
@@ -212,6 +252,7 @@ def synchronize(
         for generated_file in (".cargo-ok", ".cargo_vcs_info.json", "Cargo.lock"):
             (crate_root / generated_file).unlink(missing_ok=True)
         patch_rust_initializer(crate_root)
+        rewrite_rust_imports(crate_root)
 
         python_contents, python_url, python_digest = pypi_sdist(version)
         source_root = extract_archive(python_contents, temp / "python")
@@ -232,14 +273,15 @@ def synchronize(
             f'crate_sha256 = "{crate_digest}"\n'
             f'pypi_url = "{python_url}"\n'
             f'pypi_sha256 = "{python_digest}"\n'
-            'patch = "export init_internal_module for same-binary embedding"\n'
+            'patch = "export init_internal_module and relocate runtime imports"\n'
         )
         (vendor_dir / "UPSTREAM.toml").write_text(manifest)
         (vendor_dir / "RELIFY_PATCH.md").write_text(
             "# Relify patch\n\n"
-            "The vendored crate is unchanged except that its private `_internal` "
-            "module initializer is exposed as `init_internal_module`. Relify "
-            "uses that function to install the complete binding surface inside "
+            "The vendored crate exposes its private `_internal` module "
+            "initializer as `init_internal_module` and redirects runtime imports "
+            "from `datafusion.*` to `relify.datafusion.*`. Relify "
+            "uses the initializer to install the complete binding surface inside "
             "`relify._native`, ensuring that Python and Rust share one "
             "`SessionContext` implementation.\n\n"
             "## Upgrade\n\n"
@@ -248,7 +290,7 @@ def synchronize(
             "3. Run `python tools/sync_datafusion.py <version> --check`.\n"
             "4. Review the generated diff and run the full project checks.\n\n"
             "The synchronizer verifies the upstream checksums and fails if its "
-            "single Rust patch no longer applies exactly. Generated files must "
+            "Rust embedding patches no longer apply exactly. Generated files must "
             "not be edited by hand. This vendor boundary can be removed when "
             "upstream DataFusion exposes a stable `SessionContext` FFI that "
             "supports the same one-context model.\n"
