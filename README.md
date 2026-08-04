@@ -40,6 +40,9 @@ arm64. Install the embedded DataFusion and Parquet path:
 python -m pip install relify
 ```
 
+Spark and StarRocks are optional integrations with separate setup; see
+[Compute Engines](#compute-engines).
+
 From a new working directory, build an IVF-Flat index over the dataset included
 in the package and run a filtered vector query:
 
@@ -130,7 +133,7 @@ guides for installation and configuration.
 
 ## How It Works
 
-![Relify builds an open index beside the source table and queries both with the host compute engine](https://raw.githubusercontent.com/petrizhang/relify/04c9ddc1c90ebee5626e66d96a4caa7fc9c55c4e/assets/how-it-works.svg)
+![Relify builds an open index beside the source table and queries both with the host compute engine](https://raw.githubusercontent.com/petrizhang/relify/main/assets/how-it-works.svg)
 
 Source rows remain in their original Parquet or Iceberg table. Building an
 IVF-Flat index writes only portable metadata, centroids, and postings as open
