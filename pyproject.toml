@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "relify"
-version = "0.1.0rc1"
+version = "0.1.0rc2"
 description = "Lightweight vector index extension for the open lakehouse stack"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"

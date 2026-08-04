@@ -16,5 +16,5 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-relify-catalog = { version = "0.1.0-rc.1", path = "../relify-catalog", default-features = false }
-relify-meta = { version = "0.1.0-rc.1", path = "../relify-meta" }
+relify-catalog = { version = "0.1.0-rc.2", path = "../relify-catalog", default-features = false }
+relify-meta = { version = "0.1.0-rc.2", path = "../relify-meta" }

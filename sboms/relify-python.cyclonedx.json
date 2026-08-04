@@ -8220,7 +8220,7 @@
       "version": "0.7.3"
     },
     {
-      "bom-ref": "pkg:cargo/parallite@0.1.0-rc.1",
+      "bom-ref": "pkg:cargo/parallite@0.1.0-rc.2",
       "description": "Local parallel dataflow execution for Relify index construction",
       "externalReferences": [
         {
@@ -8234,10 +8234,10 @@
         }
       ],
       "name": "parallite",
-      "purl": "pkg:cargo/parallite@0.1.0-rc.1",
+      "purl": "pkg:cargo/parallite@0.1.0-rc.2",
       "scope": "required",
       "type": "library",
-      "version": "0.1.0-rc.1"
+      "version": "0.1.0-rc.2"
     },
     {
       "bom-ref": "pkg:cargo/parking@2.2.1",
@@ -10060,7 +10060,7 @@
       "version": "0.10.5"
     },
     {
-      "bom-ref": "pkg:cargo/relify-catalog@0.1.0-rc.1",
+      "bom-ref": "pkg:cargo/relify-catalog@0.1.0-rc.2",
       "description": "Relify catalog abstraction, identifiers, and SQLite implementation",
       "externalReferences": [
         {
@@ -10074,13 +10074,13 @@
         }
       ],
       "name": "relify-catalog",
-      "purl": "pkg:cargo/relify-catalog@0.1.0-rc.1",
+      "purl": "pkg:cargo/relify-catalog@0.1.0-rc.2",
       "scope": "required",
       "type": "library",
-      "version": "0.1.0-rc.1"
+      "version": "0.1.0-rc.2"
     },
     {
-      "bom-ref": "pkg:cargo/relify-core@0.1.0-rc.1",
+      "bom-ref": "pkg:cargo/relify-core@0.1.0-rc.2",
       "description": "Backend-neutral index and query models for Relify",
       "externalReferences": [
         {
@@ -10094,13 +10094,13 @@
         }
       ],
       "name": "relify-core",
-      "purl": "pkg:cargo/relify-core@0.1.0-rc.1",
+      "purl": "pkg:cargo/relify-core@0.1.0-rc.2",
       "scope": "required",
       "type": "library",
-      "version": "0.1.0-rc.1"
+      "version": "0.1.0-rc.2"
     },
     {
-      "bom-ref": "pkg:cargo/relify-iceberg@0.1.0-rc.1",
+      "bom-ref": "pkg:cargo/relify-iceberg@0.1.0-rc.2",
       "description": "Exact Apache Iceberg snapshot resolution for Relify",
       "externalReferences": [
         {
@@ -10114,13 +10114,13 @@
         }
       ],
       "name": "relify-iceberg",
-      "purl": "pkg:cargo/relify-iceberg@0.1.0-rc.1",
+      "purl": "pkg:cargo/relify-iceberg@0.1.0-rc.2",
       "scope": "required",
       "type": "library",
-      "version": "0.1.0-rc.1"
+      "version": "0.1.0-rc.2"
     },
     {
-      "bom-ref": "pkg:cargo/relify-index@0.1.0-rc.1",
+      "bom-ref": "pkg:cargo/relify-index@0.1.0-rc.2",
       "description": "Backend-neutral Relify index repository and publication",
       "externalReferences": [
         {
@@ -10134,13 +10134,13 @@
         }
       ],
       "name": "relify-index",
-      "purl": "pkg:cargo/relify-index@0.1.0-rc.1",
+      "purl": "pkg:cargo/relify-index@0.1.0-rc.2",
       "scope": "required",
       "type": "library",
-      "version": "0.1.0-rc.1"
+      "version": "0.1.0-rc.2"
     },
     {
-      "bom-ref": "pkg:cargo/relify-kernels@0.1.0-rc.1",
+      "bom-ref": "pkg:cargo/relify-kernels@0.1.0-rc.2",
       "description": "Shared numerical kernels for Relify construction and query execution",
       "externalReferences": [
         {
@@ -10154,13 +10154,13 @@
         }
       ],
       "name": "relify-kernels",
-      "purl": "pkg:cargo/relify-kernels@0.1.0-rc.1",
+      "purl": "pkg:cargo/relify-kernels@0.1.0-rc.2",
       "scope": "required",
       "type": "library",
-      "version": "0.1.0-rc.1"
+      "version": "0.1.0-rc.2"
     },
     {
-      "bom-ref": "pkg:cargo/relify-kmeans@0.1.0-rc.1",
+      "bom-ref": "pkg:cargo/relify-kmeans@0.1.0-rc.2",
       "description": "Parallel dense K-means training for Relify index construction",
       "externalReferences": [
         {
@@ -10174,13 +10174,13 @@
         }
       ],
       "name": "relify-kmeans",
-      "purl": "pkg:cargo/relify-kmeans@0.1.0-rc.1",
+      "purl": "pkg:cargo/relify-kmeans@0.1.0-rc.2",
       "scope": "required",
       "type": "library",
-      "version": "0.1.0-rc.1"
+      "version": "0.1.0-rc.2"
     },
     {
-      "bom-ref": "pkg:cargo/relify-local@0.1.0-rc.1",
+      "bom-ref": "pkg:cargo/relify-local@0.1.0-rc.2",
       "description": "Embedded DataFusion and Parquet implementation of Relify",
       "externalReferences": [
         {
@@ -10194,13 +10194,13 @@
         }
       ],
       "name": "relify-local",
-      "purl": "pkg:cargo/relify-local@0.1.0-rc.1",
+      "purl": "pkg:cargo/relify-local@0.1.0-rc.2",
       "scope": "required",
       "type": "library",
-      "version": "0.1.0-rc.1"
+      "version": "0.1.0-rc.2"
     },
     {
-      "bom-ref": "pkg:cargo/relify-meta@0.1.0-rc.1",
+      "bom-ref": "pkg:cargo/relify-meta@0.1.0-rc.2",
       "description": "Portable Relify index metadata types and validation",
       "externalReferences": [
         {
@@ -10214,26 +10214,26 @@
         }
       ],
       "name": "relify-meta",
-      "purl": "pkg:cargo/relify-meta@0.1.0-rc.1",
+      "purl": "pkg:cargo/relify-meta@0.1.0-rc.2",
       "scope": "required",
       "type": "library",
-      "version": "0.1.0-rc.1"
+      "version": "0.1.0-rc.2"
     },
     {
-      "bom-ref": "pkg:cargo/relify-python@0.1.0-rc.1",
+      "bom-ref": "pkg:cargo/relify-python@0.1.0-rc.2",
       "licenses": [
         {
           "expression": "MIT"
         }
       ],
       "name": "relify-python",
-      "purl": "pkg:cargo/relify-python@0.1.0-rc.1",
+      "purl": "pkg:cargo/relify-python@0.1.0-rc.2",
       "scope": "required",
       "type": "library",
-      "version": "0.1.0-rc.1"
+      "version": "0.1.0-rc.2"
     },
     {
-      "bom-ref": "pkg:cargo/relify-storage@0.1.0-rc.1",
+      "bom-ref": "pkg:cargo/relify-storage@0.1.0-rc.2",
       "description": "URI-based storage registry and warehouse layout for Relify",
       "externalReferences": [
         {
@@ -10247,10 +10247,10 @@
         }
       ],
       "name": "relify-storage",
-      "purl": "pkg:cargo/relify-storage@0.1.0-rc.1",
+      "purl": "pkg:cargo/relify-storage@0.1.0-rc.2",
       "scope": "required",
       "type": "library",
-      "version": "0.1.0-rc.1"
+      "version": "0.1.0-rc.2"
     },
     {
       "bom-ref": "pkg:cargo/reqsign-aws-v4@3.0.3",
@@ -15184,9 +15184,9 @@
   "dependencies": [
     {
       "dependsOn": [
-        "pkg:cargo/relify-python@0.1.0-rc.1"
+        "pkg:cargo/relify-python@0.1.0-rc.2"
       ],
-      "ref": "pkg:pypi/relify@0.1.0rc1"
+      "ref": "pkg:pypi/relify@0.1.0rc2"
     },
     {
       "dependsOn": [],
@@ -18085,7 +18085,7 @@
       "dependsOn": [
         "pkg:cargo/rayon@1.12.0"
       ],
-      "ref": "pkg:cargo/parallite@0.1.0-rc.1"
+      "ref": "pkg:cargo/parallite@0.1.0-rc.2"
     },
     {
       "dependsOn": [],
@@ -18616,7 +18616,7 @@
     },
     {
       "dependsOn": [
-        "pkg:cargo/relify-meta@0.1.0-rc.1",
+        "pkg:cargo/relify-meta@0.1.0-rc.2",
         "pkg:cargo/rusqlite@0.38.0",
         "pkg:cargo/serde_json@1.0.151",
         "pkg:cargo/tempfile@3.27.0",
@@ -18624,14 +18624,14 @@
         "pkg:cargo/url@2.5.8",
         "pkg:cargo/uuid@1.24.0"
       ],
-      "ref": "pkg:cargo/relify-catalog@0.1.0-rc.1"
+      "ref": "pkg:cargo/relify-catalog@0.1.0-rc.2"
     },
     {
       "dependsOn": [
-        "pkg:cargo/relify-catalog@0.1.0-rc.1",
-        "pkg:cargo/relify-meta@0.1.0-rc.1"
+        "pkg:cargo/relify-catalog@0.1.0-rc.2",
+        "pkg:cargo/relify-meta@0.1.0-rc.2"
       ],
-      "ref": "pkg:cargo/relify-core@0.1.0-rc.1"
+      "ref": "pkg:cargo/relify-core@0.1.0-rc.2"
     },
     {
       "dependsOn": [
@@ -18639,19 +18639,19 @@
         "pkg:cargo/iceberg-datafusion@0.10.0",
         "pkg:cargo/iceberg-storage-opendal@0.10.0",
         "pkg:cargo/iceberg@0.10.0",
-        "pkg:cargo/relify-meta@0.1.0-rc.1",
+        "pkg:cargo/relify-meta@0.1.0-rc.2",
         "pkg:cargo/thiserror@2.0.19",
         "pkg:cargo/uuid@1.24.0"
       ],
-      "ref": "pkg:cargo/relify-iceberg@0.1.0-rc.1"
+      "ref": "pkg:cargo/relify-iceberg@0.1.0-rc.2"
     },
     {
       "dependsOn": [
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/relify-catalog@0.1.0-rc.1",
-        "pkg:cargo/relify-core@0.1.0-rc.1",
-        "pkg:cargo/relify-meta@0.1.0-rc.1",
-        "pkg:cargo/relify-storage@0.1.0-rc.1",
+        "pkg:cargo/relify-catalog@0.1.0-rc.2",
+        "pkg:cargo/relify-core@0.1.0-rc.2",
+        "pkg:cargo/relify-meta@0.1.0-rc.2",
+        "pkg:cargo/relify-storage@0.1.0-rc.2",
         "pkg:cargo/serde_json@1.0.151",
         "pkg:cargo/tempfile@3.27.0",
         "pkg:cargo/thiserror@2.0.19",
@@ -18659,22 +18659,22 @@
         "pkg:cargo/url@2.5.8",
         "pkg:cargo/uuid@1.24.0"
       ],
-      "ref": "pkg:cargo/relify-index@0.1.0-rc.1"
+      "ref": "pkg:cargo/relify-index@0.1.0-rc.2"
     },
     {
       "dependsOn": [
         "pkg:cargo/matrixmultiply@0.3.11",
         "pkg:cargo/thiserror@2.0.19"
       ],
-      "ref": "pkg:cargo/relify-kernels@0.1.0-rc.1"
+      "ref": "pkg:cargo/relify-kernels@0.1.0-rc.2"
     },
     {
       "dependsOn": [
-        "pkg:cargo/parallite@0.1.0-rc.1",
-        "pkg:cargo/relify-kernels@0.1.0-rc.1",
+        "pkg:cargo/parallite@0.1.0-rc.2",
+        "pkg:cargo/relify-kernels@0.1.0-rc.2",
         "pkg:cargo/thiserror@2.0.19"
       ],
-      "ref": "pkg:cargo/relify-kmeans@0.1.0-rc.1"
+      "ref": "pkg:cargo/relify-kmeans@0.1.0-rc.2"
     },
     {
       "dependsOn": [
@@ -18686,16 +18686,16 @@
         "pkg:cargo/datafusion@54.0.0",
         "pkg:cargo/futures@0.3.33",
         "pkg:cargo/object_store@0.13.2",
-        "pkg:cargo/parallite@0.1.0-rc.1",
+        "pkg:cargo/parallite@0.1.0-rc.2",
         "pkg:cargo/parquet@58.4.0",
-        "pkg:cargo/relify-catalog@0.1.0-rc.1",
-        "pkg:cargo/relify-core@0.1.0-rc.1",
-        "pkg:cargo/relify-iceberg@0.1.0-rc.1",
-        "pkg:cargo/relify-index@0.1.0-rc.1",
-        "pkg:cargo/relify-kernels@0.1.0-rc.1",
-        "pkg:cargo/relify-kmeans@0.1.0-rc.1",
-        "pkg:cargo/relify-meta@0.1.0-rc.1",
-        "pkg:cargo/relify-storage@0.1.0-rc.1",
+        "pkg:cargo/relify-catalog@0.1.0-rc.2",
+        "pkg:cargo/relify-core@0.1.0-rc.2",
+        "pkg:cargo/relify-iceberg@0.1.0-rc.2",
+        "pkg:cargo/relify-index@0.1.0-rc.2",
+        "pkg:cargo/relify-kernels@0.1.0-rc.2",
+        "pkg:cargo/relify-kmeans@0.1.0-rc.2",
+        "pkg:cargo/relify-meta@0.1.0-rc.2",
+        "pkg:cargo/relify-storage@0.1.0-rc.2",
         "pkg:cargo/rusqlite@0.38.0",
         "pkg:cargo/serde_json@1.0.151",
         "pkg:cargo/tempfile@3.27.0",
@@ -18704,7 +18704,7 @@
         "pkg:cargo/url@2.5.8",
         "pkg:cargo/uuid@1.24.0"
       ],
-      "ref": "pkg:cargo/relify-local@0.1.0-rc.1"
+      "ref": "pkg:cargo/relify-local@0.1.0-rc.2"
     },
     {
       "dependsOn": [
@@ -18713,24 +18713,24 @@
         "pkg:cargo/url@2.5.8",
         "pkg:cargo/uuid@1.24.0"
       ],
-      "ref": "pkg:cargo/relify-meta@0.1.0-rc.1"
+      "ref": "pkg:cargo/relify-meta@0.1.0-rc.2"
     },
     {
       "dependsOn": [
         "pkg:cargo/arrow@58.4.0",
         "pkg:cargo/datafusion-python@54.0.0",
         "pkg:cargo/pyo3@0.28.3",
-        "pkg:cargo/relify-catalog@0.1.0-rc.1",
-        "pkg:cargo/relify-core@0.1.0-rc.1",
-        "pkg:cargo/relify-index@0.1.0-rc.1",
-        "pkg:cargo/relify-local@0.1.0-rc.1",
-        "pkg:cargo/relify-meta@0.1.0-rc.1",
-        "pkg:cargo/relify-storage@0.1.0-rc.1",
+        "pkg:cargo/relify-catalog@0.1.0-rc.2",
+        "pkg:cargo/relify-core@0.1.0-rc.2",
+        "pkg:cargo/relify-index@0.1.0-rc.2",
+        "pkg:cargo/relify-local@0.1.0-rc.2",
+        "pkg:cargo/relify-meta@0.1.0-rc.2",
+        "pkg:cargo/relify-storage@0.1.0-rc.2",
         "pkg:cargo/serde_json@1.0.151",
         "pkg:cargo/tokio@1.53.1",
         "pkg:cargo/uuid@1.24.0"
       ],
-      "ref": "pkg:cargo/relify-python@0.1.0-rc.1"
+      "ref": "pkg:cargo/relify-python@0.1.0-rc.2"
     },
     {
       "dependsOn": [
@@ -18743,7 +18743,7 @@
         "pkg:cargo/tokio@1.53.1",
         "pkg:cargo/url@2.5.8"
       ],
-      "ref": "pkg:cargo/relify-storage@0.1.0-rc.1"
+      "ref": "pkg:cargo/relify-storage@0.1.0-rc.2"
     },
     {
       "dependsOn": [
@@ -20165,21 +20165,21 @@
   ],
   "metadata": {
     "component": {
-      "bom-ref": "pkg:pypi/relify@0.1.0rc1",
+      "bom-ref": "pkg:pypi/relify@0.1.0rc2",
       "licenses": [
         {
           "expression": "MIT AND Apache-2.0"
         }
       ],
       "name": "relify",
-      "purl": "pkg:pypi/relify@0.1.0rc1",
+      "purl": "pkg:pypi/relify@0.1.0rc2",
       "type": "library",
-      "version": "0.1.0rc1"
+      "version": "0.1.0rc2"
     },
     "properties": [
       {
         "name": "relify:cargo-lock-sha256",
-        "value": "46114809b1e96abb8a8c95f07658ab1ffff9bc23be46433b70e65089adf3bae8"
+        "value": "c974d1d28f5497043e632a690437f0ff04d04cd3352725bbb598122b983d653c"
       }
     ]
   },
