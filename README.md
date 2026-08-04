@@ -7,6 +7,7 @@
     <a href="https://pypi.org/project/relify/"><img alt="PyPI" src="https://img.shields.io/pypi/v/relify.svg"></a>
     <a href="https://github.com/petrizhang/relify/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/petrizhang/relify/actions/workflows/ci.yml/badge.svg?branch=main"></a>
     <a href="https://github.com/petrizhang/relify/blob/main/pyproject.toml"><img alt="Python 3.11-3.14" src="https://img.shields.io/badge/python-3.11--3.14-blue.svg"></a>
+    <a href="https://github.com/petrizhang/relify/blob/main/Cargo.toml"><img alt="Rust 1.96" src="https://img.shields.io/badge/rust-1.96-orange.svg"></a>
     <a href="https://github.com/petrizhang/relify/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT%20AND%20Apache--2.0-green.svg"></a>
   </p>
   <p>
@@ -73,13 +74,22 @@ query lazy, register it as a DataFusion view, and continue with SQL in the same
 execution context:
 
 ```python
+session.register_parquet(
+    "document_stats",
+    relify.datasets.uri("document_stats"),
+)
 session.register_view("vector_hits", session.to_dataframe(query))
 
 summary = session.sql("""
-    SELECT category, COUNT(*) AS matches, MIN(_distance) AS nearest
-    FROM vector_hits
-    GROUP BY category
-    ORDER BY category
+    SELECT
+        h.category,
+        COUNT(*) AS matches,
+        AVG(h._distance) AS avg_distance,
+        MAX(s.popularity) AS max_popularity
+    FROM vector_hits AS h
+    JOIN document_stats AS s USING (document_id)
+    GROUP BY h.category
+    ORDER BY h.category
 """)
 print(summary.to_pydict())
 ```
@@ -120,16 +130,18 @@ guides for installation and configuration.
 
 ## How It Works
 
-1. Source vectors remain in their original Parquet or Iceberg table.
-2. A builder materializes IVF centroids and postings as open relational data and
-   publishes an immutable metadata snapshot.
-3. A backend binds that snapshot to its compute engine and compiles the portable
-   vector query into a native lazy plan.
-4. The engine executes index pruning, filtering, distance computation, top-k,
-   and subsequent analytical operators in one runtime.
+![Relify builds an open index beside the source table and queries both with the host compute engine](https://raw.githubusercontent.com/petrizhang/relify/main/assets/how-it-works.svg)
 
-Relify currently implements IVF-Flat. The
-[open index specification](https://github.com/petrizhang/relify/blob/main/spec/README.md)
+Source rows remain in their original Parquet or Iceberg table. Building an
+IVF-Flat index writes only portable metadata, centroids, and postings as open
+table data.
+
+At query time, an engine-specific adapter binds the source and index to
+DataFusion, StarRocks, or Spark. The engine performs candidate pruning, source
+filtering, distance calculation, top-k, and subsequent analytical SQL in its
+own runtime.
+
+The [open index specification](https://github.com/petrizhang/relify/blob/main/spec/README.md)
 defines the shared schema and query semantics; the
 [architecture guide](https://github.com/petrizhang/relify/blob/main/docs/architecture.md)
 describes the implementation boundaries.
