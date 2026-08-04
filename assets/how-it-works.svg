@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 580" role="img" aria-labelledby="title desc">
+  <title id="title">How Relify works</title>
+  <desc id="desc">Relify builds one open IVF index beside a lakehouse source table, then engine-specific backends bind both to DataFusion, StarRocks, or Spark for native vector and analytical queries.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1200" y2="580" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0B1220"/>
+      <stop offset="0.55" stop-color="#0D1726"/>
+      <stop offset="1" stop-color="#111426"/>
+    </linearGradient>
+    <linearGradient id="flow" x1="68" y1="0" x2="1132" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2DD4BF"/>
+      <stop offset="0.5" stop-color="#38BDF8"/>
+      <stop offset="1" stop-color="#A78BFA"/>
+    </linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#94A3B8" stroke-width="1" opacity="0.06"/>
+    </pattern>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10Z" fill="#67E8F9"/>
+    </marker>
+    <filter id="shadow" x="-10%" y="-20%" width="120%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#020617" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="580" rx="8" fill="url(#background)"/>
+  <rect width="1200" height="580" rx="8" fill="url(#grid)"/>
+
+  <g font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" letter-spacing="0">
+    <g filter="url(#shadow)">
+      <rect x="68" y="72" width="380" height="176" rx="6" fill="#111C2C" stroke="#2DD4BF" stroke-opacity="0.45"/>
+      <rect x="68" y="72" width="380" height="3" fill="#2DD4BF"/>
+      <text x="96" y="106" font-size="16" font-weight="750" fill="#F8FAFC">SOURCE TABLE</text>
+      <text x="420" y="106" text-anchor="end" font-size="13" font-weight="650" fill="#5EEAD4">PARQUET / ICEBERG</text>
+      <path d="M96 124H420" stroke="#64748B" stroke-opacity="0.35"/>
+      <g font-size="12" font-weight="650" fill="#94A3B8">
+        <text x="96" y="151">KEY</text>
+        <text x="184" y="151">VECTOR</text>
+        <text x="306" y="151">METADATA</text>
+      </g>
+      <g font-size="14" fill="#E2E8F0">
+        <text x="96" y="181">42</text>
+        <text x="184" y="181">[0.2, 0.0, ...]</text>
+        <text x="306" y="181">published</text>
+      </g>
+      <path d="M96 198H420" stroke="#64748B" stroke-opacity="0.24"/>
+      <text x="96" y="225" font-size="13" fill="#94A3B8">Original rows remain authoritative</text>
+
+      <rect x="752" y="72" width="380" height="176" rx="6" fill="#111C2C" stroke="#60A5FA" stroke-opacity="0.5"/>
+      <rect x="752" y="72" width="380" height="3" fill="#60A5FA"/>
+      <text x="780" y="106" font-size="16" font-weight="750" fill="#F8FAFC">OPEN IVF INDEX</text>
+      <text x="1104" y="106" text-anchor="end" font-size="13" font-weight="650" fill="#93C5FD">PARQUET / ICEBERG</text>
+      <path d="M780 124H1104" stroke="#64748B" stroke-opacity="0.35"/>
+      <g font-size="12" font-weight="650" fill="#94A3B8">
+        <text x="780" y="151">METADATA</text>
+        <text x="894" y="151">CENTROIDS</text>
+        <text x="1010" y="151">POSTINGS</text>
+      </g>
+      <g font-size="14" fill="#E2E8F0">
+        <text x="780" y="181">snapshot</text>
+        <text x="894" y="181">cid, center</text>
+        <text x="1010" y="181">cid, key</text>
+      </g>
+      <path d="M780 198H1104" stroke="#64748B" stroke-opacity="0.24"/>
+      <text x="780" y="225" font-size="13" fill="#94A3B8">Portable, inspectable index data</text>
+    </g>
+
+    <path d="M466 160H734" fill="none" stroke="url(#flow)" stroke-width="2.5" stroke-linecap="round" marker-end="url(#arrow)"/>
+    <text x="600" y="136" text-anchor="middle" font-size="13" font-weight="750" fill="#BAE6FD">RELIFY BUILDS</text>
+
+    <g fill="none" stroke="#67E8F9" stroke-width="2" stroke-linecap="round" opacity="0.72" marker-end="url(#arrow)">
+      <path d="M258 248C258 279 318 288 364 300"/>
+      <path d="M942 248C942 279 882 288 836 300"/>
+    </g>
+
+    <g filter="url(#shadow)">
+      <rect x="242" y="300" width="716" height="78" rx="6" fill="#132536" stroke="url(#flow)" stroke-width="1.5"/>
+      <text x="600" y="332" text-anchor="middle" font-size="17" font-weight="800" fill="#F8FAFC">RELIFY ENGINE ADAPTERS</text>
+      <text x="600" y="357" text-anchor="middle" font-size="14" fill="#BAE6FD">Bind the same source and index to each engine's native query plan</text>
+    </g>
+
+    <g fill="none" stroke="url(#flow)" stroke-width="2" stroke-linecap="round">
+      <path d="M600 378V412"/>
+      <path d="M233 412H967"/>
+      <path d="M233 412V432" marker-end="url(#arrow)"/>
+      <path d="M600 412V432" marker-end="url(#arrow)"/>
+      <path d="M967 412V432" marker-end="url(#arrow)"/>
+    </g>
+
+    <g filter="url(#shadow)">
+      <rect x="68" y="438" width="330" height="76" rx="6" fill="#111C2C" stroke="#38BDF8" stroke-opacity="0.5"/>
+      <rect x="68" y="438" width="3" height="76" fill="#38BDF8"/>
+      <text x="233" y="469" text-anchor="middle" font-size="17" font-weight="800" fill="#F8FAFC">DataFusion</text>
+      <text x="233" y="494" text-anchor="middle" font-size="13" font-weight="650" fill="#7DD3FC">EMBEDDED</text>
+
+      <rect x="435" y="438" width="330" height="76" rx="6" fill="#111C2C" stroke="#A78BFA" stroke-opacity="0.5"/>
+      <rect x="435" y="438" width="3" height="76" fill="#A78BFA"/>
+      <text x="600" y="469" text-anchor="middle" font-size="17" font-weight="800" fill="#F8FAFC">StarRocks</text>
+      <text x="600" y="494" text-anchor="middle" font-size="13" font-weight="650" fill="#C4B5FD">OLAP</text>
+
+      <rect x="802" y="438" width="330" height="76" rx="6" fill="#111C2C" stroke="#F59E0B" stroke-opacity="0.5"/>
+      <rect x="802" y="438" width="3" height="76" fill="#F59E0B"/>
+      <text x="967" y="469" text-anchor="middle" font-size="17" font-weight="800" fill="#F8FAFC">Spark</text>
+      <text x="967" y="494" text-anchor="middle" font-size="13" font-weight="650" fill="#FCD34D">BATCH</text>
+    </g>
+
+    <text x="600" y="552" text-anchor="middle" font-size="13" font-weight="750" fill="#CBD5E1">VECTOR SEARCH AND ANALYTICAL QUERIES STAY IN THE COMPUTE ENGINE</text>
+  </g>
+</svg>
