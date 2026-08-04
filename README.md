@@ -22,8 +22,8 @@
 
 Relify is an open-source Python and Rust library for indexing and searching
 lakehouse data with the compute engines you already use. It stores vector
-indexes as open Parquet or Iceberg tables, allowing embedded, OLAP, and batch
-engines to query them directly with SQL while source data stays where it is.
+indexes as open Parquet or Iceberg tables, allowing DataFusion, StarRocks, and
+Spark to query them directly with SQL while source data stays where it is.
 
 Relify targets analytical and offline vector workloads such as large-k
 retrieval, similarity joins, and vector search composed with analytical
