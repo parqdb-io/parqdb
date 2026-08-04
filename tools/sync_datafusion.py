@@ -49,19 +49,16 @@ fn _internal(py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
 
 #[cfg(feature = "substrait")]
 fn setup_substrait_module"""
-RUST_IMPORT_REWRITES = (
-    ('py.import("datafusion', 'py.import("relify.datafusion'),
-    ('py.import_bound("datafusion', 'py.import_bound("relify.datafusion'),
-    ('PyModule::import(py, "datafusion', 'PyModule::import(py, "relify.datafusion'),
-    (
-        'PyModule::import_bound(py, "datafusion',
-        'PyModule::import_bound(py, "relify.datafusion',
-    ),
+RUST_DATAFUSION_IMPORT = re.compile(
+    r'(?P<prefix>\b(?:py\.import(?:_bound)?\(\s*"|'
+    r'PyModule::import(?:_bound)?\(\s*py\s*,\s*"))'
+    r'datafusion(?=[".])'
 )
 RUST_IMPORT_DOC_REWRITES = (
     (
-        "the datafusion.dataframe_formatter module",
-        "the relify.datafusion.dataframe_formatter module",
+        "/// Get the Python formatter from the datafusion.dataframe_formatter module",
+        "/// Get the Python formatter from the "
+        "relify.datafusion.dataframe_formatter module",
     ),
 )
 
@@ -161,23 +158,29 @@ def patch_rust_initializer(crate_root: Path) -> None:
 
 def rewrite_rust_imports(crate_root: Path) -> None:
     replacements = 0
+    remaining = []
     for path in sorted(crate_root.rglob("*.rs")):
         source = path.read_text()
-        for original, embedded in RUST_IMPORT_REWRITES:
-            replacements += source.count(original)
-            source = source.replace(original, embedded)
+        original_source = source
+        source, count = RUST_DATAFUSION_IMPORT.subn(
+            r"\g<prefix>relify.datafusion",
+            source,
+        )
+        replacements += count
         for original, embedded in RUST_IMPORT_DOC_REWRITES:
             source = source.replace(original, embedded)
-        path.write_text(source)
+
+        for match in RUST_DATAFUSION_IMPORT.finditer(source):
+            line_number = source.count("\n", 0, match.start()) + 1
+            line = source.splitlines()[line_number - 1]
+            remaining.append(f"{path}:{line_number}: {line}")
+
+        if source != original_source:
+            path.write_text(source)
 
     if replacements == 0:
         raise RuntimeError("DataFusion has no runtime module imports to relocate")
 
-    remaining = []
-    for path in sorted(crate_root.rglob("*.rs")):
-        for line_number, line in enumerate(path.read_text().splitlines(), 1):
-            if any(original in line for original, _ in RUST_IMPORT_REWRITES):
-                remaining.append(f"{path}:{line_number}: {line}")
     if remaining:
         raise RuntimeError(
             "unconverted runtime DataFusion imports:\n" + "\n".join(remaining)
