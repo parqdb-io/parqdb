@@ -22,6 +22,33 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Classify changes
+        id: scope
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          base="$BASE_SHA"
+          if [[ -z "$base" || "$base" =~ ^0+$ ]]; then
+            base="$(git rev-parse HEAD^)"
+          fi
+
+          docs_only=true
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              *.md|assets/*|.github/workflows/ci.yml) ;;
+              *)
+                docs_only=false
+                break
+                ;;
+            esac
+          done < <(git diff --name-only -z "$base" "$GITHUB_SHA")
+
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
 
       - name: Install uv and Python
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
@@ -31,21 +58,40 @@ jobs:
           python-version: "3.12"
 
       - name: Install Rust
+        if: steps.scope.outputs.docs_only != 'true'
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: "1.96.0"
           components: rustfmt, clippy
 
       - name: Cache Rust build
+        if: steps.scope.outputs.docs_only != 'true'
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           shared-key: ci
 
       - name: Sync environment
+        if: steps.scope.outputs.docs_only != 'true'
         run: make sync
 
       - name: Build native extension
+        if: steps.scope.outputs.docs_only != 'true'
         run: make develop
 
       - name: Run quality gates
+        if: steps.scope.outputs.docs_only != 'true'
         run: make check
+
+      - name: Run documentation checks
+        if: steps.scope.outputs.docs_only == 'true'
+        shell: bash
+        run: |
+          uv run --no-project --with markdown-it-py python tools/check_docs.py
+          git diff --check "${{ steps.scope.outputs.base }}" "$GITHUB_SHA"
+          python - <<'PY'
+          from pathlib import Path
+          from xml.etree import ElementTree
+
+          for path in Path("assets").glob("*.svg"):
+              ElementTree.parse(path)
+          PY
