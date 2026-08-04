@@ -177,7 +177,7 @@ for complete measurements.
 
 ## TEngineDB-V
 
-Relify began as an open-source research prototype inspired by TEngineDB-V. The
+Relify began as the open-source research prototype behind TEngineDB-V. The
 project now develops those ideas into a general-purpose vector extension for
 the open lakehouse stack.
 
