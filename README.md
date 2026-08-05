@@ -180,9 +180,25 @@ for complete measurements.
 
 ## TEngineDB-V
 
-Relify began as the open-source research prototype behind TEngineDB-V. The
-project now develops those ideas into a general-purpose vector extension for
-the open lakehouse stack.
+Relify began as the open-source research prototype behind
+[TEngineDB-V: An OLAP-Native Vector Search System for Large-k Workloads at
+Tencent](https://arxiv.org/abs/2608.00650), accepted to the Industry Track at
+VLDB 2026. The project now develops those ideas into a general-purpose vector
+extension for the open lakehouse stack.
+
+If you use Relify in your research, please cite:
+
+```bibtex
+@misc{wu2026tenginedbvolapnativevectorsearch,
+  title         = {{TEngineDB-V}: An {OLAP}-Native Vector Search System for Large-$k$ Workloads at Tencent},
+  author        = {Xufei Wu and Pengcheng Zhang and Yitong Song and Xiaobo Zhang and Anqi Liang and Kai Wang and Jijun Du and Yidi Xiong and Guangxu Cheng and Zhe Chen and Peng Chen and Guoliang Li and Xuanhe Zhou and Fan Wu},
+  year          = {2026},
+  eprint        = {2608.00650},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.DB},
+  url           = {https://arxiv.org/abs/2608.00650},
+}
+```
 
 ## Development
 
