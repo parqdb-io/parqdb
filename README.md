@@ -202,6 +202,21 @@ If you use Relify in your research, please cite:
 
 ## Development
 
+Relify's next phase is being designed in public. We welcome concrete use cases,
+benchmark results, design feedback, and implementation help:
+
+- [Narrow the product around an embedded vector lakehouse](https://github.com/petrizhang/relify/issues/9)
+- [Improve storage-backed Parquet search](https://github.com/petrizhang/relify/issues/8)
+  and [measure the online serving envelope](https://github.com/petrizhang/relify/issues/11)
+- [Add an extensible index-family framework](https://github.com/petrizhang/relify/issues/10)
+- [Design compute-storage separation](https://github.com/petrizhang/relify/issues/13)
+  and [build a complete DuckLake workflow](https://github.com/petrizhang/relify/issues/12)
+
+If you are working on RAG, agent trajectory storage, Parquet performance, or
+embedded lakehouse systems, share your workload and requirements in the
+relevant issue. Comment before starting a large change so that scope and
+interfaces can be agreed on first.
+
 Relify uses uv, Maturin, Cargo, and a small Makefile orchestration layer:
 
 ```bash
