@@ -44,6 +44,7 @@ configuration.
 
 - [Architecture](architecture.md)
 - [Roadmap](roadmap.md)
+- [Full-text search design exploration](design/full-text-search.md)
 - [Architecture decisions](decisions/)
 - [Contributing](../CONTRIBUTING.md)
 - [Changelog](../CHANGELOG.md)
