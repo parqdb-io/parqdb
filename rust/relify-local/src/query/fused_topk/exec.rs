@@ -34,13 +34,85 @@ use futures::StreamExt;
 
 use super::DISTANCE_COLUMN;
 use super::selector::{CandidateSelector, compute_batch_distances, retained_input_columns};
-use relify_kernels::detect;
+use relify_kernels::{LvqBits, detect};
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum VectorKind {
     List,
     LargeList,
     FixedSizeList,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum DistanceInput {
+    Dense {
+        vector_index: usize,
+        vector_kind: VectorKind,
+    },
+    Lvq {
+        bits: LvqBits,
+        code_index: usize,
+        offset_index: usize,
+        scale_index: usize,
+    },
+}
+
+impl DistanceInput {
+    pub(super) fn dense(schema: &SchemaRef, vector_index: usize, dimension: usize) -> Option<Self> {
+        Some(Self::Dense {
+            vector_index,
+            vector_kind: VectorKind::from_schema(schema, vector_index, dimension)?,
+        })
+    }
+
+    pub(super) fn lvq(
+        schema: &SchemaRef,
+        bits: LvqBits,
+        code_index: usize,
+        offset_index: usize,
+        scale_index: usize,
+        dimension: usize,
+    ) -> Option<Self> {
+        let code_size = i32::try_from(bits.code_size(dimension)).ok()?;
+        let code = schema.fields().get(code_index)?;
+        let offset = schema.fields().get(offset_index)?;
+        let scale = schema.fields().get(scale_index)?;
+        if code.is_nullable()
+            || code.data_type() != &DataType::FixedSizeBinary(code_size)
+            || offset.is_nullable()
+            || offset.data_type() != &DataType::Float32
+            || scale.is_nullable()
+            || scale.data_type() != &DataType::Float32
+        {
+            return None;
+        }
+        Some(Self::Lvq {
+            bits,
+            code_index,
+            offset_index,
+            scale_index,
+        })
+    }
+
+    fn display(self) -> String {
+        match self {
+            Self::Dense { vector_index, .. } => format!("vector_col={vector_index}"),
+            Self::Lvq {
+                bits,
+                code_index,
+                offset_index,
+                scale_index,
+            } => {
+                let encoding = match bits {
+                    LvqBits::Four => "lvq4",
+                    LvqBits::Eight => "lvq8",
+                };
+                format!(
+                    "encoding={encoding}, code_col={code_index}, offset_col={offset_index}, scale_col={scale_index}"
+                )
+            }
+        }
+    }
 }
 
 impl VectorKind {
@@ -167,8 +239,7 @@ pub(super) struct IvfTopKExec {
     projection: Vec<ProjectionExpr>,
     schema: SchemaRef,
     distance_index: usize,
-    vector_index: usize,
-    vector_kind: VectorKind,
+    distance_input: DistanceInput,
     query: Arc<[f32]>,
     fetch: usize,
     requires_single_partition: bool,
@@ -184,8 +255,7 @@ impl IvfTopKExec {
         projection: Vec<ProjectionExpr>,
         schema: SchemaRef,
         distance_index: usize,
-        vector_index: usize,
-        vector_kind: VectorKind,
+        distance_input: DistanceInput,
         query: Vec<f32>,
         fetch: usize,
         requires_single_partition: bool,
@@ -211,8 +281,7 @@ impl IvfTopKExec {
             projection,
             schema,
             distance_index,
-            vector_index,
-            vector_kind,
+            distance_input,
             query: query.into(),
             fetch,
             requires_single_partition,
@@ -232,8 +301,7 @@ impl IvfTopKExec {
             self.projection.clone(),
             Arc::clone(&self.schema),
             self.distance_index,
-            self.vector_index,
-            self.vector_kind,
+            self.distance_input,
             self.query.to_vec(),
             self.fetch,
             self.requires_single_partition,
@@ -254,9 +322,9 @@ impl DisplayAs for IvfTopKExec {
         match format {
             DisplayFormatType::Default | DisplayFormatType::Verbose => write!(
                 formatter,
-                "IvfTopKExec: fetch={}, vector_col={}, dimension={}, dynamic_filter=[{}]",
+                "IvfTopKExec: fetch={}, {}, dimension={}, dynamic_filter=[{}]",
                 self.fetch,
-                self.vector_index,
+                self.distance_input.display(),
                 self.query.len(),
                 self.dynamic_threshold.expression
             ),
@@ -312,8 +380,7 @@ impl ExecutionPlan for IvfTopKExec {
             self.projection.clone(),
             Arc::clone(&self.schema),
             self.distance_index,
-            self.vector_index,
-            self.vector_kind,
+            self.distance_input,
             self.query.to_vec(),
             self.fetch,
             self.requires_single_partition,
@@ -332,8 +399,7 @@ impl ExecutionPlan for IvfTopKExec {
         let projection = self.projection.clone();
         let retained_input_columns = retained_input_columns(&projection, self.distance_index);
         let distance_index = self.distance_index;
-        let vector_index = self.vector_index;
-        let vector_kind = self.vector_kind;
+        let distance_input = self.distance_input;
         let query = Arc::clone(&self.query);
         let fetch = self.fetch;
         let kernel = *detect();
@@ -377,14 +443,7 @@ impl ExecutionPlan for IvfTopKExec {
                 let dynamic_limit = threshold.load();
                 let timer = baseline.elapsed_compute().timer();
                 let distance_timer = distance_compute.timer();
-                compute_batch_distances(
-                    &mut distances,
-                    &batch,
-                    vector_index,
-                    vector_kind,
-                    &query,
-                    kernel,
-                );
+                compute_batch_distances(&mut distances, &batch, distance_input, &query, kernel)?;
                 distance_timer.done();
                 distance_evaluations.add(distances.len());
                 let selection_timer = selection_compute.timer();
@@ -444,8 +503,7 @@ impl ExecutionPlan for IvfTopKExec {
                 self.projection.clone(),
                 Arc::clone(&self.schema),
                 self.distance_index,
-                self.vector_index,
-                self.vector_kind,
+                self.distance_input,
                 self.query.to_vec(),
                 limit,
                 self.requires_single_partition,

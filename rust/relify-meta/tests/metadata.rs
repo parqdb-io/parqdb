@@ -1,8 +1,9 @@
 //! Integration tests for Relify metadata validation.
 
+use relify_meta::{
+    IndexMetadata, IndexSnapshot, PostingEncoding, RelationReference, SnapshotLogEntry,
+};
 use std::collections::BTreeMap;
-
-use relify_meta::{IndexMetadata, IndexSnapshot, RelationReference, SnapshotLogEntry};
 use uuid::Uuid;
 
 fn parquet(uri: &str) -> RelationReference {
@@ -101,6 +102,40 @@ fn accepts_both_vector_storage_modes() {
             value == "true"
         );
     }
+}
+
+#[test]
+fn accepts_ivf_v2_posting_encodings() {
+    for encoding in ["source", "flat", "lvq4", "lvq8"] {
+        let mut metadata = valid_metadata();
+        metadata.snapshots[0].index_schema_version = 2;
+        metadata.snapshots[0].parameters.remove("store_vectors");
+        metadata.snapshots[0]
+            .parameters
+            .insert("posting_encoding".into(), encoding.into());
+
+        metadata.validate().unwrap();
+        assert_eq!(
+            PostingEncoding::from_snapshot(&metadata.snapshots[0])
+                .unwrap()
+                .as_str(),
+            encoding
+        );
+    }
+}
+
+#[test]
+fn rejects_parameters_from_another_ivf_schema_version() {
+    let mut metadata = valid_metadata();
+    metadata.snapshots[0].index_schema_version = 2;
+
+    assert!(metadata.validate().is_err());
+
+    metadata.snapshots[0].parameters.remove("store_vectors");
+    metadata.snapshots[0]
+        .parameters
+        .insert("posting_encoding".into(), "unknown".into());
+    assert!(metadata.validate().is_err());
 }
 
 #[test]

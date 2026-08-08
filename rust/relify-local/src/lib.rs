@@ -22,7 +22,9 @@ pub use query::{
     datafusion_cluster_relation_required, datafusion_source_relation_required, squared_l2_udf,
 };
 pub use relify_catalog::IndexIdentifier;
-pub use relify_core::{IndexArtifacts, IvfConfig, PublishedIndex, SearchRequest};
+pub use relify_core::{
+    IndexArtifacts, IndexFormat, IvfConfig, PostingEncoding, PublishedIndex, SearchRequest,
+};
 pub use relify_meta::{IndexMetadata, IndexSnapshot, RelationReference};
 pub use search::{ClusterSelection, ResolvedSearch};
 pub use session::{

@@ -6,6 +6,7 @@ use parallite::ParalliteContext;
 use relify_index::{
     InitialIndex, RefreshedIndex, new_snapshot_id, publish_initial, publish_refresh,
 };
+use relify_meta::PostingEncoding;
 use uuid::Uuid;
 
 use super::LocalSession;
@@ -43,7 +44,7 @@ impl LocalSession {
             index_name,
             vector_field,
             source_key_fields,
-            IvfConfig::new(nlist, true),
+            IvfConfig::new(nlist, PostingEncoding::Flat),
             &LocalBuildOptions::default(),
         )
         .await
@@ -144,7 +145,7 @@ impl LocalSession {
         }
         let config = config.unwrap_or(IvfConfig::new(
             current.parameter_usize("nlist")?,
-            current.parameter_bool("store_vectors")?,
+            PostingEncoding::from_snapshot(current)?,
         ));
         if config.nlist == 0 || config.nlist > i32::MAX as usize {
             return Err(Error::InvalidArgument(

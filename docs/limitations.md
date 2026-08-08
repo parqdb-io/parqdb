@@ -17,7 +17,9 @@ matrix.
 
 ## Index and Query Semantics
 
-- IVF-Flat is the only implemented index family.
+- IVF is the only implemented index family. The local backend supports exact
+  vectors and LVQ4/LVQ8 encodings; experimental backends support a narrower
+  subset.
 - Squared L2 is the only distance metric.
 - Query vectors are one-dimensional; batch queries are not implemented.
 - Results order by distance; the relative order of equal-distance rows is

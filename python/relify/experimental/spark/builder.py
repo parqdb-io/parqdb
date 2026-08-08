@@ -105,6 +105,12 @@ def build_initial(
     config = request.config
     writer_options = request.writer_options
     _validate_request(index, column, key, config, writer_options)
+    posting_encoding = config.encoding
+    if posting_encoding not in {"source", "flat"}:
+        raise NotImplementedError(
+            "the Spark builder does not support quantized IVF postings"
+        )
+    store_vectors = posting_encoding == "flat"
     modules = _spark_modules()
     source_df = read_snapshot(
         spark,
@@ -154,7 +160,7 @@ def build_initial(
         )
         centroid_schema, postings_schema = _index_schemas(
             key_types,
-            store_vectors=config.store_vectors,
+            store_vectors=store_vectors,
         )
 
         ensure_namespace(context.iceberg_catalog, context.index_namespace)
@@ -194,7 +200,7 @@ def build_initial(
                 key=key,
                 centroids=centroid_broadcast,
                 centroids_are_broadcast=True,
-                store_vectors=config.store_vectors,
+                store_vectors=store_vectors,
                 modules=modules,
                 metrics=assignment_metrics,
             )
@@ -234,7 +240,7 @@ def build_initial(
                 "dimension": str(dimension),
                 "nlist": str(config.nlist),
                 "ntotal": str(ntotal),
-                "store_vectors": str(config.store_vectors).lower(),
+                "store_vectors": str(store_vectors).lower(),
             },
             index_relations={
                 "ivf_centroids": centroid_state.relation_dict(),

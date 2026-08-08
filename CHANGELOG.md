@@ -7,6 +7,25 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- IVF schema version 2 with Flat, LVQ4, and LVQ8 posting encodings, packed
+  fixed-width LVQ codes, and SIMD distance kernels in the local backend.
+- Portable LVQ4 and LVQ8 conformance fixtures with canonical encoded bytes and
+  ordered query results.
+- A reproducible GIST benchmark runner for Relify and Faiss Flat, SQ4, and SQ8
+  comparisons.
+
+### Changed
+
+- The public `IVF` configuration now selects a canonical `encoding` instead of
+  exposing the earlier `store_vectors` storage detail.
+
+### Fixed
+
+- LVQ distance evaluation now honors non-zero Arrow array offsets when cached
+  postings batches are sliced.
+
 ## [0.1.0rc2] - 2026-08-04
 
 ### Fixed

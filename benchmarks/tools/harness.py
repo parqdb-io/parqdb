@@ -9,10 +9,12 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
-import relify
+
+if TYPE_CHECKING:
+    import relify
 
 from benchmarks.tools.datasets import load_float_matrix
 from benchmarks.tools.resources import ResourceMonitor
@@ -20,7 +22,6 @@ from benchmarks.tools.resources import ResourceMonitor
 KMEANS_MAX_ITERATIONS = 20
 KMEANS_SEED = 42
 FAISS_PARALLEL_MODE = 1
-IMPLEMENTATIONS = ("relify", "faiss")
 SearchFunction = Callable[[np.ndarray, int, int], np.ndarray]
 
 
@@ -218,7 +219,7 @@ def command_version(*command: str) -> str | None:
     return result.stdout.strip()
 
 
-def source_revision() -> str | None:
+def benchmark_revision() -> str | None:
     override = os.environ.get("RELIFY_BENCHMARK_REVISION")
     if override:
         return override

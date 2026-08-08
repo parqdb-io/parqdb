@@ -67,7 +67,7 @@ def test_refresh_can_change_ivf_configuration(tmp_path: Path) -> None:
 
     vectors.refresh_index(
         "vectors_embedding",
-        config=relify.IVF(nlist=1, store_vectors=False),
+        config=relify.IVF(nlist=1, encoding="source"),
     )
     vectors.wait_for_index("vectors_embedding", timeout=WAIT)
 
@@ -133,7 +133,7 @@ def test_refresh_keeps_the_previous_snapshot_visible_while_building(
             source: str,
             index_name: str,
             nlist: int | None,
-            store_vectors: bool | None,
+            posting_encoding: str | None,
             writer_options: object,
             partitions: int | None,
             threads: int | None,
@@ -145,7 +145,7 @@ def test_refresh_keeps_the_previous_snapshot_visible_while_building(
                 source=source,
                 index_name=index_name,
                 nlist=nlist,
-                store_vectors=store_vectors,
+                posting_encoding=posting_encoding,
                 writer_options=writer_options,
                 partitions=partitions,
                 threads=threads,

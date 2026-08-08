@@ -4,7 +4,10 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, FixedSizeListArray, Float32Array, LargeListArray, ListArray};
+use arrow::array::{
+    Array, ArrayRef, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, LargeListArray,
+    ListArray,
+};
 use arrow::compute::{interleave, interleave_record_batch};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -15,8 +18,9 @@ use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::projection::ProjectionExpr;
 use datafusion::physical_plan::metrics::Time;
 
-use super::exec::VectorKind;
-use relify_kernels::DistanceKernel;
+use super::exec::{DistanceInput, VectorKind};
+use crate::query::lvq_code_values;
+use relify_kernels::{DistanceKernel, LvqBatchView};
 
 #[derive(Debug)]
 struct Candidate {
@@ -402,17 +406,19 @@ pub(super) fn retained_input_columns(
 pub(super) fn compute_batch_distances(
     distances: &mut Vec<f32>,
     batch: &RecordBatch,
-    vector_index: usize,
-    vector_kind: VectorKind,
+    input: DistanceInput,
     query: &[f32],
     kernel: DistanceKernel,
-) {
+) -> DataFusionResult<()> {
     distances.resize(batch.num_rows(), 0.0);
     if batch.num_rows() == 0 {
-        return;
+        return Ok(());
     }
-    match vector_kind {
-        VectorKind::List => {
+    match input {
+        DistanceInput::Dense {
+            vector_index,
+            vector_kind: VectorKind::List,
+        } => {
             let vectors = batch
                 .column(vector_index)
                 .as_any()
@@ -429,7 +435,10 @@ pub(super) fn compute_batch_distances(
             debug_assert_eq!(offsets[batch.num_rows()] as usize, end);
             kernel.squared_l2_rows(&values.values()[start..end], query, distances);
         }
-        VectorKind::LargeList => {
+        DistanceInput::Dense {
+            vector_index,
+            vector_kind: VectorKind::LargeList,
+        } => {
             let vectors = batch
                 .column(vector_index)
                 .as_any()
@@ -446,7 +455,10 @@ pub(super) fn compute_batch_distances(
             debug_assert_eq!(offsets[batch.num_rows()] as usize, end);
             kernel.squared_l2_rows(&values.values()[start..end], query, distances);
         }
-        VectorKind::FixedSizeList => {
+        DistanceInput::Dense {
+            vector_index,
+            vector_kind: VectorKind::FixedSizeList,
+        } => {
             let vectors = batch
                 .column(vector_index)
                 .as_any()
@@ -461,5 +473,41 @@ pub(super) fn compute_batch_distances(
             let end = start + batch.num_rows() * query.len();
             kernel.squared_l2_rows(&values.values()[start..end], query, distances);
         }
+        DistanceInput::Lvq {
+            bits,
+            code_index,
+            offset_index,
+            scale_index,
+        } => {
+            let codes = batch
+                .column(code_index)
+                .as_any()
+                .downcast_ref::<FixedSizeBinaryArray>()
+                .expect("validated FixedSizeBinary LVQ code column");
+            let offsets = batch
+                .column(offset_index)
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .expect("validated Float32 LVQ offset column");
+            let scales = batch
+                .column(scale_index)
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .expect("validated Float32 LVQ scale column");
+            let view = LvqBatchView::try_new(
+                bits,
+                query.len(),
+                lvq_code_values(codes)?,
+                offsets.values(),
+                scales.values(),
+            )
+            .map_err(|error| datafusion::common::DataFusionError::Execution(error.to_string()))?;
+            kernel
+                .lvq_squared_l2_rows(view, query, distances)
+                .map_err(|error| {
+                    datafusion::common::DataFusionError::Execution(error.to_string())
+                })?;
+        }
     }
+    Ok(())
 }

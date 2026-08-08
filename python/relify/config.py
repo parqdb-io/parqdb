@@ -24,15 +24,17 @@ LOCAL_BUILDER_CAPABILITIES = BuilderCapabilities(
 @dataclass(frozen=True)
 class IVF:
     nlist: int
-    store_vectors: bool = True
+    encoding: str = "flat"
 
     def __post_init__(self) -> None:
         if not isinstance(self.nlist, int) or isinstance(self.nlist, bool):
             raise TypeError("nlist must be an integer")
         if self.nlist <= 0:
             raise ValueError("nlist must be positive")
-        if not isinstance(self.store_vectors, bool):
-            raise TypeError("store_vectors must be a boolean")
+        if not isinstance(self.encoding, str):
+            raise TypeError("encoding must be a string")
+        if self.encoding not in {"source", "flat", "lvq4", "lvq8"}:
+            raise ValueError(f"unsupported encoding: {self.encoding}")
 
 
 @dataclass(frozen=True)

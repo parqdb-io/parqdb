@@ -2,12 +2,10 @@
 
 ## Overview
 
-This spec defines query semantics for the IVF index schema in
-[`index-schema.md`](index-schema.md). It does not prescribe SQL syntax,
+This spec defines query semantics for IVF
+[schema version 1](index-schema.md) and
+[schema version 2](index-schema-v2.md). It does not prescribe SQL syntax,
 functions, operators, or an execution strategy.
-
-Version 1 defines IVF search with squared Euclidean distance and an optional
-source-row filter.
 
 ## Inputs
 
@@ -30,6 +28,22 @@ specified here. It may reference source columns only. A source row is eligible
 when the predicate evaluates to `true`; `false` and `null` both exclude the
 row.
 
+## Candidate Vector
+
+The index schema and posting encoding determine the vector used to rank each
+candidate:
+
+| Schema | Posting configuration | Candidate vector |
+|---|---|---|
+| v1 | `store_vectors = false` | Exact vector from the source row. |
+| v1 | `store_vectors = true` | Exact `ivf_postings.vector`. |
+| v2 | `posting_encoding = source` | Exact vector from the source row. |
+| v2 | `posting_encoding = flat` | Exact `ivf_postings.vector`. |
+| v2 | `posting_encoding = lvq4` or `lvq8` | Reconstructed vector `x_hat` defined by schema v2. |
+
+An LVQ candidate vector is an approximation of the source vector. Search does
+not rerank LVQ candidates against the source vector.
+
 ## Search
 
 Given the selected index snapshot, its source table, and its IVF index tables, a
@@ -40,32 +54,30 @@ query:
 2. selects `nprobe` clusters ordered by `(distance ASC, cid ASC)`;
 3. selects postings whose `cid` belongs to those clusters;
 4. resolves candidate source-key tuples to source rows when required for
-   filtering, distance evaluation, or result fields;
+   filtering, the candidate vector, or result fields;
 5. discards candidates whose source rows do not satisfy `filter`, when
    supplied;
-6. computes squared Euclidean distance from `query-vector` to
-   `ivf_postings.vector` when `store_vectors` is `true`, or to the resolved
-   source vector otherwise;
+6. computes squared Euclidean distance from `query-vector` to the candidate
+   vector defined above;
 7. selects at most `k` candidates ordered by `distance ASC`; and
 8. returns the projected source fields in projection order followed by
    `_distance`.
 
-The final distance must be computed from the exact indexed-point vector, not a
-centroid or approximation. A stored posting vector is exact by the index-schema
-requirements. If selected clusters contain fewer than `k` candidates, all
-candidates are returned. Setting `nprobe = nlist` evaluates every indexed
-point. The relative order of candidates with equal distance is unspecified.
+If selected clusters contain fewer than `k` candidates, all candidates are
+returned. Setting `nprobe = nlist` evaluates every indexed point, but LVQ
+distances remain approximate. The relative order of candidates with equal
+distance is unspecified.
 
 ## Distance
 
-For vectors `q` and `x` of dimension `D`:
+For query vector `q` and candidate vector `x` of dimension `D`:
 
 ```text
 distance(q, x) = SUM((q[i] - x[i]) * (q[i] - x[i])), i = 0..D-1
 ```
 
-The square root is not computed. Query, centroid, posting-vector, and
-source-vector elements have canonical type `float`, and `_distance` has
+The square root is not computed. Query, centroid, posting-vector, reconstructed,
+and source-vector elements have canonical type `float`, and `_distance` has
 canonical type `float`.
 Intermediate precision, evaluation order, reassociation, and fused operations
 are implementation-specific. Results from different engines need not be
@@ -87,8 +99,9 @@ one source row.
 
 Source resolution is part of the query. Callers are not required to join
 postings to the source table. An implementation may elide source resolution
-when `store_vectors` is `true`, no source-row filter requires it, and the
-consumer's projection contains only source-key fields and the vector field.
+when no source-row filter requires it and the projection contains only
+source-key fields. The vector field may also be returned without source
+resolution when the posting contains its exact value.
 
 ## Result
 
@@ -98,8 +111,10 @@ the result contains every source field in source schema order followed by
 `_distance`. Source names, canonical types, nullability, and values are
 preserved.
 
-`_distance` contains the final source-vector distance. The result is ordered by
-`distance ASC`. The relative order of rows with equal distance is unspecified.
+`_distance` contains the distance to the candidate vector. It is exact for
+`source` and `flat` representations and approximate for LVQ representations.
+The result is ordered by `distance ASC`. The relative order of rows with equal
+distance is unspecified.
 
 Callers may apply ordinary relational projection, filtering, joins, and
 aggregation to the result. Such filtering is post-search and may return fewer
@@ -126,7 +141,7 @@ Source table:
 | `0` | `[0.5, 0.0]` |
 | `1` | `[10.0, 0.0]` |
 
-`ivf_postings` with `store_vectors = true`:
+Schema v1 `ivf_postings` with `store_vectors = true`:
 
 | `cid` | `key_1` | `vector` |
 |---|---|---|

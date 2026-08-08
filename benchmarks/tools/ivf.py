@@ -16,12 +16,11 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
-import relify
 
 from benchmarks.tools.datasets import (
     ParquetSource,
@@ -33,17 +32,16 @@ from benchmarks.tools.datasets import (
 )
 from benchmarks.tools.harness import (
     FAISS_PARALLEL_MODE,
-    IMPLEMENTATIONS,
     KMEANS_MAX_ITERATIONS,
     KMEANS_SEED,
     BuildProgressBar,
     CounterProgressBar,
+    benchmark_revision,
     command_version,
     directory_bytes,
     load_vectors,
     measure_search_curve,
     parse_positive_ints,
-    source_revision,
     sync_file,
 )
 from benchmarks.tools.resources import (
@@ -58,6 +56,9 @@ from benchmarks.tools.search_adapters import (
     relify_search,
 )
 
+if TYPE_CHECKING:
+    import relify
+
 UNTIMED_RELIFY_BUILD_PHASES = {
     None,
     "pending",
@@ -69,7 +70,8 @@ TRAINING_SAMPLING = {
     "faiss": "uniform-without-replacement-v1",
 }
 RELIFY_POSTINGS_LAYOUT = "hive-cid-file-v1"
-RELIFY_POSTINGS_ENCODING = "plain-vector-v1"
+RELIFY_ENCODINGS = ("lvq8", "lvq4", "flat")
+FAISS_ENCODINGS = ("sq8", "sq4", "flat")
 
 
 @dataclass(frozen=True)
@@ -111,6 +113,7 @@ def artifact_signature(
     dimension: int,
     nlist: int,
     version: str,
+    encoding: str | None = None,
 ) -> dict[str, Any]:
     signature = {
         "schema_version": 2,
@@ -128,9 +131,12 @@ def artifact_signature(
         "training_sampling": TRAINING_SAMPLING[implementation],
         "build_timing": "training-to-persistence-v1",
     }
+    supported = RELIFY_ENCODINGS if implementation == "relify" else FAISS_ENCODINGS
+    if encoding not in supported:
+        raise ValueError(f"{implementation} artifact requires a supported encoding")
     if implementation == "relify":
         signature["postings_layout"] = RELIFY_POSTINGS_LAYOUT
-        signature["postings_encoding"] = RELIFY_POSTINGS_ENCODING
+    signature["encoding"] = encoding
     return signature
 
 
@@ -201,9 +207,12 @@ def create_relify_index_with_progress(
     id_column: str,
     vector_column: str,
     nlist: int,
+    encoding: str,
     threads: int,
     show_progress: bool,
 ) -> BuildMeasurement:
+    import relify
+
     bar = BuildProgressBar("Relify", enabled=show_progress)
     preparation_started = time.perf_counter()
     build_started: float | None = None
@@ -212,7 +221,7 @@ def create_relify_index_with_progress(
         "benchmark_embedding",
         column=vector_column,
         key=[id_column],
-        config=relify.IVF(nlist=nlist),
+        config=relify.IVF(nlist=nlist, encoding=encoding),
         builder=relify.Local(threads=threads),
     )
     deadline = time.monotonic() + timedelta(hours=24).total_seconds()
@@ -254,18 +263,6 @@ def create_relify_index_with_progress(
             build_resources.__exit__(None, None, None)
         bar.close(success=False)
         raise
-
-
-def parse_implementations(encoded: str) -> tuple[str, ...]:
-    requested = tuple(value.strip() for value in encoded.split(",") if value.strip())
-    if not requested:
-        raise ValueError("implementations must not be empty")
-    unknown = sorted(set(requested) - set(IMPLEMENTATIONS))
-    if unknown:
-        raise ValueError(f"unknown implementations: {', '.join(unknown)}")
-    if len(requested) != len(set(requested)):
-        raise ValueError("implementations must be unique")
-    return tuple(name for name in IMPLEMENTATIONS if name in requested)
 
 
 def write_source(path: Path, vectors: np.ndarray) -> None:
@@ -323,6 +320,7 @@ def benchmark_relify(
     rows: int,
     dimension: int,
     nlist: int,
+    encoding: str,
     k_values: tuple[int, ...],
     nprobe_values: tuple[int, ...],
     search_repetitions: int,
@@ -335,6 +333,8 @@ def benchmark_relify(
     build_missing: bool,
     show_progress: bool,
 ) -> dict[str, Any]:
+    import relify
+
     signature = artifact_signature(
         "relify",
         source,
@@ -342,6 +342,7 @@ def benchmark_relify(
         dimension=dimension,
         nlist=nlist,
         version=importlib.metadata.version("relify"),
+        encoding=encoding,
     )
     with artifact_directory(
         "relify",
@@ -368,6 +369,7 @@ def benchmark_relify(
                 id_column=source.id_column,
                 vector_column=source.vector_column,
                 nlist=nlist,
+                encoding=encoding,
                 threads=threads,
                 show_progress=show_progress,
             )
@@ -381,7 +383,7 @@ def benchmark_relify(
                 "training_rows": min(rows, nlist * 256),
                 "training_sampling": TRAINING_SAMPLING["relify"],
                 "postings_layout": RELIFY_POSTINGS_LAYOUT,
-                "postings_encoding": RELIFY_POSTINGS_ENCODING,
+                "encoding": encoding,
                 "kmeans_max_iterations": KMEANS_MAX_ITERATIONS,
                 "kmeans_seed": KMEANS_SEED,
                 "preparation_seconds": measurement.preparation_seconds,
@@ -432,6 +434,29 @@ def faiss_module() -> Any | None:
     return faiss
 
 
+def create_faiss_index(
+    faiss: Any,
+    quantizer: Any,
+    *,
+    dimension: int,
+    nlist: int,
+    encoding: str,
+) -> Any:
+    if encoding == "flat":
+        return faiss.IndexIVFFlat(quantizer, dimension, nlist)
+    quantizer_type = {
+        "sq8": faiss.ScalarQuantizer.QT_8bit,
+        "sq4": faiss.ScalarQuantizer.QT_4bit,
+    }[encoding]
+    return faiss.IndexIVFScalarQuantizer(
+        quantizer,
+        dimension,
+        nlist,
+        quantizer_type,
+        faiss.METRIC_L2,
+    )
+
+
 def benchmark_faiss(
     source: ParquetSource,
     queries: np.ndarray | None,
@@ -440,6 +465,7 @@ def benchmark_faiss(
     rows: int,
     dimension: int,
     nlist: int,
+    encoding: str,
     k_values: tuple[int, ...],
     nprobe_values: tuple[int, ...],
     search_repetitions: int,
@@ -465,6 +491,7 @@ def benchmark_faiss(
         dimension=dimension,
         nlist=nlist,
         version=version,
+        encoding=encoding,
     )
     with artifact_directory(
         "faiss",
@@ -479,7 +506,7 @@ def benchmark_faiss(
             if not build_missing:
                 raise RuntimeError(
                     f"Faiss benchmark artifact is missing at {root}; "
-                    "run python -m benchmarks.build first"
+                    "run python -m benchmarks.tools.faiss build first"
                 )
             preparation_started = time.perf_counter()
             training_size = min(rows, nlist * 256)
@@ -500,7 +527,13 @@ def benchmark_faiss(
             gc.collect()
             pa.default_memory_pool().release_unused()
             quantizer = faiss.IndexFlatL2(dimension)
-            index = faiss.IndexIVFFlat(quantizer, dimension, nlist)
+            index = create_faiss_index(
+                faiss,
+                quantizer,
+                dimension=dimension,
+                nlist=nlist,
+                encoding=encoding,
+            )
             index.parallel_mode = FAISS_PARALLEL_MODE
             index.cp.niter = KMEANS_MAX_ITERATIONS
             index.cp.seed = KMEANS_SEED
@@ -530,8 +563,10 @@ def benchmark_faiss(
             result = {
                 "implementation": "faiss",
                 "version": version,
+                "encoding": encoding,
                 "workload": (
-                    "IndexIVFFlat training, population, and write_index "
+                    f"Faiss IVF-{encoding.upper()} training, "
+                    "population, and write_index "
                     "persistence; preparation excluded"
                 ),
                 "training_rows": training_size,
@@ -692,7 +727,6 @@ def validate_args(
 
 def benchmark(args: argparse.Namespace) -> dict[str, Any]:
     rng = np.random.default_rng(args.seed)
-    implementations = parse_implementations(args.implementations)
     k_values = tuple(
         sorted(
             {
@@ -822,10 +856,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
         else:
             assert isinstance(source_value, ParquetSource)
             source = source_value
-        results: list[dict[str, Any]] = []
-        faiss_status: str | None = None
-
-        if "relify" in implementations:
+        if args.implementation == "relify":
             relify_trials = [
                 benchmark_relify(
                     source,
@@ -834,6 +865,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
                     rows=rows,
                     dimension=dimension,
                     nlist=args.nlist,
+                    encoding=args.encoding,
                     k_values=k_values,
                     nprobe_values=nprobe_values,
                     search_repetitions=args.search_repetitions,
@@ -849,17 +881,17 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
                 for trial in range(args.repetitions)
             ]
             if args.operation == "build":
-                results.append(aggregate_build_trials(relify_trials, points=rows))
-            else:
-                results.append(
-                    summarize_query(
-                        relify_trials[0],
-                        headline_nprobe=args.nprobe,
-                        headline_k=args.k,
-                    )
+                implementation_result = aggregate_build_trials(
+                    relify_trials,
+                    points=rows,
                 )
-
-        if "faiss" in implementations:
+            else:
+                implementation_result = summarize_query(
+                    relify_trials[0],
+                    headline_nprobe=args.nprobe,
+                    headline_k=args.k,
+                )
+        else:
             faiss_trials = [
                 benchmark_faiss(
                     source,
@@ -868,6 +900,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
                     rows=rows,
                     dimension=dimension,
                     nlist=args.nlist,
+                    encoding=args.encoding,
                     k_values=k_values,
                     nprobe_values=nprobe_values,
                     search_repetitions=args.search_repetitions,
@@ -883,30 +916,31 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
                 for trial in range(args.repetitions)
             ]
             if faiss_trials[0] is None:
-                if args.require_faiss:
-                    raise RuntimeError("faiss-cpu is required but not installed")
-                faiss_status = "not installed"
+                raise RuntimeError("faiss-cpu is required for the Faiss benchmark")
+            completed_trials = [trial for trial in faiss_trials if trial is not None]
+            if args.operation == "build":
+                implementation_result = aggregate_build_trials(
+                    completed_trials,
+                    points=rows,
+                )
             else:
-                completed_trials = [
-                    trial for trial in faiss_trials if trial is not None
-                ]
-                if args.operation == "build":
-                    results.append(
-                        aggregate_build_trials(completed_trials, points=rows)
-                    )
-                else:
-                    results.append(
-                        summarize_query(
-                            completed_trials[0],
-                            headline_nprobe=args.nprobe,
-                            headline_k=args.k,
-                        )
-                    )
+                implementation_result = summarize_query(
+                    completed_trials[0],
+                    headline_nprobe=args.nprobe,
+                    headline_k=args.k,
+                )
 
+        implementation_version = implementation_result.get("version")
+        if implementation_version is None:
+            implementation_version = importlib.metadata.version("relify")
         result: dict[str, Any] = {
             "schema_version": 1,
             "generated_at_utc": datetime.now(UTC).isoformat(),
-            "source_revision": source_revision(),
+            "benchmark_revision": benchmark_revision(),
+            "implementation_revision": os.environ.get(
+                "BENCHMARK_IMPLEMENTATION_REVISION",
+                implementation_version,
+            ),
             "benchmark": args.operation,
             "dataset": {
                 "kind": dataset_kind,
@@ -936,10 +970,11 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
                 ),
             },
             "parameters": {
-                "implementations": list(implementations),
+                "implementation": args.implementation,
                 "index_root": str(index_root) if index_root is not None else None,
                 "seed": args.seed,
                 "nlist": args.nlist,
+                "encoding": args.encoding,
                 "repetitions": args.repetitions,
                 "threads": threads,
             },
@@ -951,12 +986,12 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
                 "platform": platform.platform(),
                 "machine": platform.machine(),
                 "python": platform.python_version(),
-                "relify": importlib.metadata.version("relify"),
                 "numpy": np.__version__,
                 "pyarrow": pa.__version__,
                 "rustc": command_version("rustc", "--version"),
+                args.implementation: implementation_version,
             },
-            "results": results,
+            "results": [implementation_result],
         }
         if args.operation == "build":
             result["parameters"]["rebuild"] = args.rebuild
@@ -973,35 +1008,42 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
                     "point_order_seed": KMEANS_SEED,
                 }
             )
-        if faiss_status is not None:
-            result["faiss"] = faiss_status
         return result
 
 
-def add_common_arguments(command: argparse.ArgumentParser) -> None:
+def add_common_arguments(
+    command: argparse.ArgumentParser,
+    *,
+    implementation: str,
+) -> None:
     command.add_argument("--id-column", default="id")
     command.add_argument("--vector-column", default="embedding")
     command.add_argument("--dataset-name")
     command.add_argument("--dataset-revision")
     command.add_argument("--dataset-split")
     command.add_argument("--nlist", type=int, default=256)
+    encodings = RELIFY_ENCODINGS if implementation == "relify" else FAISS_ENCODINGS
+    command.add_argument(
+        "--encoding",
+        choices=encodings,
+        default=encodings[0],
+    )
     command.add_argument("--threads", type=int)
     command.add_argument("--work-root", type=Path)
     command.add_argument("--index-root", type=Path)
     command.add_argument("--output", type=Path)
-    command.add_argument(
-        "--implementations",
-        default=",".join(IMPLEMENTATIONS),
-        help="comma-separated subset of relify and faiss",
-    )
-    command.add_argument("--require-faiss", action="store_true")
     command.add_argument("--no-progress", action="store_true")
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(implementation: str = "relify") -> argparse.ArgumentParser:
+    program = (
+        "python -m benchmarks.build"
+        if implementation == "relify"
+        else "python -m benchmarks.tools.faiss build"
+    )
     command = argparse.ArgumentParser(
-        prog="python -m benchmarks.build",
-        description="Build persisted IVF indexes for the benchmark.",
+        prog=program,
+        description=f"Build a persisted {implementation} IVF benchmark index.",
     )
     source = command.add_mutually_exclusive_group()
     source.add_argument("--base", type=Path)
@@ -1011,8 +1053,9 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--seed", type=int, default=KMEANS_SEED)
     command.add_argument("--repetitions", type=int, default=1)
     command.add_argument("--rebuild", action="store_true")
-    add_common_arguments(command)
+    add_common_arguments(command, implementation=implementation)
     command.set_defaults(
+        implementation=implementation,
         operation="build",
         query_file=None,
         query_source_start=None,
@@ -1028,10 +1071,15 @@ def build_parser() -> argparse.ArgumentParser:
     return command
 
 
-def query_parser() -> argparse.ArgumentParser:
+def query_parser(implementation: str = "relify") -> argparse.ArgumentParser:
+    program = (
+        "python -m benchmarks.query"
+        if implementation == "relify"
+        else "python -m benchmarks.tools.faiss query"
+    )
     command = argparse.ArgumentParser(
-        prog="python -m benchmarks.query",
-        description="Query persisted IVF indexes built by benchmarks.build.",
+        prog=program,
+        description=f"Query a persisted {implementation} IVF benchmark index.",
     )
     command.add_argument("--source-parquet", type=Path, required=True)
     queries = command.add_mutually_exclusive_group(required=True)
@@ -1048,8 +1096,9 @@ def query_parser() -> argparse.ArgumentParser:
     command.add_argument("--curve-k-values", default="100,1000,10000")
     command.add_argument("--search-repetitions", type=int, default=3)
     command.add_argument("--warmup-queries", type=int, default=5)
-    add_common_arguments(command)
+    add_common_arguments(command, implementation=implementation)
     command.set_defaults(
+        implementation=implementation,
         operation="query",
         base=None,
         rows=0,
@@ -1061,11 +1110,15 @@ def query_parser() -> argparse.ArgumentParser:
     return command
 
 
-def main(operation: str, argv: list[str] | None = None) -> None:
+def main(
+    operation: str,
+    implementation: str = "relify",
+    argv: list[str] | None = None,
+) -> None:
     if operation == "build":
-        args = build_parser().parse_args(argv)
+        args = build_parser(implementation).parse_args(argv)
     elif operation == "query":
-        args = query_parser().parse_args(argv)
+        args = query_parser(implementation).parse_args(argv)
     else:
         raise ValueError(f"unknown benchmark operation: {operation}")
     result = benchmark(args)

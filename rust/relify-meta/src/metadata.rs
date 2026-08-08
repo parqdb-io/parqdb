@@ -7,6 +7,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::error::invalid;
+use crate::family::validate_family;
 use crate::serde_helpers::{deserialize_unique_map, lowercase_uuid};
 use crate::{Error, RelationReference, Result};
 
@@ -78,46 +79,10 @@ impl IndexSnapshot {
         {
             return invalid("map keys must be non-empty");
         }
-        if self.index_family != "ivf"
-            || self.index_schema_version != 1
-            || self.metric != "l2_squared"
-        {
-            return invalid("only IVF schema version 1 with l2_squared is supported");
-        }
-
-        let expected_parameters = ["dimension", "nlist", "ntotal", "store_vectors"];
-        if self.parameters.len() != expected_parameters.len()
-            || self
-                .parameters
-                .keys()
-                .any(|key| !expected_parameters.contains(&key.as_str()))
-        {
-            return invalid(
-                "IVF parameters must contain exactly dimension, nlist, ntotal, and store_vectors",
-            );
-        }
-        parse_positive_parameter(&self.parameters, "dimension", i32::MAX as u64)?;
-        let nlist = parse_positive_parameter(&self.parameters, "nlist", i32::MAX as u64)?;
-        let ntotal = parse_positive_parameter(&self.parameters, "ntotal", i64::MAX as u64)?;
-        parse_boolean_parameter(&self.parameters, "store_vectors")?;
-        if nlist > ntotal {
-            return invalid("nlist must not exceed ntotal");
-        }
-
-        let expected_relations = ["ivf_centroids", "ivf_postings"];
-        if !self.index_relations.contains_key(expected_relations[0])
-            || !self.index_relations.contains_key(expected_relations[1])
-            || self
-                .index_relations
-                .keys()
-                .any(|role| !expected_relations.contains(&role.as_str()))
-        {
-            return invalid("invalid IVF index table roles");
-        }
         for reference in self.index_relations.values() {
             reference.validate()?;
         }
-        Ok(())
+        validate_family(self)
     }
 
     /// Reads a positive family parameter as `usize`.
@@ -372,7 +337,7 @@ fn validate_metadata_location(location: &str) -> Result<()> {
     Ok(())
 }
 
-fn parse_positive_parameter(
+pub(crate) fn parse_positive_parameter(
     parameters: &BTreeMap<String, String>,
     name: &str,
     maximum: u64,
@@ -395,7 +360,10 @@ fn parse_positive_parameter(
     Ok(parsed)
 }
 
-fn parse_boolean_parameter(parameters: &BTreeMap<String, String>, name: &str) -> Result<bool> {
+pub(crate) fn parse_boolean_parameter(
+    parameters: &BTreeMap<String, String>,
+    name: &str,
+) -> Result<bool> {
     match parameters.get(name).map(String::as_str) {
         Some("true") => Ok(true),
         Some("false") => Ok(false),

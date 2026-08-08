@@ -8,6 +8,10 @@ use std::sync::OnceLock;
 
 use thiserror::Error;
 
+mod lvq;
+
+pub use lvq::{LvqBatchView, LvqBits, LvqEncodedBatch, encode_lvq_rows};
+
 /// Error returned when matrix buffers do not match their declared shapes.
 #[derive(Debug, Error)]
 #[error("invalid kernel argument: {0}")]

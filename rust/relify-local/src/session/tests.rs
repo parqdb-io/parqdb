@@ -8,14 +8,14 @@ use arrow::array::{Array, Float32Builder, Int32Array, Int64Array, ListBuilder, S
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
-use relify_meta::{IndexMetadata, SnapshotLogEntry};
+use relify_meta::{IndexMetadata, PostingEncoding, SnapshotLogEntry};
 use rusqlite::Connection;
 use tempfile::TempDir;
 use uuid::Uuid;
 
 use super::*;
-use crate::MaintenanceKind;
 use crate::local_uri::directory_to_file_uri;
+use crate::{IvfConfig, MaintenanceKind};
 
 struct MemoryEntry {
     entry: CatalogEntry,
@@ -659,6 +659,105 @@ async fn large_nprobe_pushes_a_static_filter_into_uncached_postings() {
     assert!(plan.contains("file_groups={"), "{plan}");
     assert!(!plan.contains("/cid=129/"), "{plan}");
     assert!(!plan.contains("FilterExec"), "{plan}");
+}
+
+#[tokio::test]
+async fn lvq_indexes_build_and_query_through_uncached_and_cached_paths() {
+    for (encoding, name, code_size) in [
+        (PostingEncoding::Lvq4, "lvq4_index", 1),
+        (PostingEncoding::Lvq8, "lvq8_index", 2),
+    ] {
+        assert_lvq_index(encoding, name, code_size).await;
+    }
+}
+
+async fn assert_lvq_index(encoding: PostingEncoding, name: &str, code_size: i32) {
+    let temporary = TempDir::new().unwrap();
+    let session = LocalSession::open(temporary.path().join("relify")).unwrap();
+    let source_path = temporary.path().join("source");
+    write_direct_pid_source(&session.parquet, &source_path).await;
+    let published = session
+        .create_index_with_options(
+            source_path.to_str().unwrap(),
+            name,
+            "embedding",
+            &["source_pid".into()],
+            IvfConfig::new(2, encoding),
+            &LocalBuildOptions::default(),
+        )
+        .await
+        .unwrap();
+    let snapshot = published.metadata.current_snapshot().unwrap();
+    assert_eq!(snapshot.index_schema_version, 2);
+    assert_eq!(PostingEncoding::from_snapshot(snapshot).unwrap(), encoding);
+    let RelationReference::Parquet { uri } = &snapshot.index_relations["ivf_postings"] else {
+        panic!("local postings must use Parquet");
+    };
+    let postings = session
+        .parquet
+        .partitioned_dataframe(uri, vec![("cid".into(), DataType::Int32)])
+        .await
+        .unwrap();
+    assert_lvq_postings_schema(postings.schema().inner(), code_size);
+
+    let request = SearchRequest {
+        source: RelationReference::Parquet {
+            uri: directory_to_file_uri(&source_path).unwrap(),
+        },
+        index: Some(name.into()),
+        column: None,
+        query: vec![10.0, 0.0],
+        nprobe: Some(2),
+        limit: 1,
+        projection: Some(vec!["source_pid".into()]),
+        filter: None,
+        bypass_index: false,
+    };
+    let (uncached, _) = session.search(&request).await.unwrap();
+    assert_nearest_pid(&uncached);
+    let plan = session.explain_search(&request, false).await.unwrap();
+    assert!(plan.contains("IvfTopKExec"), "{plan}");
+    assert!(
+        plan.contains(&format!("encoding={}", encoding.as_str())),
+        "{plan}"
+    );
+
+    let mut source_projection = request.clone();
+    source_projection.projection = Some(vec!["source_pid".into(), "label".into()]);
+    let (joined, _) = session.search(&source_projection).await.unwrap();
+    assert_nearest_pid(&joined);
+    assert_eq!(
+        arrow::util::display::array_value_to_string(joined[0].column(1), 0).unwrap(),
+        "thirty"
+    );
+
+    session.cache_index(name).await.unwrap();
+    let (cached, _) = session.search(&request).await.unwrap();
+    assert_nearest_pid(&cached);
+}
+
+fn assert_lvq_postings_schema(schema: &Schema, code_size: i32) {
+    assert_eq!(
+        schema.field_with_name("offset").unwrap().data_type(),
+        &DataType::Float32
+    );
+    assert_eq!(
+        schema.field_with_name("scale").unwrap().data_type(),
+        &DataType::Float32
+    );
+    assert_eq!(
+        schema.field_with_name("code").unwrap().data_type(),
+        &DataType::FixedSizeBinary(code_size)
+    );
+}
+
+fn assert_nearest_pid(batches: &[RecordBatch]) {
+    let ids = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap();
+    assert_eq!(ids.values(), &[30]);
 }
 
 #[tokio::test]

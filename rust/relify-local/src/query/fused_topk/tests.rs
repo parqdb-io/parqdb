@@ -2,12 +2,19 @@
 
 use std::sync::Arc;
 
-use arrow::array::{Array, Float32Array, Float32Builder, Int64Array, ListBuilder};
+use arrow::array::{
+    Array, FixedSizeBinaryArray, Float32Array, Float32Builder, Int64Array, ListBuilder,
+};
+use arrow::buffer::Buffer;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion::catalog::MemTable;
 use datafusion::physical_plan::{ExecutionPlan, collect, displayable};
 
+use relify_kernels::{LvqBits, detect};
+
+use super::exec::DistanceInput;
+use super::selector::compute_batch_distances;
 use super::{IvfTopKExec, relify_session_context};
 
 fn batch(ids: impl IntoIterator<Item = i64>) -> RecordBatch {
@@ -52,6 +59,43 @@ fn metric_sum(plan: &Arc<dyn ExecutionPlan>, name: &str) -> usize {
         .filter(|metric| metric.value().name() == name)
         .map(|metric| metric.value().as_usize())
         .sum()
+}
+
+#[test]
+fn lvq_distance_uses_only_the_sliced_code_buffer() {
+    let codes =
+        FixedSizeBinaryArray::try_new(2, Buffer::from(vec![99_u8, 99, 3, 4, 5, 6]), None).unwrap();
+    let batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("code", DataType::FixedSizeBinary(2), false),
+            Field::new("offset", DataType::Float32, false),
+            Field::new("scale", DataType::Float32, false),
+        ])),
+        vec![
+            Arc::new(codes),
+            Arc::new(Float32Array::from(vec![0.0, 0.0, 0.0])),
+            Arc::new(Float32Array::from(vec![1.0, 1.0, 1.0])),
+        ],
+    )
+    .unwrap()
+    .slice(1, 2);
+    let mut distances = Vec::new();
+
+    compute_batch_distances(
+        &mut distances,
+        &batch,
+        DistanceInput::Lvq {
+            bits: LvqBits::Eight,
+            code_index: 0,
+            offset_index: 1,
+            scale_index: 2,
+        },
+        &[0.0, 0.0],
+        *detect(),
+    )
+    .unwrap();
+
+    assert_eq!(distances, [25.0, 61.0]);
 }
 
 #[tokio::test]

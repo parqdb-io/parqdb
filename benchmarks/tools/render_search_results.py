@@ -15,6 +15,13 @@ COLORS = {"relify": "#0f766e", "faiss": "#f59e0b"}
 LABELS = {"relify": "Relify", "faiss": "Faiss"}
 
 
+def implementation_label(implementation: str, result: dict[str, Any]) -> str:
+    encoding = result.get("encoding")
+    if not encoding:
+        return LABELS[implementation]
+    return f"{LABELS[implementation]} ({str(encoding).upper()})"
+
+
 def parse_k_values(encoded: str) -> tuple[int, ...]:
     try:
         values = tuple(int(value) for value in encoded.split(","))
@@ -223,7 +230,8 @@ def render(run: dict[str, Any], k_values: tuple[int, ...]) -> str:
                 f'<circle cx="{legend_x + 12}" cy="584" r="4" '
                 f'fill="{COLORS[implementation]}"/>',
                 f'<text x="{legend_x + 34}" y="589" font-size="13" '
-                f'fill="#334155">{html.escape(LABELS[implementation])}</text>',
+                f'fill="#334155">'
+                f"{html.escape(implementation_label(implementation, implementations[implementation]))}</text>",
             ]
         )
         legend_x += legend_step

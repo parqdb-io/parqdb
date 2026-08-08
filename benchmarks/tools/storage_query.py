@@ -17,6 +17,7 @@ from benchmarks.tools.datasets import load_ground_truth
 from benchmarks.tools.harness import (
     FAISS_PARALLEL_MODE,
     KMEANS_SEED,
+    benchmark_revision,
     command_version,
     directory_bytes,
     evict_file,
@@ -24,7 +25,6 @@ from benchmarks.tools.harness import (
     load_vectors,
     measure_search_curve,
     parse_positive_ints,
-    source_revision,
 )
 from benchmarks.tools.resources import (
     affinity_cpu_ids,
@@ -109,7 +109,7 @@ def _load_index_root(root: Path) -> tuple[Path, dict[str, Any]]:
             "id_column": expected["id_column"],
             "vector_column": expected["vector_column"],
             "payload_bytes": directory_bytes(payload),
-            "store_vectors": True,
+            "encoding": expected["encoding"],
             "artifact": str(root / "relify" / "benchmark-artifact.json"),
         }
     if "faiss" in artifacts:
@@ -119,6 +119,7 @@ def _load_index_root(root: Path) -> tuple[Path, dict[str, Any]]:
         indexes["faiss"] = {
             "index": str(index),
             "payload_bytes": index.stat().st_size,
+            "encoding": artifacts["faiss"]["signature"]["encoding"],
             "mmap_embedded_inverted_lists": True,
             "artifact": str(root / "faiss" / "benchmark-artifact.json"),
         }
@@ -247,14 +248,14 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
     if (
         args.num_queries <= 0
         or args.search_repetitions <= 0
-        or args.warmup_queries <= 0
+        or args.warmup_queries < 0
         or args.threads <= 0
         or args.memory_limit_bytes <= 0
         or args.minimum_payload_bytes < 0
     ):
         raise ValueError(
-            "num-queries, search-repetitions, warmup-queries, threads, and "
-            "memory-limit-bytes must be positive; minimum-payload-bytes must "
+            "num-queries, search-repetitions, threads, and memory-limit-bytes "
+            "must be positive; warmup-queries and minimum-payload-bytes must "
             "be non-negative"
         )
     if args.index_root is not None:
@@ -309,7 +310,11 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
     if np.any(expected >= rows):
         raise ValueError("ground truth contains an ID outside the source table")
 
-    evicted_paths = _evict_index(args.implementation, implementation)
+    evicted_paths = (
+        _evict_index(args.implementation, implementation)
+        if args.evict_page_cache
+        else []
+    )
     opened_at = time.perf_counter()
     if args.implementation == "relify":
         search, runtime = _open_relify(implementation, threads=args.threads)
@@ -347,9 +352,9 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
 
     return {
         "schema_version": 1,
-        "suite": "storage-backed-ivf-flat",
+        "suite": "storage-backed-ivf",
         "generated_at_utc": datetime.now(UTC).isoformat(),
-        "source_revision": source_revision(),
+        "benchmark_revision": benchmark_revision(),
         "prepared_root": str(root),
         "index_input": input_kind,
         "dataset": {
@@ -372,6 +377,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
             "minimum_payload_bytes": args.minimum_payload_bytes,
             "allow_resource_mismatch": args.allow_resource_mismatch,
             "allow_zero_physical_reads": args.allow_zero_physical_reads,
+            "evict_page_cache": args.evict_page_cache,
         },
         "resources": {
             "cpus": len(affinity_cpu_ids()),
@@ -391,7 +397,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
             "implementation": args.implementation,
             "index": {
                 **implementation,
-                "page_cache_evicted_before_query": True,
+                "page_cache_evicted_before_query": args.evict_page_cache,
                 "evicted_paths": evicted_paths,
             },
             "runtime": runtime,
@@ -431,6 +437,7 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--minimum-payload-bytes", type=int, default=48 * GIB)
     command.add_argument("--allow-resource-mismatch", action="store_true")
     command.add_argument("--allow-zero-physical-reads", action="store_true")
+    command.add_argument("--evict-page-cache", action="store_true")
     command.add_argument("--output", type=Path)
     return command
 

@@ -21,10 +21,11 @@ back to source rows without introducing a Relify-specific row identifier.
 ## Open Vector Index
 
 A Relify index consists of portable JSON metadata and ordinary relations. The
-current IVF-Flat format stores:
+current IVF family stores:
 
 - centroids used to choose candidate clusters; and
-- postings that map clusters to source keys and, by default, exact vectors.
+- postings that map clusters to source keys and either source references,
+  exact vectors, or LVQ codes.
 
 Parquet relations are used by the local builder. The Spark builder publishes
 the same logical relations as Iceberg tables. The

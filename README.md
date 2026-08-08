@@ -1,7 +1,7 @@
 <div align="center">
   <img src="https://raw.githubusercontent.com/petrizhang/relify/main/assets/relify-header.svg" alt="Relify" width="760">
   <p>
-    <strong>Lightweight vector index extension for the open lakehouse stack.</strong>
+    <strong>Open vector indexes for the SQL engines you already use.</strong>
   </p>
   <p>
     <a href="https://pypi.org/project/relify/"><img alt="PyPI" src="https://img.shields.io/pypi/v/relify.svg"></a>
@@ -14,7 +14,6 @@
     <a href="#quick-start">Quick Start</a> |
     <a href="#why-relify">Why Relify</a> |
     <a href="#compute-engines">Compute Engines</a> |
-    <a href="#benchmarks">Benchmarks</a> |
     <a href="#documentation">Documentation</a>
   </p>
 </div>
@@ -25,11 +24,6 @@ Relify is an open-source Python and Rust library for indexing and searching
 lakehouse data with the compute engines you already use. It stores vector
 indexes as open Parquet or Iceberg tables, allowing DataFusion, StarRocks, and
 Spark to query them directly with SQL while source data stays where it is.
-
-Relify targets analytical and offline vector workloads such as large-k
-retrieval, similarity joins, and vector search composed with analytical
-queries. Dedicated vector databases remain the better fit for latency-sensitive,
-high-concurrency online serving.
 
 ## Quick Start
 
@@ -114,6 +108,8 @@ requirements.
 - **SQL-native execution.** Cluster pruning, source filtering, joins, distance
   computation, and top-k remain inside the host engine's relational plan.
 
+If Relify is useful to you, a ⭐ helps others find the project.
+
 ## Compute Engines
 
 | Engine | Model | Current capability | Status |
@@ -131,40 +127,6 @@ See the [local](https://github.com/petrizhang/relify/blob/main/docs/guides/local
 [StarRocks](https://github.com/petrizhang/relify/blob/main/docs/guides/starrocks.md)
 guides for installation and configuration.
 
-## How It Works
-
-![Relify builds an open index beside the source table and queries both with the host compute engine](https://raw.githubusercontent.com/petrizhang/relify/main/assets/how-it-works.svg)
-
-Source rows remain in their original Parquet or Iceberg table. Building an
-IVF-Flat index writes only portable metadata, centroids, and postings as open
-table data.
-
-At query time, an engine-specific adapter binds the source and index to
-DataFusion, StarRocks, or Spark. The engine performs candidate pruning, source
-filtering, distance calculation, top-k, and subsequent analytical SQL in its
-own runtime.
-
-The [open index specification](https://github.com/petrizhang/relify/blob/main/spec/README.md)
-defines the shared schema and query semantics; the
-[architecture guide](https://github.com/petrizhang/relify/blob/main/docs/architecture.md)
-describes the implementation boundaries.
-
-## Benchmarks
-
-The current reproducible benchmark compares persisted, single-node IVF-Flat
-construction and memory-resident large-k search on one million 128-dimensional
-vectors. It ran on a 10-core Apple M4 with 16 GB of unified memory.
-
-![Persisted IVF-Flat Build Time](https://raw.githubusercontent.com/petrizhang/relify/main/assets/build-time.svg)
-
-![Large-k IVF Recall-Latency](https://raw.githubusercontent.com/petrizhang/relify/main/assets/search-recall-latency.svg)
-
-Both implementations start from the same uncompressed Parquet source. Query
-measurements use one query at a time, `nlist=4,096`, increasing `nprobe`, and
-`k=10,000`, `20,000`, and `100,000`. See the
-[methodology and raw results](https://github.com/petrizhang/relify/tree/main/benchmarks/results/macos-arm64-2026-07-29/)
-for complete measurements.
-
 ## Documentation
 
 - [Getting started](https://github.com/petrizhang/relify/blob/main/docs/getting-started.md)
@@ -178,15 +140,27 @@ for complete measurements.
   [troubleshooting](https://github.com/petrizhang/relify/blob/main/docs/troubleshooting.md),
   and [roadmap](https://github.com/petrizhang/relify/blob/main/docs/roadmap.md)
 
-## TEngineDB-V
+## TEngineDB-V and Relify
 
-Relify began as the open-source research prototype behind
 [TEngineDB-V: An OLAP-Native Vector Search System for Large-k Workloads at
-Tencent](https://arxiv.org/abs/2608.00650), accepted to the Industry Track at
-VLDB 2026. The project now develops those ideas into a general-purpose vector
-extension for the open lakehouse stack.
+Tencent](https://arxiv.org/abs/2608.00650) is Tencent's production system for
+large-k vector search. On a 10-billion-vector deployment, its deep integration
+with TEngineDB delivers up to a 52x speedup over the legacy system.
 
-If you use Relify in your research, please cite:
+<p align="center">
+  <img src="https://raw.githubusercontent.com/petrizhang/relify/main/assets/tenginedb-v-figure-7.png" alt="Figure 7: Latency-Recall Trade-off Across Systems" width="760">
+</p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/petrizhang/relify/main/assets/tenginedb-v-figure-13.png" alt="Figure 13: Production performance at 10-billion scale" width="760">
+</p>
+
+Relify shares the idea, not the implementation. It rebuilds table-native vector
+search around open index formats and existing SQL engines, aiming for
+TEngineDB-V-class performance without requiring a proprietary engine.
+
+If you use Relify in your research, please cite our VLDB 2026 Industry Track
+paper:
 
 ```bibtex
 @misc{wu2026tenginedbvolapnativevectorsearch,

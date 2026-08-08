@@ -14,6 +14,8 @@ pub enum ClusterSelection {
     },
 }
 
+use relify_meta::PostingEncoding;
+
 /// Fully resolved inputs for one embedded `DataFusion` vector search.
 #[derive(Debug, Clone)]
 pub struct ResolvedSearch {
@@ -27,8 +29,8 @@ pub struct ResolvedSearch {
     pub source_key_fields: Vec<String>,
     /// Backend relation key for IVF postings, absent for exact search.
     pub postings_relation_key: Option<String>,
-    /// Whether IVF postings contain exact source vectors.
-    pub store_vectors: bool,
+    /// Vector representation stored in IVF postings.
+    pub posting_encoding: PostingEncoding,
     /// IVF cluster selection, absent for exact search.
     pub cluster_selection: Option<ClusterSelection>,
     /// Total number of IVF clusters, absent for exact search.

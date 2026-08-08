@@ -95,7 +95,7 @@ documents.create_index(
     "documents_embedding",
     column="embedding",
     key=["document_id"],
-    config=relify.IVF(nlist=4096, store_vectors=True),
+    config=relify.IVF(nlist=4096, encoding="lvq8"),
     builder=relify.Local(threads=8),
     writer_options=relify.WriteOptions(
         compression="zstd(3)",

@@ -135,17 +135,22 @@ The registration is persisted in the SQLite table catalog.
 ```python
 config = relify.IVF(
     nlist=4096,
-    store_vectors=True,
+    encoding="lvq8",
 )
 ```
 
 | Argument | Default | Meaning |
 | --- | --- | --- |
 | `nlist` | required | Positive number of IVF clusters |
-| `store_vectors` | `True` | Store exact vectors in postings for index-only distance evaluation |
+| `encoding` | `flat` | `source`, `flat`, `lvq4`, or `lvq8` |
 
-Relify 0.1 supports IVF-Flat with squared L2 distance. `nprobes` is selected on
-each query and must not exceed `nlist`.
+`flat` stores exact vectors. `lvq4` and `lvq8` store per-vector locally
+adaptive scalar-quantized codes and evaluate approximate squared L2 distance
+without decoding a dense vector column. `source` stores only source keys and
+reads candidate vectors from the source table. Quantized postings are currently
+supported by the local backend.
+
+`nprobes` is selected on each query and must not exceed `nlist`.
 
 ## Local Builder
 

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
-import relify
 
 from benchmarks.tools.harness import SearchFunction
+
+if TYPE_CHECKING:
+    import relify
 
 
 def configure_relify_session(session: relify.Session, threads: int) -> None:

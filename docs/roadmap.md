@@ -13,7 +13,7 @@ The initial release includes:
 - exact paths and nested `*` patterns over `file`, S3, and HDFS sources;
 - `file`, S3, and HDFS warehouses;
 - Parquet source and index tables;
-- local parallel IVF-Flat construction;
+- local parallel IVF construction with exact-vector and LVQ encodings;
 - DataFusion search, filtering, projection, and exact fallback;
 - exact Iceberg snapshot reads for Spark-built indexes;
 - independent DuckDB execution of the portable IVF fixtures;

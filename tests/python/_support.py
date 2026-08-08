@@ -52,7 +52,7 @@ def build_index(
     column: str = "embedding",
     key: list[str] | None = None,
     nlist: int = 2,
-    store_vectors: bool = True,
+    encoding: str = "flat",
     builder: relify.Local | None = None,
     writer_options: relify.WriteOptions | None = None,
 ) -> None:
@@ -60,7 +60,7 @@ def build_index(
         name,
         column=column,
         key=key if key is not None else ["id"],
-        config=relify.IVF(nlist=nlist, store_vectors=store_vectors),
+        config=relify.IVF(nlist=nlist, encoding=encoding),
         builder=builder,
         writer_options=writer_options,
         wait_timeout=WAIT,

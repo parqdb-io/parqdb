@@ -1,6 +1,6 @@
 # Getting Started
 
-This guide installs Relify, builds an IVF-Flat index over a Parquet source, and
+This guide installs Relify, builds an IVF index over a Parquet source, and
 runs a filtered vector query through the embedded DataFusion backend. It uses
 the small dataset included in the wheel, so no service or external data is
 required.

@@ -5,10 +5,12 @@ import subprocess
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 
 
 def write_matrix(path: Path, values: np.ndarray) -> None:
@@ -55,16 +57,54 @@ def test_build_benchmark_smoke(tmp_path: Path) -> None:
     assert relify_result["training_rows"] == 64
     assert len(relify_result["build_seconds_samples"]) == 1
     assert len(relify_result["preparation_seconds_samples"]) == 1
-    assert result["source_revision"]
+    assert result["benchmark_revision"]
+    assert result["implementation_revision"]
     assert result["software"]["rustc"].startswith("rustc ")
     assert result["benchmark"] == "build"
-    implementations = {
-        implementation["implementation"]: implementation
-        for implementation in result["results"]
-    }
-    if faiss_result := implementations.get("faiss"):
-        assert faiss_result["omp_threads"] > 0
-        assert faiss_result["parallel_mode"] == 1
+    assert result["parameters"]["encoding"] == "lvq8"
+    assert result["results"][0]["encoding"] == "lvq8"
+
+
+@pytest.mark.parametrize("encoding", ["flat", "sq8", "sq4"])
+def test_faiss_build_benchmark_encodings(tmp_path: Path, encoding: str) -> None:
+    pytest.importorskip("faiss")
+    repository = Path(__file__).parents[2]
+    index_root = tmp_path / encoding
+    output = tmp_path / f"{encoding}.json"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "benchmarks.tools.faiss",
+            "build",
+            "--rows",
+            "128",
+            "--dimension",
+            "8",
+            "--nlist",
+            "4",
+            "--encoding",
+            encoding,
+            "--threads",
+            "2",
+            "--index-root",
+            str(index_root),
+            "--output",
+            str(output),
+            "--no-progress",
+        ],
+        cwd=repository,
+        check=True,
+    )
+
+    result = json.loads(output.read_text(encoding="utf-8"))
+    implementation = result["results"][0]
+    assert result["parameters"]["implementation"] == "faiss"
+    assert result["parameters"]["encoding"] == encoding
+    assert implementation["implementation"] == "faiss"
+    assert implementation["encoding"] == encoding
+    assert implementation["omp_threads"] == 2
+    assert (index_root / "faiss" / "benchmark.faiss").is_file()
 
 
 def test_build_then_query_uses_original_parquet_and_source_queries(
@@ -247,8 +287,8 @@ def test_search_curve_chart_is_valid_svg(tmp_path: Path) -> None:
         "resources": {"cpus": 10, "memory_limit_bytes": 16 * 1024**3},
         "software": {"machine": "arm64"},
         "results": [
-            {"implementation": "relify", "search_curve": points},
-            {"implementation": "faiss", "search_curve": points},
+            {"implementation": "relify", "encoding": "lvq8", "search_curve": points},
+            {"implementation": "faiss", "encoding": "sq8", "search_curve": points},
         ],
     }
     result_path = tmp_path / "result.json"
@@ -276,7 +316,8 @@ def test_search_curve_chart_is_valid_svg(tmp_path: Path) -> None:
     assert "Recall@100K" in encoded
     assert "intra-query parallel" in encoded
     assert "10 vCPUs" in encoded
-    assert "Faiss" in encoded
+    assert "Relify (LVQ8)" in encoded
+    assert "Faiss (SQ8)" in encoded
 
 
 def test_build_time_chart_is_valid_svg(tmp_path: Path) -> None:
@@ -288,8 +329,8 @@ def test_build_time_chart_is_valid_svg(tmp_path: Path) -> None:
         "resources": {"cpus": 10, "memory_limit_bytes": 16 * 1024**3},
         "software": {"machine": "arm64"},
         "results": [
-            {"implementation": "relify", "build_seconds": 28.7},
-            {"implementation": "faiss", "build_seconds": 49.3},
+            {"implementation": "relify", "encoding": "lvq8", "build_seconds": 28.7},
+            {"implementation": "faiss", "encoding": "sq8", "build_seconds": 49.3},
         ],
     }
     result_path = tmp_path / "result.json"
@@ -310,10 +351,67 @@ def test_build_time_chart_is_valid_svg(tmp_path: Path) -> None:
     encoded = output.read_text(encoding="utf-8")
     root = ET.fromstring(encoded)
     assert root.tag == "{http://www.w3.org/2000/svg}svg"
-    assert "Persisted IVF-Flat Build Time" in encoded
-    assert "Faiss" in encoded
+    assert "Persisted IVF Build Time" in encoded
+    assert "Relify (LVQ8)" in encoded
+    assert "Faiss (SQ8)" in encoded
     assert "49.30s" in encoded
     assert "10 vCPUs" in encoded
+
+
+def test_merge_results_requires_one_comparable_run_per_implementation() -> None:
+    from benchmarks.tools.merge_results import merge
+
+    def run(implementation: str, encoding: str) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "generated_at_utc": "2026-08-08T00:00:00+00:00",
+            "benchmark_revision": "abc123",
+            "implementation_revision": f"{implementation}-revision",
+            "benchmark": "build",
+            "dataset": {"kind": "gist", "rows": 100, "dimension": 8},
+            "parameters": {
+                "implementation": implementation,
+                "encoding": encoding,
+                "index_root": f"/indexes/{implementation}",
+                "nlist": 4,
+                "threads": 2,
+            },
+            "resources": {"cpus": 2, "memory_limit_bytes": 1024},
+            "software": {
+                "platform": "linux",
+                "machine": "x86_64",
+                "python": "3.12.13",
+                "rustc": "rustc 1.96.0",
+                implementation: "1.0",
+            },
+            "results": [
+                {
+                    "implementation": implementation,
+                    "encoding": encoding,
+                    "build_seconds": 1.0,
+                }
+            ],
+        }
+
+    relify_run = run("relify", "lvq8")
+    faiss_run = run("faiss", "sq8")
+    merged = merge([faiss_run, relify_run])
+    assert [result["implementation"] for result in merged["results"]] == [
+        "relify",
+        "faiss",
+    ]
+    assert merged["parameters"]["encodings"] == {
+        "relify": "lvq8",
+        "faiss": "sq8",
+    }
+    assert merged["implementation_revisions"] == {
+        "relify": "relify-revision",
+        "faiss": "faiss-revision",
+    }
+
+    faiss_run["resources"] = {"cpus": 4, "memory_limit_bytes": 1024}
+    with pytest.raises(ValueError, match="resources"):
+        merge([relify_run, faiss_run])
 
 
 def test_committed_benchmark_charts_match_raw_results(tmp_path: Path) -> None:

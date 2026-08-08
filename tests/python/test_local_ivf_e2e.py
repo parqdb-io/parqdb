@@ -199,6 +199,58 @@ def test_local_build_publish_and_search(tmp_path: Path) -> None:
     assert hits["document_id"].to_pylist() == ["c", "d"]
 
 
+def test_local_lvq_build_and_search(tmp_path: Path) -> None:
+    source = tmp_path / "documents.parquet"
+    write_documents(source)
+    session = relify.connect(tmp_path / "relify-data")
+    documents = register_source(session, source, "documents")
+
+    for encoding, code_size in [("lvq4", 1), ("lvq8", 2)]:
+        name = f"documents_{encoding}"
+        documents.create_index(
+            name,
+            column="embedding",
+            key=["document_id"],
+            config=relify.IVF(nlist=2, encoding=encoding),
+            wait_timeout=WAIT,
+        )
+        snapshot = session.indexes.load(name).metadata["snapshots"][0]
+        assert snapshot["index-schema-version"] == 2
+        assert snapshot["parameters"]["posting_encoding"] == encoding
+        assert pq.read_schema(
+            relation_path(snapshot["index-relations"]["ivf_postings"])
+        ) == pa.schema(
+            [
+                pa.field("key_1", pa.string(), nullable=False),
+                pa.field("offset", pa.float32(), nullable=False),
+                pa.field("scale", pa.float32(), nullable=False),
+                pa.field("code", pa.binary(code_size), nullable=False),
+            ]
+        )
+
+        query = (
+            documents.search([10.0, 0.0], index=name)
+            .nprobes(2)
+            .select(["document_id"])
+            .limit(1)
+        )
+        hits = session.to_arrow(query)
+        assert hits["document_id"].to_pylist() == ["c"]
+        plan = session.explain(query)
+        assert "IvfTopKExec" in plan
+        assert "HashJoinExec" not in plan
+
+        payload_query = (
+            documents.search([10.0, 0.0], index=name)
+            .nprobes(2)
+            .select(["document_id", "title"])
+            .limit(1)
+        )
+        payload = session.to_arrow(payload_query)
+        assert payload["title"].to_pylist() == ["ten"]
+        assert "HashJoinExec" in session.explain(payload_query)
+
+
 def test_index_and_source_catalog_survive_python_process_restart(
     tmp_path: Path,
 ) -> None:
@@ -328,7 +380,7 @@ def test_vectors_can_be_omitted_from_postings(tmp_path: Path) -> None:
         "compact_index",
         column="embedding",
         key=["document_id"],
-        config=relify.IVF(nlist=2, store_vectors=False),
+        config=relify.IVF(nlist=2, encoding="source"),
         wait_timeout=WAIT,
     )
 

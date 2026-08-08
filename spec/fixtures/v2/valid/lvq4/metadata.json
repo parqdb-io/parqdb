@@ -1,0 +1,54 @@
+{
+  "current-snapshot-id": 901,
+  "format-version": 1,
+  "index-uuid": "ee577329-84db-40da-af50-bb10d86e2d2f",
+  "last-sequence-number": 1,
+  "last-updated-ms": 1750000000000,
+  "location": "s3://relify-fixtures/v2/metadata/ee577329-84db-40da-af50-bb10d86e2d2f/",
+  "properties": {
+    "fixture": "ivf-parquet-lvq4-v2"
+  },
+  "snapshot-log": [
+    {
+      "snapshot-id": 901,
+      "timestamp-ms": 1750000000000
+    }
+  ],
+  "snapshots": [
+    {
+      "index-family": "ivf",
+      "index-relations": {
+        "ivf_centroids": {
+          "profile": "parquet",
+          "uri": "s3://relify-fixtures/v2/lvq4/ivf_centroids/"
+        },
+        "ivf_postings": {
+          "profile": "parquet",
+          "uri": "s3://relify-fixtures/v2/lvq4/ivf_postings/"
+        }
+      },
+      "index-schema-version": 2,
+      "metric": "l2_squared",
+      "parameters": {
+        "dimension": "3",
+        "nlist": "2",
+        "ntotal": "3",
+        "posting_encoding": "lvq4"
+      },
+      "sequence-number": 1,
+      "snapshot-id": 901,
+      "source": {
+        "profile": "parquet",
+        "uri": "s3://relify-fixtures/v2/lvq4/source/"
+      },
+      "source-key-fields": [
+        "document_id"
+      ],
+      "summary": {
+        "operation": "create"
+      },
+      "timestamp-ms": 1750000000000,
+      "vector-field": "embedding"
+    }
+  ]
+}

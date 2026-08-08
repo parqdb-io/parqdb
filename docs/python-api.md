@@ -354,18 +354,18 @@ documents.create_index(
     "documents_embedding",
     column="embedding",
     key=["document_id"],
-    config=relify.IVF(nlist=1024, store_vectors=True),
+    config=relify.IVF(nlist=1024, encoding="lvq8"),
     wait_timeout=timedelta(minutes=5),
 )
 ```
 
 The vector column must be a required `list<float32>` with required, finite
 elements of one fixed dimension. Keys may be composite and are copied into the
-postings table without creating an internal row identifier. `store_vectors`
-defaults to `True`; the postings table then stores exact vectors and
-key/vector-only projections can compute `_distance` without joining the source
-table. Set it to `False` for smaller postings that always resolve candidate
-vectors from the source.
+postings table without creating an internal row identifier. `encoding`
+accepts `flat`, `lvq4`, `lvq8`, or `source`. `flat` stores exact vectors, while
+LVQ stores compact per-vector codes and evaluates approximate distance directly
+from the postings table. `source` stores only keys and resolves candidate
+vectors from the source. Omitting `encoding` selects `flat`.
 
 The same table method is implemented by every backend. Local and Spark
 sessions expose `session.default_builder` and use it when `builder` is omitted;
@@ -693,7 +693,7 @@ supports:
 - one SQLite catalog for Parquet definitions and index mappings;
 - the root index namespace in the Python facade;
 - Parquet source and index tables;
-- IVF-Flat with squared L2 distance;
+- `source`, `flat`, `lvq4`, and `lvq8` IVF postings with squared L2 distance;
 - one local Rust builder; and
 - one native DataFusion session for build, query, and relational composition.
 

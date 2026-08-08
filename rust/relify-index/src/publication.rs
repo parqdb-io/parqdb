@@ -53,6 +53,11 @@ pub async fn publish_initial(
     request: InitialIndex<'_>,
 ) -> Result<PublishedIndex> {
     let timestamp_ms = now_ms()?;
+    let IndexArtifacts {
+        format,
+        parameters,
+        index_relations,
+    } = request.build;
     let snapshot = IndexSnapshot {
         snapshot_id: request.snapshot_id,
         sequence_number: 1,
@@ -61,11 +66,11 @@ pub async fn publish_initial(
         source: request.source,
         vector_field: request.vector_field.to_owned(),
         source_key_fields: request.source_key_fields.to_vec(),
-        index_family: "ivf".into(),
-        index_schema_version: 1,
-        metric: "l2_squared".into(),
-        parameters: request.build.parameters,
-        index_relations: request.build.index_relations,
+        index_family: format.family,
+        index_schema_version: format.schema_version,
+        metric: format.metric,
+        parameters,
+        index_relations,
     };
     let metadata = IndexMetadata {
         format_version: 1,
@@ -97,6 +102,11 @@ pub async fn publish_refresh(
     request: RefreshedIndex<'_>,
 ) -> Result<PublishedIndex> {
     let base_snapshot = request.base_metadata.current_snapshot()?;
+    let IndexArtifacts {
+        format,
+        parameters,
+        index_relations,
+    } = request.build;
     let timestamp_ms = now_ms()?.max(request.base_metadata.last_updated_ms);
     let sequence_number = request
         .base_metadata
@@ -111,11 +121,11 @@ pub async fn publish_refresh(
         source: request.source,
         vector_field: base_snapshot.vector_field.clone(),
         source_key_fields: base_snapshot.source_key_fields.clone(),
-        index_family: base_snapshot.index_family.clone(),
-        index_schema_version: base_snapshot.index_schema_version,
-        metric: base_snapshot.metric.clone(),
-        parameters: request.build.parameters,
-        index_relations: request.build.index_relations,
+        index_family: format.family,
+        index_schema_version: format.schema_version,
+        metric: format.metric,
+        parameters,
+        index_relations,
     };
     let mut metadata = request.base_metadata.clone();
     metadata.last_updated_ms = timestamp_ms;

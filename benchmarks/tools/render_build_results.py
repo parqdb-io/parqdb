@@ -16,6 +16,13 @@ COLORS = {"relify": "#0f766e", "faiss": "#f59e0b"}
 LABELS = {"relify": "Relify", "faiss": "Faiss"}
 
 
+def implementation_label(implementation: str, result: dict[str, Any]) -> str:
+    encoding = result.get("encoding")
+    if not encoding:
+        return LABELS[implementation]
+    return f"{LABELS[implementation]} ({str(encoding).upper()})"
+
+
 def results_by_implementation(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {
         result["implementation"]: result
@@ -66,9 +73,13 @@ def render(run: dict[str, Any]) -> str:
     excludes_preparation = all(
         "preparation_seconds" in result for result in results.values()
     )
+    legacy_flat = all("encoding" not in result for result in results.values())
+    title = (
+        "Persisted IVF-Flat Build Time" if legacy_flat else "Persisted IVF Build Time"
+    )
     if excludes_preparation:
         description = (
-            "Build time from centroid training through persisted IVF-Flat indexes. "
+            f"Build time from centroid training through persisted {title.removeprefix('Persisted ').removesuffix(' Build Time')} indexes. "
             "Lower is better."
         )
         boundary = (
@@ -78,7 +89,7 @@ def render(run: dict[str, Any]) -> str:
     else:
         description = (
             "Embedded build time from one shared Parquet source through persisted "
-            "IVF-Flat indexes. Lower is better."
+            f"{'IVF-Flat' if legacy_flat else 'IVF'} indexes. Lower is better."
         )
         boundary = (
             "Timers start from the shared Parquet source and stop after index "
@@ -89,11 +100,11 @@ def render(run: dict[str, Any]) -> str:
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{HEIGHT}" '
         f'viewBox="0 0 {WIDTH} {HEIGHT}" role="img" '
         'aria-labelledby="title description">',
-        '<title id="title">Persisted IVF-Flat Build Time</title>',
+        f'<title id="title">{title}</title>',
         f'<desc id="description">{description}</desc>',
         f'<rect width="{WIDTH}" height="{HEIGHT}" rx="24" fill="#f8fafc"/>',
         '<text x="58" y="58" font-size="30" font-weight="700" fill="#0f172a">'
-        "Persisted IVF-Flat Build Time</text>",
+        f"{title}</text>",
         '<text x="58" y="88" font-size="15" fill="#475569">'
         f"Same uncompressed Parquet source · nlist={parameters['nlist']:,} · "
         "lower is better</text>",
@@ -118,7 +129,8 @@ def render(run: dict[str, Any]) -> str:
         elements.extend(
             [
                 f'<text x="190" y="{y + 6}" text-anchor="end" font-size="17" '
-                f'font-weight="700" fill="#334155">{LABELS[implementation]}</text>',
+                f'font-weight="700" fill="#334155">'
+                f"{implementation_label(implementation, result)}</text>",
                 f'<rect x="{plot_left}" y="{y - bar_height / 2:.1f}" '
                 f'width="{width:.1f}" height="{bar_height}" rx="8" '
                 f'fill="{COLORS[implementation]}"/>',
