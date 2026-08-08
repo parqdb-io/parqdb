@@ -693,7 +693,7 @@ supports:
 - one SQLite catalog for Parquet definitions and index mappings;
 - the root index namespace in the Python facade;
 - Parquet source and index tables;
-- IVF-Flat with squared L2 distance;
+- `source`, `flat`, `lvq4`, and `lvq8` IVF postings with squared L2 distance;
 - one local Rust builder; and
 - one native DataFusion session for build, query, and relational composition.
 

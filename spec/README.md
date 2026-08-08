@@ -150,3 +150,5 @@ Non-normative test vectors:
 
 - [`fixtures/v1/`](fixtures/v1/): valid and invalid metadata, Parquet tables,
   and ordered IVF query results for format version 1.
+- [`fixtures/v2/`](fixtures/v2/): LVQ4 and LVQ8 metadata, Parquet tables,
+  encoded bytes, and ordered IVF query results for schema version 2.

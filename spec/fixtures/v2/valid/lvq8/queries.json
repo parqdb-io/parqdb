@@ -1,0 +1,27 @@
+[
+  {
+    "expected": [
+      {
+        "_distance": 1.2519646289888504,
+        "document_id": "a"
+      },
+      {
+        "_distance": 12.0,
+        "document_id": "b"
+      }
+    ],
+    "expected-code-hex": "0080ff",
+    "filter": null,
+    "k": 2,
+    "name": "one-cluster",
+    "nprobe": 1,
+    "projection": [
+      "document_id"
+    ],
+    "query-vector": [
+      0.0,
+      0.0,
+      0.0
+    ]
+  }
+]

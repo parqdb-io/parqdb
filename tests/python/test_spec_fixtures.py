@@ -14,6 +14,7 @@ VALID = FIXTURES / "valid"
 COMPOSITE = VALID / "composite_no_vectors"
 INVALID = FIXTURES / "invalid"
 INVALID_CASES = json.loads((INVALID / "manifest.json").read_text(encoding="utf-8"))
+V2_VALID = Path(__file__).parents[2] / "spec" / "fixtures" / "v2" / "valid"
 
 
 def squared_l2(left: list[float], right: list[float]) -> float:
@@ -85,6 +86,46 @@ def reference_search(
     return sorted(candidates, key=lambda row: row["_distance"])[: case["k"]]
 
 
+def reference_search_v2(
+    case: dict[str, Any],
+    directory: Path,
+) -> list[dict[str, object]]:
+    metadata = json.loads((directory / "metadata.json").read_text(encoding="utf-8"))
+    snapshot = metadata["snapshots"][0]
+    encoding = snapshot["parameters"]["posting_encoding"]
+    bits = 4 if encoding == "lvq4" else 8
+    dimension = int(snapshot["parameters"]["dimension"])
+    centroids = pq.read_table(directory / "ivf_centroids.parquet").to_pylist()
+    postings = pq.read_table(
+        directory / "ivf_postings", partitioning="hive"
+    ).to_pylist()
+    query = case["query-vector"]
+    selected = {
+        row["cid"]
+        for row in sorted(
+            centroids,
+            key=lambda row: (squared_l2(query, row["centroid"]), row["cid"]),
+        )[: case["nprobe"]]
+    }
+
+    candidates = []
+    for posting in postings:
+        if posting["cid"] not in selected:
+            continue
+        codes = []
+        for index in range(dimension):
+            byte = posting["code"][index if bits == 8 else index // 2]
+            codes.append(byte if bits == 8 else (byte >> (4 * (index % 2))) & 0x0F)
+        vector = [posting["offset"] + posting["scale"] * code for code in codes]
+        candidates.append(
+            {
+                "document_id": posting["key_1"],
+                "_distance": squared_l2(query, vector),
+            }
+        )
+    return sorted(candidates, key=lambda row: row["_distance"])[: case["k"]]
+
+
 def register_fixture(session: relify.Session, fixture: Path, name: str) -> None:
     destination = session.root / fixture.name
     shutil.copyfile(fixture, destination)
@@ -112,6 +153,20 @@ def test_composite_metadata_fixture_is_accepted_by_the_native_reader(
     snapshot = entry.metadata["snapshots"][0]
     assert snapshot["source-key-fields"] == ("tenant_id", "document_id")
     assert snapshot["parameters"]["store_vectors"] == "false"
+
+
+@pytest.mark.parametrize("encoding", ["lvq4", "lvq8"])
+def test_v2_metadata_fixtures_are_accepted_by_the_native_reader(
+    tmp_path: Path,
+    encoding: str,
+) -> None:
+    session = relify.connect(tmp_path / "relify-data")
+    register_fixture(session, V2_VALID / encoding / "metadata.json", encoding)
+
+    entry = session.indexes.load(encoding)
+    snapshot = entry.metadata["snapshots"][0]
+    assert snapshot["index-schema-version"] == 2
+    assert snapshot["parameters"]["posting_encoding"] == encoding
 
 
 @pytest.mark.parametrize(
@@ -144,3 +199,29 @@ def test_query_fixtures_are_internally_consistent() -> None:
 
         for case in cases:
             assert_query_result(reference_search(case, directory), case["expected"])
+
+
+@pytest.mark.parametrize(
+    ("encoding", "expected_code"),
+    [("lvq4", "800f"), ("lvq8", "0080ff")],
+)
+def test_v2_query_fixtures_are_internally_consistent(
+    encoding: str,
+    expected_code: str,
+) -> None:
+    directory = V2_VALID / encoding
+    cases = json.loads((directory / "queries.json").read_text(encoding="utf-8"))
+    postings = pq.read_table(
+        directory / "ivf_postings", partitioning="hive"
+    ).to_pylist()
+    first_code = next(row["code"] for row in postings if row["key_1"] == "a")
+    assert first_code.hex() == expected_code
+
+    for case in cases:
+        actual = reference_search_v2(case, directory)
+        assert [row["document_id"] for row in actual] == [
+            row["document_id"] for row in case["expected"]
+        ]
+        assert [row["_distance"] for row in actual] == pytest.approx(
+            [row["_distance"] for row in case["expected"]]
+        )
