@@ -65,8 +65,8 @@ reads and decodes the fragment from the published relation. The query result
 does not depend on whether any fragment was cached.
 
 The cache has a session-level byte capacity. A zero capacity disables decoded
-data caching without changing the scan plan's semantics. The exact public
-configuration name and default are left unresolved by this RFC.
+data caching without changing the scan plan's semantics. The default capacity
+is left unresolved by this RFC.
 
 Read-through loading is automatic. The existing `cache_index()` and
 `is_index_cached()` methods describe whole-index residency and do not fit a
@@ -74,6 +74,131 @@ partially resident cache; this RFC removes them. An explicit clear operation
 and cache statistics replace `uncache_index()` and the boolean status method.
 Workload-directed prewarming can be designed separately if cold-query latency
 requires it.
+
+## Interfaces
+
+### Session API
+
+Cache capacity is a Relify session variable rather than a `connect()` argument:
+
+```python
+session.set("relify.index_cache_capacity", "4GiB")
+```
+
+The value accepts integer bytes or the binary suffixes `KiB`, `MiB`, and
+`GiB`. `Session.set()` applies the change eagerly to the current session.
+
+The same variable is visible to SQL:
+
+```sql
+SET relify.index_cache_capacity = '4GiB';
+```
+
+`0` disables admission and releases unpinned entries. Reducing the capacity
+removes least-recently-used entries from lookup immediately. Memory pinned by
+running queries is released when those queries finish. Invalid sizes fail
+without changing the current capacity.
+
+The session exposes two operational methods:
+
+```python
+stats = session.index_cache_stats()
+session.clear_index_cache()                         # all indexes
+session.clear_index_cache("documents_embedding")   # one logical index
+```
+
+`clear_index_cache()` removes entries from future lookup but does not cancel or
+alter running queries. Clearing an index covers all of its snapshot identities
+still present in the session cache.
+
+`index_cache_stats()` returns an immutable `IndexCacheStats` value:
+
+```python
+@dataclass(frozen=True)
+class IndexCacheStats:
+    capacity_bytes: int
+    resident_bytes: int
+    retired_bytes: int
+    entry_count: int
+    hit_count: int
+    hit_bytes: int
+    miss_count: int
+    miss_bytes: int
+    load_count: int
+    load_wait_count: int
+    admission_count: int
+    eviction_count: int
+    oversized_bypass_count: int
+    capacity_bypass_count: int
+```
+
+`resident_bytes` includes entries removed from lookup but still pinned by a
+running query; `retired_bytes` is the subset no longer available for lookup.
+`entry_count` counts entries still available for lookup. Counters are
+cumulative for the session and are not reset by a clear operation. Per-query
+hit, miss, read, and decode metrics remain available through
+`Session.analyze(query)`.
+
+The existing `IndexCacheInfo`, `cache_index()`, `is_index_cached()`, and
+`uncache_index()` APIs are removed. Relify has not published a stable release
+that promises these whole-index semantics.
+
+### Rust Cache Boundary
+
+The cache implementation is private to `relify-local`; it is not a backend
+contract and does not belong in `relify-core`. Its conceptual interface is:
+
+```rust
+#[derive(Clone, Eq, Hash, PartialEq)]
+struct IndexFragmentKey {
+    relation: ExactRelationIdentity,
+    object: ObjectIdentity,
+    row_group: usize,
+    projection: ProjectionIdentity,
+}
+
+struct DecodedIndexFragment {
+    schema: SchemaRef,
+    batches: Arc<[RecordBatch]>,
+    retained_bytes: usize,
+}
+
+impl IndexDataCache {
+    async fn get_or_load<F, Fut>(
+        &self,
+        key: IndexFragmentKey,
+        load: F,
+    ) -> Result<Arc<DecodedIndexFragment>>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<DecodedIndexFragment>>;
+
+    fn set_capacity(&self, bytes: usize);
+    fn clear(&self, scope: CacheScope);
+    fn stats(&self) -> IndexCacheStats;
+}
+```
+
+These types describe ownership, not a public Rust API commitment. The cache
+owns admission, single-flight coordination, accounting, and eviction. The load
+closure owns storage access and decoding. This keeps the cache independent of
+Parquet, Iceberg, DataFusion plans, and specific index families.
+
+### DataFusion Scan Boundary
+
+A cache-aware index relation provider owns the DataFusion integration. It:
+
+1. receives an exact relation identity and the normal DataFusion scan inputs;
+2. delegates file listing, metadata, and pruning to the existing relation
+   provider;
+3. converts surviving Parquet row groups and projections into fragment keys;
+4. supplies a standard DataFusion/Arrow row-group load closure on a miss; and
+5. returns ordinary Arrow batches to the downstream physical plan.
+
+The provider is generic across Relify index relations. IVF planning may select
+cluster files before calling it, but the provider and `IndexDataCache` have no
+`cid`, distance, quantization, or Top-K API. Future index families reuse this
+boundary without adding cache-specific branches to their search operators.
 
 ## Reference Design
 
@@ -262,7 +387,7 @@ Session-level cache statistics must include:
 - capacity, live bytes, and entry count;
 - hit, miss, and single-flight wait counts;
 - hit and miss bytes;
-- admitted, evicted, oversized, and capacity-bypassed entries;
+- admitted, evicted, oversized-bypassed, and capacity-bypassed entries;
 - storage-read and decode time for misses.
 
 The cache-aware scan must expose per-plan hit and miss metrics through
@@ -372,8 +497,8 @@ boundary around DataFusion rather than importing an engine-specific reader.
 The following decisions require review or prototype evidence before this RFC
 is accepted:
 
-1. What public session option sets cache capacity, and should the default be
-   disabled or a fixed conservative size?
+1. Should `relify.index_cache_capacity` default to disabled or a fixed
+   conservative size?
 2. Can the DataFusion adapter request individual complete row groups without a
    material planning or cold-query overhead?
 3. Should the first key cache an ordered multi-column projection, or should it
