@@ -34,7 +34,7 @@ use crate::ivf::borrow_source_vectors;
 use crate::ivf::source_key_arrays;
 use crate::parquet::{ParquetStore, ParquetWriterOptions, child_location};
 use crate::progress::BuildPhase;
-use crate::{Error, IndexArtifacts, IvfConfig, LocalBuildProgress, Result};
+use crate::{Error, IndexArtifacts, IndexFormat, IvfConfig, LocalBuildProgress, Result};
 use relify_kmeans::{
     KMeansOptions, ReservoirSampler, assign_batch_to_centroids, fit_lloyd_kmeans_with_progress,
 };
@@ -248,6 +248,11 @@ pub(crate) async fn build_ivf_datafusion(
         progress,
     } = context;
     validate_request(vector_field, source_key_fields, config.nlist)?;
+    let store_vectors = config.posting_encoding.v1_store_vectors().ok_or_else(|| {
+        Error::InvalidArgument(
+            "the local builder does not yet support quantized IVF postings".into(),
+        )
+    })?;
     writer_options.validate()?;
 
     let training_source = source.clone();
@@ -283,7 +288,7 @@ pub(crate) async fn build_ivf_datafusion(
             source_key_fields,
             source_schema: training_source.schema().inner(),
             trained: &trained,
-            store_vectors: config.store_vectors,
+            store_vectors,
             output_location: &postings_location,
             parallelism: parallel.thread_count(),
         },
@@ -292,11 +297,12 @@ pub(crate) async fn build_ivf_datafusion(
     )
     .await?;
     Ok(IndexArtifacts {
+        format: IndexFormat::ivf_v1(),
         parameters: BTreeMap::from([
             ("dimension".into(), trained.dimension.to_string()),
             ("nlist".into(), trained.nlist.to_string()),
             ("ntotal".into(), trained.ntotal.to_string()),
-            ("store_vectors".into(), config.store_vectors.to_string()),
+            ("store_vectors".into(), store_vectors.to_string()),
         ]),
         index_relations: BTreeMap::from([
             (
@@ -676,7 +682,10 @@ pub(crate) async fn build_ivf_with_storage_options(
         vector_field,
         source_key_fields,
         config.nlist,
-        config.store_vectors,
+        config
+            .posting_encoding
+            .v1_store_vectors()
+            .expect("test IVF config uses a v1 posting encoding"),
     )?;
     let output_root = Url::from_directory_path(output_root)
         .map_err(|()| Error::InvalidArgument("output path is not absolute".into()))?;
@@ -711,6 +720,7 @@ pub(crate) async fn build_ivf_with_storage_options(
         ),
     ]);
     Ok(IndexArtifacts {
+        format: IndexFormat::ivf_v1(),
         parameters: BTreeMap::from([
             ("dimension".into(), tables.dimension.to_string()),
             ("nlist".into(), tables.nlist.to_string()),

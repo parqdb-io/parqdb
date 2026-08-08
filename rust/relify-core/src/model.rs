@@ -1,24 +1,70 @@
 use std::collections::BTreeMap;
 
 use relify_catalog::IndexIdentifier;
-use relify_meta::{IndexMetadata, RelationReference};
+use relify_meta::{IndexMetadata, PostingEncoding, RelationReference};
+
+/// Portable identity of one index representation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexFormat {
+    /// Index-family identifier.
+    pub family: String,
+    /// Family-defined schema version.
+    pub schema_version: i32,
+    /// Distance metric evaluated by the index.
+    pub metric: String,
+}
+
+impl IndexFormat {
+    /// Returns the legacy IVF format used by current builders.
+    #[must_use]
+    pub fn ivf_v1() -> Self {
+        Self {
+            family: "ivf".into(),
+            schema_version: 1,
+            metric: "l2_squared".into(),
+        }
+    }
+
+    /// Returns IVF schema version 2.
+    #[must_use]
+    pub fn ivf_v2() -> Self {
+        Self {
+            family: "ivf".into(),
+            schema_version: 2,
+            metric: "l2_squared".into(),
+        }
+    }
+}
 
 /// Logical IVF construction options shared by backend implementations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IvfConfig {
     /// Number of IVF clusters.
     pub nlist: usize,
-    /// Whether postings contain exact source vectors.
-    pub store_vectors: bool,
+    /// Vector representation stored in IVF postings.
+    pub posting_encoding: PostingEncoding,
 }
 
 impl IvfConfig {
-    /// Creates an IVF configuration.
+    /// Creates a legacy IVF v1 configuration.
     #[must_use]
     pub const fn new(nlist: usize, store_vectors: bool) -> Self {
         Self {
             nlist,
-            store_vectors,
+            posting_encoding: if store_vectors {
+                PostingEncoding::Flat
+            } else {
+                PostingEncoding::Source
+            },
+        }
+    }
+
+    /// Creates an IVF configuration with an explicit postings encoding.
+    #[must_use]
+    pub const fn with_encoding(nlist: usize, posting_encoding: PostingEncoding) -> Self {
+        Self {
+            nlist,
+            posting_encoding,
         }
     }
 }
@@ -49,6 +95,8 @@ pub struct SearchRequest {
 /// Immutable index relations and family parameters produced by a backend builder.
 #[derive(Debug, Clone)]
 pub struct IndexArtifacts {
+    /// Portable family, schema version, and metric produced by the builder.
+    pub format: IndexFormat,
     /// Family-defined canonical parameter values.
     pub parameters: BTreeMap<String, String>,
     /// Relation roles and their exact portable references.
@@ -64,4 +112,34 @@ pub struct PublishedIndex {
     pub metadata_location: String,
     /// Validated metadata stored at `metadata_location`.
     pub metadata: IndexMetadata,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_ivf_configuration_maps_to_v1_encodings() {
+        assert_eq!(
+            IvfConfig::new(16, false),
+            IvfConfig::with_encoding(16, PostingEncoding::Source)
+        );
+        assert_eq!(
+            IvfConfig::new(16, true),
+            IvfConfig::with_encoding(16, PostingEncoding::Flat)
+        );
+    }
+
+    #[test]
+    fn posting_encodings_have_canonical_metadata_names() {
+        for (encoding, name, legacy) in [
+            (PostingEncoding::Source, "source", Some(false)),
+            (PostingEncoding::Flat, "flat", Some(true)),
+            (PostingEncoding::Lvq4, "lvq4", None),
+            (PostingEncoding::Lvq8, "lvq8", None),
+        ] {
+            assert_eq!(encoding.as_str(), name);
+            assert_eq!(encoding.v1_store_vectors(), legacy);
+        }
+    }
 }

@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::error::invalid;
 use crate::serde_helpers::{deserialize_unique_map, lowercase_uuid};
-use crate::{Error, RelationReference, Result};
+use crate::{Error, IndexFamilyRegistry, RelationReference, Result};
 
 /// Entry recording when an index snapshot became current.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,6 +56,11 @@ pub struct IndexSnapshot {
 impl IndexSnapshot {
     /// Validates the snapshot and its family-defined fields.
     pub fn validate(&self) -> Result<()> {
+        self.validate_with_registry(&IndexFamilyRegistry::default())
+    }
+
+    /// Validates the snapshot with an explicit set of index-family contracts.
+    pub fn validate_with_registry(&self, registry: &IndexFamilyRegistry) -> Result<()> {
         if self.snapshot_id <= 0 || self.sequence_number <= 0 || self.timestamp_ms < 0 {
             return invalid(
                 "snapshot IDs and sequence numbers must be positive and timestamps must be non-negative",
@@ -78,46 +83,10 @@ impl IndexSnapshot {
         {
             return invalid("map keys must be non-empty");
         }
-        if self.index_family != "ivf"
-            || self.index_schema_version != 1
-            || self.metric != "l2_squared"
-        {
-            return invalid("only IVF schema version 1 with l2_squared is supported");
-        }
-
-        let expected_parameters = ["dimension", "nlist", "ntotal", "store_vectors"];
-        if self.parameters.len() != expected_parameters.len()
-            || self
-                .parameters
-                .keys()
-                .any(|key| !expected_parameters.contains(&key.as_str()))
-        {
-            return invalid(
-                "IVF parameters must contain exactly dimension, nlist, ntotal, and store_vectors",
-            );
-        }
-        parse_positive_parameter(&self.parameters, "dimension", i32::MAX as u64)?;
-        let nlist = parse_positive_parameter(&self.parameters, "nlist", i32::MAX as u64)?;
-        let ntotal = parse_positive_parameter(&self.parameters, "ntotal", i64::MAX as u64)?;
-        parse_boolean_parameter(&self.parameters, "store_vectors")?;
-        if nlist > ntotal {
-            return invalid("nlist must not exceed ntotal");
-        }
-
-        let expected_relations = ["ivf_centroids", "ivf_postings"];
-        if !self.index_relations.contains_key(expected_relations[0])
-            || !self.index_relations.contains_key(expected_relations[1])
-            || self
-                .index_relations
-                .keys()
-                .any(|role| !expected_relations.contains(&role.as_str()))
-        {
-            return invalid("invalid IVF index table roles");
-        }
         for reference in self.index_relations.values() {
             reference.validate()?;
         }
-        Ok(())
+        registry.validate(self)
     }
 
     /// Reads a positive family parameter as `usize`.
@@ -166,14 +135,27 @@ pub struct IndexMetadata {
 impl IndexMetadata {
     /// Parses and validates one JSON metadata document.
     pub fn from_json_slice(bytes: &[u8]) -> Result<Self> {
+        Self::from_json_slice_with_registry(bytes, &IndexFamilyRegistry::default())
+    }
+
+    /// Parses and validates JSON with an explicit set of index-family contracts.
+    pub fn from_json_slice_with_registry(
+        bytes: &[u8],
+        registry: &IndexFamilyRegistry,
+    ) -> Result<Self> {
         let metadata: Self =
             serde_json::from_slice(bytes).map_err(|error| Error(error.to_string()))?;
-        metadata.validate()?;
+        metadata.validate_with_registry(registry)?;
         Ok(metadata)
     }
 
     /// Validates this metadata document independently.
     pub fn validate(&self) -> Result<()> {
+        self.validate_with_registry(&IndexFamilyRegistry::default())
+    }
+
+    /// Validates this document with an explicit set of index-family contracts.
+    pub fn validate_with_registry(&self, registry: &IndexFamilyRegistry) -> Result<()> {
         if self.format_version != 1 {
             return invalid(format!(
                 "unsupported format-version {}",
@@ -197,7 +179,7 @@ impl IndexMetadata {
         let mut sequence_numbers = HashSet::new();
         let identity = SnapshotIdentity::from_snapshot(&self.snapshots[0]);
         for snapshot in &self.snapshots {
-            snapshot.validate()?;
+            snapshot.validate_with_registry(registry)?;
             if SnapshotIdentity::from_snapshot(snapshot) != identity {
                 return invalid("logical identity fields must remain equal across snapshots");
             }
@@ -233,8 +215,17 @@ impl IndexMetadata {
 
     /// Validates this document as a legal update from `base`.
     pub fn validate_update_from(&self, base: &Self) -> Result<()> {
-        base.validate()?;
-        self.validate()?;
+        self.validate_update_from_with_registry(base, &IndexFamilyRegistry::default())
+    }
+
+    /// Validates an update with an explicit set of index-family contracts.
+    pub fn validate_update_from_with_registry(
+        &self,
+        base: &Self,
+        registry: &IndexFamilyRegistry,
+    ) -> Result<()> {
+        base.validate_with_registry(registry)?;
+        self.validate_with_registry(registry)?;
         if self.index_uuid != base.index_uuid {
             return invalid("index-uuid must remain unchanged");
         }
@@ -372,7 +363,7 @@ fn validate_metadata_location(location: &str) -> Result<()> {
     Ok(())
 }
 
-fn parse_positive_parameter(
+pub(crate) fn parse_positive_parameter(
     parameters: &BTreeMap<String, String>,
     name: &str,
     maximum: u64,
@@ -395,7 +386,10 @@ fn parse_positive_parameter(
     Ok(parsed)
 }
 
-fn parse_boolean_parameter(parameters: &BTreeMap<String, String>, name: &str) -> Result<bool> {
+pub(crate) fn parse_boolean_parameter(
+    parameters: &BTreeMap<String, String>,
+    name: &str,
+) -> Result<bool> {
     match parameters.get(name).map(String::as_str) {
         Some("true") => Ok(true),
         Some("false") => Ok(false),

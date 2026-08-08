@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use pyo3::prelude::*;
 use relify_catalog::{IndexIdentifier, SqliteCatalog};
-use relify_core::IndexArtifacts;
+use relify_core::{IndexArtifacts, IndexFormat};
 use relify_index::{
     IndexRepository, InitialIndex, MetadataStore, new_snapshot_id, publish_initial,
 };
@@ -190,6 +190,7 @@ impl PyNativeIndexRepository {
                     source_key_fields: &source_key_fields,
                     builder: &builder,
                     build: IndexArtifacts {
+                        format: IndexFormat::ivf_v1(),
                         parameters,
                         index_relations,
                     },

@@ -143,6 +143,7 @@ Relation profiles:
 IVF:
 
 - [`ivf/index-schema.md`](ivf/index-schema.md)
+- [`ivf/index-schema-v2.md`](ivf/index-schema-v2.md)
 - [`ivf/query.md`](ivf/query.md)
 
 Non-normative test vectors:

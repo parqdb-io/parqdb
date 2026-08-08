@@ -1,8 +1,12 @@
 //! Integration tests for Relify metadata validation.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
-use relify_meta::{IndexMetadata, IndexSnapshot, RelationReference, SnapshotLogEntry};
+use relify_meta::{
+    Error, IndexFamily, IndexFamilyRegistry, IndexMetadata, IndexSnapshot, RelationReference,
+    SnapshotLogEntry,
+};
 use uuid::Uuid;
 
 fn parquet(uri: &str) -> RelationReference {
@@ -101,6 +105,91 @@ fn accepts_both_vector_storage_modes() {
             value == "true"
         );
     }
+}
+
+#[test]
+fn accepts_ivf_v2_posting_encodings() {
+    for encoding in ["source", "flat", "lvq4", "lvq8"] {
+        let mut metadata = valid_metadata();
+        let snapshot = &mut metadata.snapshots[0];
+        snapshot.index_schema_version = 2;
+        snapshot.parameters.remove("store_vectors");
+        snapshot
+            .parameters
+            .insert("posting_encoding".into(), encoding.into());
+
+        metadata.validate().unwrap();
+    }
+}
+
+struct TestFamily;
+
+impl IndexFamily for TestFamily {
+    fn name(&self) -> &'static str {
+        "test_family"
+    }
+
+    fn validate(&self, snapshot: &IndexSnapshot) -> relify_meta::Result<()> {
+        if snapshot.index_schema_version == 7 && snapshot.metric == "test_metric" {
+            Ok(())
+        } else {
+            Err(Error::new("invalid test-family snapshot"))
+        }
+    }
+}
+
+#[test]
+fn validates_registered_index_family_without_changing_metadata_core() {
+    let mut metadata = valid_metadata();
+    metadata.snapshots[0].index_family = "test_family".into();
+    metadata.snapshots[0].index_schema_version = 7;
+    metadata.snapshots[0].metric = "test_metric".into();
+
+    assert!(metadata.validate().is_err());
+
+    let mut registry = IndexFamilyRegistry::new();
+    registry.register(Arc::new(TestFamily)).unwrap();
+    metadata.validate_with_registry(&registry).unwrap();
+
+    let json = serde_json::to_vec(&metadata).unwrap();
+    assert_eq!(
+        IndexMetadata::from_json_slice_with_registry(&json, &registry).unwrap(),
+        metadata
+    );
+}
+
+#[test]
+fn rejects_duplicate_and_noncanonical_family_registrations() {
+    struct InvalidFamily;
+
+    impl IndexFamily for InvalidFamily {
+        fn name(&self) -> &'static str {
+            "Invalid-Family"
+        }
+
+        fn validate(&self, _snapshot: &IndexSnapshot) -> relify_meta::Result<()> {
+            Ok(())
+        }
+    }
+
+    let mut registry = IndexFamilyRegistry::new();
+    registry.register(Arc::new(TestFamily)).unwrap();
+    assert!(registry.register(Arc::new(TestFamily)).is_err());
+    assert!(registry.register(Arc::new(InvalidFamily)).is_err());
+}
+
+#[test]
+fn rejects_parameters_from_another_ivf_schema_version() {
+    let mut metadata = valid_metadata();
+    metadata.snapshots[0].index_schema_version = 2;
+
+    assert!(metadata.validate().is_err());
+
+    metadata.snapshots[0].parameters.remove("store_vectors");
+    metadata.snapshots[0]
+        .parameters
+        .insert("posting_encoding".into(), "unknown".into());
+    assert!(metadata.validate().is_err());
 }
 
 #[test]

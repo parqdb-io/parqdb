@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use relify_catalog::{IndexIdentifier, SqliteCatalog};
-use relify_core::IndexArtifacts;
+use relify_core::{IndexArtifacts, IndexFormat};
 use relify_meta::{IndexMetadata, IndexSnapshot, RelationReference, SnapshotLogEntry};
 use relify_storage::{StorageRegistry, Warehouse};
 use tempfile::TempDir;
@@ -30,6 +30,7 @@ fn source(uri: &str) -> RelationReference {
 
 fn artifacts(uri: &str, nlist: usize) -> IndexArtifacts {
     IndexArtifacts {
+        format: IndexFormat::ivf_v1(),
         parameters: BTreeMap::from([
             ("dimension".into(), "2".into()),
             ("nlist".into(), nlist.to_string()),
@@ -167,6 +168,40 @@ async fn repository_loads_discovers_and_selects_published_indexes() {
             .snapshot_id,
         snapshot_id
     );
+}
+
+#[tokio::test]
+async fn publication_uses_the_builder_format_descriptor() {
+    let temporary = TempDir::new().unwrap();
+    let repository = repository(&temporary);
+    let mut build = artifacts("file:///indexes/v2", 2);
+    build.format = IndexFormat::ivf_v2();
+    build.parameters.remove("store_vectors");
+    build
+        .parameters
+        .insert("posting_encoding".into(), "lvq8".into());
+
+    let published = publish_initial(
+        repository.catalog(),
+        repository.metadata_store(),
+        InitialIndex {
+            identifier: IndexIdentifier::root("documents_embedding_v2").unwrap(),
+            index_uuid: Uuid::new_v4(),
+            snapshot_id: new_snapshot_id(),
+            source: source("file:///data/documents.parquet"),
+            vector_field: "embedding",
+            source_key_fields: &["document_id".into()],
+            builder: "test",
+            build,
+        },
+    )
+    .await
+    .unwrap();
+
+    let snapshot = published.metadata.current_snapshot().unwrap();
+    assert_eq!(snapshot.index_family, "ivf");
+    assert_eq!(snapshot.index_schema_version, 2);
+    assert_eq!(snapshot.parameters["posting_encoding"], "lvq8");
 }
 
 #[tokio::test]
