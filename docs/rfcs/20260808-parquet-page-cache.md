@@ -24,7 +24,7 @@ not depend on which data is resident.
 | Where is the cache integrated? | At the Page-provider boundary: lookup before Page-body I/O, admission after validation and decompression, and output before definition-level and value decoding. |
 | How is pruning preserved? | File, row-group, and column pruning determine which column chunks are opened before page lookup. |
 | How are correctness and concurrency handled? | StarRocks-compatible file identity, per-page single-flight loading, atomic admission, and reference-counted page buffers. |
-| How is memory controlled? | A session-owned byte budget, allocation-lifetime accounting, oversized-page bypass, and byte-weighted LRU eviction. |
+| How is memory controlled? | A session-owned budget that defaults to 20% of the machine memory limit, allocation-lifetime accounting, oversized-page bypass, and byte-weighted LRU eviction. |
 
 `DecompressedParquetPageCache` is a Parquet reader cache, not an Arrow column
 cache or the operating system's file cache. Arrow arrays created by a query may
@@ -44,7 +44,7 @@ It also does not add:
 - a cache shared by multiple processes;
 - a local-disk cache;
 - a replacement Parquet decoder;
-- automatic cache sizing from machine memory; or
+- workload-driven automatic cache sizing; or
 - a cache for non-Parquet formats.
 
 ## Architecture
@@ -319,9 +319,11 @@ scans evict useful hot Pages.
 
 ## 7. Interfaces and Metrics
 
-Capacity is a session variable:
+Capacity is a session variable. It accepts either a percentage of the machine
+memory limit or an absolute byte size:
 
 ```python
+session.set("relify.parquet_page_cache_capacity", "20%")
 session.set("relify.parquet_page_cache_capacity", "4GiB")
 ```
 
@@ -331,7 +333,9 @@ The same variable is available through SQL:
 SET relify.parquet_page_cache_capacity = '4GiB';
 ```
 
-`0` disables admission and retires resident entries. Operational methods are:
+The default is `20%`. The percentage is resolved from the machine memory limit
+when the session creates its cache. `0` disables admission and retires resident
+entries. Operational methods are:
 
 ```python
 stats = session.parquet_page_cache_stats()
@@ -432,10 +436,9 @@ Relevant implementations:
    without copying the arrow-rs decoder?
 2. What Page size best balances I/O granularity, decompression, View metadata,
    and cache admission for LVQ codes?
-3. Should the default capacity be zero or a conservative fixed size?
-4. Is byte-weighted LRU sufficient for IVF access patterns, or is admission
+3. Is byte-weighted LRU sufficient for IVF access patterns, or is admission
    control required initially?
-5. Should Iceberg enter the first implementation or follow the local Parquet
+4. Should Iceberg enter the first implementation or follow the local Parquet
    prototype?
 
 ## Future Work
