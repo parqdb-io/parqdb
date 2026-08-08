@@ -1,8 +1,7 @@
 <div align="center">
   <img src="https://raw.githubusercontent.com/petrizhang/relify/main/assets/relify-header.svg" alt="Relify" width="760">
   <p>
-    <strong>Open vector indexes for the SQL engines you already use.</strong><br>
-    <sub>Lightweight vector index extension for the open lakehouse stack.</sub>
+    <strong>Open vector indexes for the SQL engines you already use.</strong>
   </p>
   <p>
     <a href="https://pypi.org/project/relify/"><img alt="PyPI" src="https://img.shields.io/pypi/v/relify.svg"></a>
