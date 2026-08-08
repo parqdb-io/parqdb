@@ -294,7 +294,7 @@ impl ScalarUDFImpl for LvqSquaredL2 {
         let view = LvqBatchView::try_new(
             self.bits,
             dimension,
-            codes.value_data(),
+            lvq_code_values(codes)?,
             offsets.values(),
             scales.values(),
         )
@@ -307,6 +307,17 @@ impl ScalarUDFImpl for LvqSquaredL2 {
             distances,
         ))))
     }
+}
+
+fn lvq_code_values(codes: &FixedSizeBinaryArray) -> datafusion::common::Result<&[u8]> {
+    let start = usize::try_from(codes.value_offset(0))
+        .map_err(|_| DataFusionError::Execution("invalid LVQ code offset".into()))?;
+    let end = usize::try_from(codes.value_offset(codes.len()))
+        .map_err(|_| DataFusionError::Execution("invalid LVQ code offset".into()))?;
+    codes
+        .value_data()
+        .get(start..end)
+        .ok_or_else(|| DataFusionError::Execution("invalid LVQ code buffer".into()))
 }
 
 fn is_float_vector_type(data_type: &DataType) -> bool {

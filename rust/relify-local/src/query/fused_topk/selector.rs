@@ -19,6 +19,7 @@ use datafusion::physical_expr::projection::ProjectionExpr;
 use datafusion::physical_plan::metrics::Time;
 
 use super::exec::{DistanceInput, VectorKind};
+use crate::query::lvq_code_values;
 use relify_kernels::{DistanceKernel, LvqBatchView};
 
 #[derive(Debug)]
@@ -496,7 +497,7 @@ pub(super) fn compute_batch_distances(
             let view = LvqBatchView::try_new(
                 bits,
                 query.len(),
-                codes.value_data(),
+                lvq_code_values(codes)?,
                 offsets.values(),
                 scales.values(),
             )
