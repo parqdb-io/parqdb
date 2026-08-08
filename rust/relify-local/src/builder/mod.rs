@@ -7,15 +7,18 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-#[cfg(test)]
-use arrow::array::ArrayRef;
-use arrow::array::{Array, Float32Builder, Int32Array, ListBuilder};
+use arrow::array::{
+    Array, ArrayRef, FixedSizeBinaryArray, Float32Array, Float32Builder, Int32Array, ListBuilder,
+    StructArray,
+};
+use arrow::buffer::Buffer;
 #[cfg(test)]
 use arrow::compute::{SortColumn, SortOptions, lexsort_to_indices, take};
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion::common::DataFusionError;
 use datafusion::dataframe::DataFrame;
+use datafusion::functions::core::expr_fn::get_field;
 use datafusion::logical_expr::{
     ColumnarValue, Partitioning, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
     Signature, Volatility, cast,
@@ -23,7 +26,7 @@ use datafusion::logical_expr::{
 use datafusion::prelude::col;
 use futures::StreamExt;
 use parallite::ParalliteContext;
-use relify_meta::RelationReference;
+use relify_meta::{PostingEncoding, RelationReference};
 #[cfg(test)]
 use relify_storage::StorageRegistry;
 #[cfg(test)]
@@ -35,6 +38,7 @@ use crate::ivf::source_key_arrays;
 use crate::parquet::{ParquetStore, ParquetWriterOptions, child_location};
 use crate::progress::BuildPhase;
 use crate::{Error, IndexArtifacts, IndexFormat, IvfConfig, LocalBuildProgress, Result};
+use relify_kernels::{LvqBits, encode_lvq_rows};
 use relify_kmeans::{
     KMeansOptions, ReservoirSampler, assign_batch_to_centroids, fit_lloyd_kmeans_with_progress,
 };
@@ -85,6 +89,14 @@ struct RequireNonNull {
     signature: Signature,
     output_type: DataType,
     vector: bool,
+}
+
+struct EncodeLvq {
+    id: u64,
+    signature: Signature,
+    bits: LvqBits,
+    dimension: usize,
+    output_type: DataType,
 }
 
 impl std::fmt::Debug for AssignIvf {
@@ -232,6 +244,101 @@ impl ScalarUDFImpl for RequireNonNull {
     }
 }
 
+impl std::fmt::Debug for EncodeLvq {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("EncodeLvq")
+            .field("id", &self.id)
+            .field("signature", &self.signature)
+            .field("bits", &self.bits)
+            .field("dimension", &self.dimension)
+            .field("output_type", &self.output_type)
+            .finish()
+    }
+}
+
+impl PartialEq for EncodeLvq {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for EncodeLvq {}
+
+impl Hash for EncodeLvq {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
+impl ScalarUDFImpl for EncodeLvq {
+    fn name(&self) -> &'static str {
+        match self.bits {
+            LvqBits::Four => "relify_encode_lvq4",
+            LvqBits::Eight => "relify_encode_lvq8",
+        }
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _argument_types: &[DataType]) -> datafusion::common::Result<DataType> {
+        Ok(self.output_type.clone())
+    }
+
+    fn return_field_from_args(
+        &self,
+        _arguments: ReturnFieldArgs<'_>,
+    ) -> datafusion::common::Result<FieldRef> {
+        Ok(Arc::new(Field::new(
+            self.name(),
+            self.output_type.clone(),
+            false,
+        )))
+    }
+
+    fn invoke_with_args(
+        &self,
+        arguments: ScalarFunctionArgs,
+    ) -> datafusion::common::Result<ColumnarValue> {
+        let arrays = ColumnarValue::values_to_arrays(&arguments.args)?;
+        let vector = arrays.first().ok_or_else(|| {
+            DataFusionError::Execution(format!("{} requires one argument", self.name()))
+        })?;
+        let (vectors, actual_dimension) =
+            crate::ivf::borrow_vectors_allow_nullable_elements(vector)
+                .map_err(|error| DataFusionError::Execution(error.to_string()))?;
+        if actual_dimension != self.dimension {
+            return Err(DataFusionError::Execution(format!(
+                "source vector dimension {actual_dimension} does not match trained dimension {}",
+                self.dimension
+            )));
+        }
+        let encoded = encode_lvq_rows(vectors, self.dimension, self.bits)
+            .map_err(|error| DataFusionError::Execution(error.to_string()))?;
+        let (codes, offsets, scales) = encoded.into_parts();
+        let code_size = i32::try_from(self.bits.code_size(self.dimension))
+            .expect("vector dimension is bounded by int32");
+        let fields = match &self.output_type {
+            DataType::Struct(fields) => fields.clone(),
+            _ => unreachable!("LVQ encoder output is a struct"),
+        };
+        let columns: Vec<ArrayRef> = vec![
+            Arc::new(Float32Array::from(offsets)),
+            Arc::new(Float32Array::from(scales)),
+            Arc::new(FixedSizeBinaryArray::try_new(
+                code_size,
+                Buffer::from(codes),
+                None,
+            )?),
+        ];
+        Ok(ColumnarValue::Array(Arc::new(StructArray::new(
+            fields, columns, None,
+        ))))
+    }
+}
+
 pub(crate) async fn build_ivf_datafusion(
     source: DataFrame,
     vector_field: &str,
@@ -248,11 +355,6 @@ pub(crate) async fn build_ivf_datafusion(
         progress,
     } = context;
     validate_request(vector_field, source_key_fields, config.nlist)?;
-    let store_vectors = config.posting_encoding.v1_store_vectors().ok_or_else(|| {
-        Error::InvalidArgument(
-            "the local builder does not yet support quantized IVF postings".into(),
-        )
-    })?;
     writer_options.validate()?;
 
     let training_source = source.clone();
@@ -288,7 +390,7 @@ pub(crate) async fn build_ivf_datafusion(
             source_key_fields,
             source_schema: training_source.schema().inner(),
             trained: &trained,
-            store_vectors,
+            posting_encoding: config.posting_encoding,
             output_location: &postings_location,
             parallelism: parallel.thread_count(),
         },
@@ -296,13 +398,26 @@ pub(crate) async fn build_ivf_datafusion(
         partitions,
     )
     .await?;
+    let (format, encoding_parameter) = match config.posting_encoding.v1_store_vectors() {
+        Some(store_vectors) => (
+            IndexFormat::ivf_v1(),
+            ("store_vectors".into(), store_vectors.to_string()),
+        ),
+        None => (
+            IndexFormat::ivf_v2(),
+            (
+                "posting_encoding".into(),
+                config.posting_encoding.as_str().into(),
+            ),
+        ),
+    };
     Ok(IndexArtifacts {
-        format: IndexFormat::ivf_v1(),
+        format,
         parameters: BTreeMap::from([
             ("dimension".into(), trained.dimension.to_string()),
             ("nlist".into(), trained.nlist.to_string()),
             ("ntotal".into(), trained.ntotal.to_string()),
-            ("store_vectors".into(), store_vectors.to_string()),
+            encoding_parameter,
         ]),
         index_relations: BTreeMap::from([
             (
@@ -327,7 +442,7 @@ struct PostingsBuild<'a> {
     source_key_fields: &'a [String],
     source_schema: &'a Schema,
     trained: &'a TrainedIvf,
-    store_vectors: bool,
+    posting_encoding: PostingEncoding,
     output_location: &'a str,
     parallelism: usize,
 }
@@ -344,7 +459,7 @@ async fn write_postings(
         source_key_fields,
         source_schema,
         trained,
-        store_vectors,
+        posting_encoding,
         output_location,
         parallelism,
     } = build;
@@ -354,7 +469,7 @@ async fn write_postings(
         source_schema,
         source_key_fields,
         trained.dimension,
-        store_vectors,
+        posting_encoding,
     );
     let writers = writer_count(
         &writer_options,
@@ -363,6 +478,31 @@ async fn write_postings(
         row_width,
         parallelism,
     );
+    let postings = project_postings(
+        source,
+        vector_field,
+        source_key_fields,
+        trained,
+        posting_encoding,
+        parallelism,
+    )?;
+    let (mut state, plan) = postings.into_parts();
+    state.config_mut().options_mut().execution.target_partitions = writers;
+    state.config_mut().options_mut().execution.batch_size = writer_options.write_batch_rows;
+    let postings = DataFrame::new(state, plan);
+    parquet
+        .write_hive_cid_dataframe(output_location, postings, writers, &writer_options)
+        .await
+}
+
+fn project_postings(
+    source: DataFrame,
+    vector_field: &str,
+    source_key_fields: &[String],
+    trained: &TrainedIvf,
+    posting_encoding: PostingEncoding,
+    parallelism: usize,
+) -> Result<DataFrame> {
     let vector_type = source
         .schema()
         .inner()
@@ -396,30 +536,54 @@ async fn write_postings(
                 .alias(&output_name),
         );
     }
-    if store_vectors {
-        let output_type =
-            required_vector_type(&vector_type).expect("source vector schema was validated");
-        let expression = if vector_type == output_type {
-            col(vector_field)
-        } else {
-            cast(col(vector_field), output_type.clone())
-        };
-        expressions.push(
-            require_non_null_udf(output_type, true)
-                .call(vec![expression])
-                .alias("vector"),
-        );
+    match posting_encoding {
+        PostingEncoding::Source => {}
+        PostingEncoding::Flat => {
+            let output_type =
+                required_vector_type(&vector_type).expect("source vector schema was validated");
+            let expression = if vector_type == output_type {
+                col(vector_field)
+            } else {
+                cast(col(vector_field), output_type.clone())
+            };
+            expressions.push(
+                require_non_null_udf(output_type, true)
+                    .call(vec![expression])
+                    .alias("vector"),
+            );
+        }
+        PostingEncoding::Lvq4 | PostingEncoding::Lvq8 => {
+            let bits = match posting_encoding {
+                PostingEncoding::Lvq4 => LvqBits::Four,
+                PostingEncoding::Lvq8 => LvqBits::Eight,
+                PostingEncoding::Source | PostingEncoding::Flat => unreachable!(),
+            };
+            expressions.push(
+                encode_lvq_udf(vector_type.clone(), trained.dimension, bits)
+                    .call(vec![col(vector_field)])
+                    .alias("__relify_lvq"),
+            );
+        }
     }
     let postings = source
         .repartition(Partitioning::RoundRobinBatch(parallelism))?
         .select(expressions)?;
-    let (mut state, plan) = postings.into_parts();
-    state.config_mut().options_mut().execution.target_partitions = writers;
-    state.config_mut().options_mut().execution.batch_size = writer_options.write_batch_rows;
-    let postings = DataFrame::new(state, plan);
-    parquet
-        .write_hive_cid_dataframe(output_location, postings, writers, &writer_options)
-        .await
+    let postings = if matches!(
+        posting_encoding,
+        PostingEncoding::Lvq4 | PostingEncoding::Lvq8
+    ) {
+        let mut output = vec![col("cid")];
+        output.extend((1..=source_key_fields.len()).map(|index| col(format!("key_{index}"))));
+        output.extend([
+            get_field(col("__relify_lvq"), "offset").alias("offset"),
+            get_field(col("__relify_lvq"), "scale").alias("scale"),
+            get_field(col("__relify_lvq"), "code").alias("code"),
+        ]);
+        postings.select(output)?
+    } else {
+        postings
+    };
+    Ok(postings)
 }
 
 fn resolved_postings_writer_options(
@@ -521,6 +685,31 @@ fn require_non_null_udf(data_type: DataType, vector: bool) -> ScalarUDF {
     })
 }
 
+fn encode_lvq_udf(vector_type: DataType, dimension: usize, bits: LvqBits) -> ScalarUDF {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+    let code_size =
+        i32::try_from(bits.code_size(dimension)).expect("vector dimension is bounded by int32");
+    let output_type = DataType::Struct(
+        vec![
+            Arc::new(Field::new("offset", DataType::Float32, false)),
+            Arc::new(Field::new("scale", DataType::Float32, false)),
+            Arc::new(Field::new(
+                "code",
+                DataType::FixedSizeBinary(code_size),
+                false,
+            )),
+        ]
+        .into(),
+    );
+    ScalarUDF::new_from_impl(EncodeLvq {
+        id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+        signature: Signature::exact(vec![vector_type], Volatility::Immutable),
+        bits,
+        dimension,
+        output_type,
+    })
+}
+
 fn required_vector_type(data_type: &DataType) -> Option<DataType> {
     match data_type {
         DataType::List(field) if field.data_type() == &DataType::Float32 => Some(DataType::List(
@@ -589,7 +778,7 @@ fn estimate_posting_row_width(
     schema: &Schema,
     source_key_fields: &[String],
     dimension: usize,
-    store_vectors: bool,
+    posting_encoding: PostingEncoding,
 ) -> usize {
     let key_width = source_key_fields
         .iter()
@@ -602,12 +791,17 @@ fn estimate_posting_row_width(
             _ => 32,
         })
         .sum::<usize>();
-    let vector_width = if store_vectors {
-        dimension
+    let vector_width = match posting_encoding {
+        PostingEncoding::Source => 0,
+        PostingEncoding::Flat => dimension
             .saturating_mul(std::mem::size_of::<f32>())
-            .saturating_add(std::mem::size_of::<i32>())
-    } else {
-        0
+            .saturating_add(std::mem::size_of::<i32>()),
+        PostingEncoding::Lvq4 => LvqBits::Four
+            .code_size(dimension)
+            .saturating_add(2 * std::mem::size_of::<f32>()),
+        PostingEncoding::Lvq8 => LvqBits::Eight
+            .code_size(dimension)
+            .saturating_add(2 * std::mem::size_of::<f32>()),
     };
     4_usize
         .saturating_add(key_width)

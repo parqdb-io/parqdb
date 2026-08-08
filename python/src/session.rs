@@ -9,7 +9,7 @@ use datafusion_python::dataframe::PyDataFrame;
 use pyo3::prelude::*;
 use relify_local::{
     IvfConfig, LocalBuildOptions, LocalBuildProgress, LocalSession, ParquetWriterOptions,
-    PersistentParquetOptions, SearchRequest,
+    PersistentParquetOptions, PostingEncoding, SearchRequest,
 };
 use relify_meta::RelationReference;
 use tokio::runtime::Runtime;
@@ -27,6 +27,12 @@ type PyIndexInfo = (
 );
 type PyIndexCacheInfo = (String, i64, usize, usize);
 static SHARED_RUNTIME: OnceLock<std::result::Result<Arc<Runtime>, String>> = OnceLock::new();
+
+fn parse_posting_encoding(value: &str) -> PyResult<PostingEncoding> {
+    PostingEncoding::from_metadata(value).ok_or_else(|| {
+        InvalidArgumentError::new_err(format!("unsupported posting_encoding: {value}"))
+    })
+}
 
 pub(crate) fn shared_runtime() -> PyResult<Arc<Runtime>> {
     match SHARED_RUNTIME.get_or_init(|| {
@@ -445,7 +451,7 @@ impl PyNativeSession {
         vector_field,
         source_key_fields,
         nlist,
-        store_vectors,
+        posting_encoding,
         writer_options,
         partitions,
         threads,
@@ -460,7 +466,7 @@ impl PyNativeSession {
         vector_field: String,
         source_key_fields: Vec<String>,
         nlist: usize,
-        store_vectors: bool,
+        posting_encoding: &str,
         writer_options: &PyParquetWriterOptions,
         partitions: Option<usize>,
         threads: Option<usize>,
@@ -470,13 +476,14 @@ impl PyNativeSession {
         let runtime = Arc::clone(&self.runtime);
         let writer_options = writer_options.options.clone();
         let progress = progress.map(|tracker| tracker.progress.clone());
+        let posting_encoding = parse_posting_encoding(posting_encoding)?;
         py.detach(move || {
             runtime.block_on(session.create_index_with_options(
                 &source,
                 &index_name,
                 &vector_field,
                 &source_key_fields,
-                IvfConfig::new(nlist, store_vectors),
+                IvfConfig::with_encoding(nlist, posting_encoding),
                 &LocalBuildOptions {
                     writer_options,
                     partitions,
@@ -493,7 +500,7 @@ impl PyNativeSession {
         source,
         index_name,
         nlist,
-        store_vectors,
+        posting_encoding,
         writer_options,
         partitions,
         threads,
@@ -506,7 +513,7 @@ impl PyNativeSession {
         source: String,
         index_name: String,
         nlist: Option<usize>,
-        store_vectors: Option<bool>,
+        posting_encoding: Option<String>,
         writer_options: &PyParquetWriterOptions,
         partitions: Option<usize>,
         threads: Option<usize>,
@@ -516,12 +523,15 @@ impl PyNativeSession {
         let runtime = Arc::clone(&self.runtime);
         let writer_options = writer_options.options.clone();
         let progress = progress.map(|tracker| tracker.progress.clone());
-        let config = match (nlist, store_vectors) {
-            (Some(nlist), Some(store_vectors)) => Some(IvfConfig::new(nlist, store_vectors)),
+        let config = match (nlist, posting_encoding) {
+            (Some(nlist), Some(posting_encoding)) => Some(IvfConfig::with_encoding(
+                nlist,
+                parse_posting_encoding(&posting_encoding)?,
+            )),
             (None, None) => None,
             _ => {
                 return Err(InvalidArgumentError::new_err(
-                    "nlist and store_vectors must be provided together",
+                    "nlist and posting_encoding must be provided together",
                 ));
             }
         };

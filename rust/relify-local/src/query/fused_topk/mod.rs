@@ -18,14 +18,17 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::prelude::{SessionConfig, SessionContext};
 
-use self::exec::{IvfTopKExec, VectorKind};
-use crate::squared_l2_udf;
+use self::exec::{DistanceInput, IvfTopKExec};
+use super::{lvq_squared_l2_udf, squared_l2_udf};
+use relify_kernels::LvqBits;
 
 mod exec;
 mod selector;
 
 const DISTANCE_COLUMN: &str = "_distance";
 const DISTANCE_UDF: &str = "relify_squared_l2";
+const LVQ4_DISTANCE_UDF: &str = "relify_lvq4_l2";
+const LVQ8_DISTANCE_UDF: &str = "relify_lvq8_l2";
 
 #[cfg(test)]
 mod tests;
@@ -47,6 +50,8 @@ pub(crate) fn relify_session_context() -> SessionContext {
         .build();
     let context = SessionContext::new_with_state(state);
     context.register_udf(squared_l2_udf());
+    context.register_udf(lvq_squared_l2_udf(LvqBits::Four));
+    context.register_udf(lvq_squared_l2_udf(LvqBits::Eight));
     context
 }
 
@@ -94,14 +99,11 @@ impl PhysicalOptimizerRule for FuseIvfTopK {
             else {
                 return Ok(Transformed::no(node));
             };
-            if function.name() != DISTANCE_UDF || function.args().len() != 2 {
-                return Ok(Transformed::no(node));
-            }
-            let Some(vector_column) = function.args()[0].downcast_ref::<Column>() else {
+            let Some(query_expression) = function.args().last() else {
                 return Ok(Transformed::no(node));
             };
             let Some(query) =
-                evaluate_constant_vector(&function.args()[1], projection.input().schema())
+                evaluate_constant_vector(query_expression, projection.input().schema())
             else {
                 return Ok(Transformed::no(node));
             };
@@ -109,9 +111,7 @@ impl PhysicalOptimizerRule for FuseIvfTopK {
                 return Ok(Transformed::no(node));
             }
             let input_schema = projection.input().schema();
-            let Some(vector_kind) =
-                VectorKind::from_schema(&input_schema, vector_column.index(), query.len())
-            else {
+            let Some(distance_input) = distance_input(function, &input_schema, query.len()) else {
                 return Ok(Transformed::no(node));
             };
             let dynamic_filter = sort.dynamic_filter_expr().unwrap_or_else(|| {
@@ -125,8 +125,7 @@ impl PhysicalOptimizerRule for FuseIvfTopK {
                 projection.expr().to_vec(),
                 projection.schema(),
                 distance_index,
-                vector_column.index(),
-                vector_kind,
+                distance_input,
                 query,
                 fetch,
                 !sort.preserve_partitioning(),
@@ -143,6 +142,40 @@ impl PhysicalOptimizerRule for FuseIvfTopK {
 
     fn schema_check(&self) -> bool {
         true
+    }
+}
+
+fn distance_input(
+    function: &datafusion::physical_expr::ScalarFunctionExpr,
+    schema: &SchemaRef,
+    dimension: usize,
+) -> Option<DistanceInput> {
+    let column = |index: usize| {
+        function
+            .args()
+            .get(index)?
+            .downcast_ref::<Column>()
+            .map(Column::index)
+    };
+    match (function.name(), function.args().len()) {
+        (DISTANCE_UDF, 2) => DistanceInput::dense(schema, column(0)?, dimension),
+        (LVQ4_DISTANCE_UDF, 4) => DistanceInput::lvq(
+            schema,
+            LvqBits::Four,
+            column(0)?,
+            column(1)?,
+            column(2)?,
+            dimension,
+        ),
+        (LVQ8_DISTANCE_UDF, 4) => DistanceInput::lvq(
+            schema,
+            LvqBits::Eight,
+            column(0)?,
+            column(1)?,
+            column(2)?,
+            dimension,
+        ),
+        _ => None,
     }
 }
 

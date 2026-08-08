@@ -280,7 +280,8 @@ async fn writes_only_the_two_ivf_relations() {
 fn writer_count_respects_target_size_and_explicit_partitions() {
     let source = example_source();
     let keys = ["tenant".into(), "id".into()];
-    let row_width = estimate_posting_row_width(source.schema().as_ref(), &keys, 2, true);
+    let row_width =
+        estimate_posting_row_width(source.schema().as_ref(), &keys, 2, PostingEncoding::Flat);
     let one_file = ParquetWriterOptions {
         target_file_size: usize::MAX,
         ..ParquetWriterOptions::default()

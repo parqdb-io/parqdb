@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use relify_meta::{
-    Error, IndexFamily, IndexFamilyRegistry, IndexMetadata, IndexSnapshot, RelationReference,
-    SnapshotLogEntry,
+    Error, IndexFamily, IndexFamilyRegistry, IndexMetadata, IndexSnapshot, PostingEncoding,
+    RelationReference, SnapshotLogEntry,
 };
 use uuid::Uuid;
 
@@ -111,14 +111,19 @@ fn accepts_both_vector_storage_modes() {
 fn accepts_ivf_v2_posting_encodings() {
     for encoding in ["source", "flat", "lvq4", "lvq8"] {
         let mut metadata = valid_metadata();
-        let snapshot = &mut metadata.snapshots[0];
-        snapshot.index_schema_version = 2;
-        snapshot.parameters.remove("store_vectors");
-        snapshot
+        metadata.snapshots[0].index_schema_version = 2;
+        metadata.snapshots[0].parameters.remove("store_vectors");
+        metadata.snapshots[0]
             .parameters
             .insert("posting_encoding".into(), encoding.into());
 
         metadata.validate().unwrap();
+        assert_eq!(
+            PostingEncoding::from_snapshot(&metadata.snapshots[0])
+                .unwrap()
+                .as_str(),
+            encoding
+        );
     }
 }
 

@@ -3,9 +3,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use arrow::array::Float32Array;
 #[cfg(test)]
 use arrow::array::UInt64Array;
+use arrow::array::{Array, FixedSizeBinaryArray, Float32Array};
 #[cfg(test)]
 use arrow::compute::take;
 use arrow::datatypes::{DataType, Field, FieldRef};
@@ -19,7 +19,7 @@ use datafusion::logical_expr::{
     Volatility,
 };
 use datafusion::prelude::{Expr, col};
-use relify_meta::IndexSnapshot;
+use relify_meta::{IndexSnapshot, PostingEncoding};
 
 #[cfg(test)]
 use crate::ivf::{
@@ -28,7 +28,7 @@ use crate::ivf::{
 };
 use crate::ivf::{read_centroids, select_clusters};
 use crate::{ClusterSelection, Error, ResolvedSearch, Result};
-use relify_kernels::detect;
+use relify_kernels::{LvqBatchView, LvqBits, detect};
 
 mod fused_topk;
 
@@ -176,6 +176,155 @@ pub fn squared_l2_udf() -> ScalarUDF {
     ScalarUDF::new_from_impl(SquaredL2::default())
 }
 
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct LvqSquaredL2 {
+    signature: Signature,
+    bits: LvqBits,
+}
+
+impl LvqSquaredL2 {
+    fn new(bits: LvqBits) -> Self {
+        Self {
+            signature: Signature::user_defined(Volatility::Immutable),
+            bits,
+        }
+    }
+}
+
+impl ScalarUDFImpl for LvqSquaredL2 {
+    fn name(&self) -> &'static str {
+        match self.bits {
+            LvqBits::Four => "relify_lvq4_l2",
+            LvqBits::Eight => "relify_lvq8_l2",
+        }
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, argument_types: &[DataType]) -> datafusion::common::Result<DataType> {
+        self.coerce_types(argument_types)?;
+        Ok(DataType::Float32)
+    }
+
+    fn return_field_from_args(
+        &self,
+        arguments: ReturnFieldArgs<'_>,
+    ) -> datafusion::common::Result<FieldRef> {
+        let types = arguments
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        self.coerce_types(&types)?;
+        Ok(Arc::new(Field::new(self.name(), DataType::Float32, false)))
+    }
+
+    fn coerce_types(
+        &self,
+        argument_types: &[DataType],
+    ) -> datafusion::common::Result<Vec<DataType>> {
+        let [
+            DataType::FixedSizeBinary(code_size),
+            DataType::Float32,
+            DataType::Float32,
+            query,
+        ] = argument_types
+        else {
+            return Err(DataFusionError::Plan(format!(
+                "{} requires fixed_size_binary, float, float, and list<float> arguments",
+                self.name()
+            )));
+        };
+        if *code_size <= 0 || !is_float_vector_type(query) {
+            return Err(DataFusionError::Plan(format!(
+                "{} requires fixed_size_binary, float, float, and list<float> arguments",
+                self.name()
+            )));
+        }
+        Ok(argument_types.to_vec())
+    }
+
+    fn invoke_with_args(
+        &self,
+        arguments: ScalarFunctionArgs,
+    ) -> datafusion::common::Result<ColumnarValue> {
+        if arguments.number_rows == 0 {
+            return Ok(ColumnarValue::Array(Arc::new(Float32Array::from(
+                Vec::<f32>::new(),
+            ))));
+        }
+        let [codes, offsets, scales, query] = arguments.args.as_slice() else {
+            return Err(DataFusionError::Execution(format!(
+                "{} requires exactly four arguments",
+                self.name()
+            )));
+        };
+        let codes = codes.to_array_of_size(arguments.number_rows)?;
+        let offsets = offsets.to_array_of_size(arguments.number_rows)?;
+        let scales = scales.to_array_of_size(arguments.number_rows)?;
+        let codes = codes
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .ok_or_else(|| DataFusionError::Execution("invalid LVQ code column".into()))?;
+        let offsets = offsets
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .ok_or_else(|| DataFusionError::Execution("invalid LVQ offset column".into()))?;
+        let scales = scales
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .ok_or_else(|| DataFusionError::Execution("invalid LVQ scale column".into()))?;
+        if codes.null_count() != 0 || offsets.null_count() != 0 || scales.null_count() != 0 {
+            return Err(DataFusionError::Execution(
+                "LVQ posting columns must not contain nulls".into(),
+            ));
+        }
+        let query = match query {
+            ColumnarValue::Scalar(query) => query.to_array()?,
+            ColumnarValue::Array(_) => {
+                return Err(DataFusionError::Execution(
+                    "LVQ search requires one constant query vector".into(),
+                ));
+            }
+        };
+        let (query, dimension) = crate::ivf::borrow_vectors_allow_nullable_elements(&query)
+            .map_err(|error| DataFusionError::Execution(error.to_string()))?;
+        let view = LvqBatchView::try_new(
+            self.bits,
+            dimension,
+            codes.value_data(),
+            offsets.values(),
+            scales.values(),
+        )
+        .map_err(|error| DataFusionError::Execution(error.to_string()))?;
+        let mut distances = vec![0.0; arguments.number_rows];
+        detect()
+            .lvq_squared_l2_rows(view, query, &mut distances)
+            .map_err(|error| DataFusionError::Execution(error.to_string()))?;
+        Ok(ColumnarValue::Array(Arc::new(Float32Array::from(
+            distances,
+        ))))
+    }
+}
+
+fn is_float_vector_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::List(field) | DataType::LargeList(field)
+            if field.data_type() == &DataType::Float32
+    ) || matches!(
+        data_type,
+        DataType::FixedSizeList(field, dimension)
+            if *dimension > 0 && field.data_type() == &DataType::Float32
+    )
+}
+
+fn lvq_squared_l2_udf(bits: LvqBits) -> ScalarUDF {
+    ScalarUDF::new_from_impl(LvqSquaredL2::new(bits))
+}
+
 /// Compiles an index-only search without SQL parser and catalog overhead.
 pub(crate) fn compile_index_only_plan(
     postings: DataFrame,
@@ -211,11 +360,27 @@ pub(crate) fn compile_index_only_plan(
         ScalarValue::List(ScalarValue::new_list(&query, &DataType::Float32, false)),
         None,
     );
-    projection.push(
-        squared_l2_udf()
-            .call(vec![col("vector"), query])
-            .alias("_distance"),
-    );
+    let distance = match resolved.posting_encoding {
+        PostingEncoding::Flat => squared_l2_udf().call(vec![col("vector"), query]),
+        PostingEncoding::Lvq4 => lvq_squared_l2_udf(LvqBits::Four).call(vec![
+            col("code"),
+            col("offset"),
+            col("scale"),
+            query,
+        ]),
+        PostingEncoding::Lvq8 => lvq_squared_l2_udf(LvqBits::Eight).call(vec![
+            col("code"),
+            col("offset"),
+            col("scale"),
+            query,
+        ]),
+        PostingEncoding::Source => {
+            return Err(Error::InvalidArgument(
+                "source-backed postings cannot execute an index-only search".into(),
+            ));
+        }
+    };
+    projection.push(distance.alias("_distance"));
     Ok(postings
         .select(projection)?
         .sort(vec![col("_distance").sort(true, false)])?
@@ -240,12 +405,7 @@ pub fn compile_datafusion_sql(
     )?;
 
     let query_literal = datafusion_query_literal(resolved);
-    let distance_input = if resolved.postings_relation_key.is_some() && resolved.store_vectors {
-        "p.\"vector\"".to_owned()
-    } else {
-        format!("s.{}", quote_identifier(&resolved.vector_field))
-    };
-    let distance = format!("relify_squared_l2({distance_input}, make_array({query_literal}))");
+    let distance = datafusion_distance_sql(resolved, &query_literal);
     let mut ctes = Vec::new();
     if let Some(source_name) = source_name {
         let source = quote_identifier(source_name);
@@ -302,6 +462,28 @@ pub fn compile_datafusion_sql(
         output.join(", "),
         resolved.limit
     ))
+}
+
+fn datafusion_distance_sql(resolved: &ResolvedSearch, query_literal: &str) -> String {
+    let query = format!("make_array({query_literal})");
+    if resolved.postings_relation_key.is_none()
+        || resolved.posting_encoding == PostingEncoding::Source
+    {
+        return format!(
+            "relify_squared_l2(s.{}, {query})",
+            quote_identifier(&resolved.vector_field)
+        );
+    }
+    match resolved.posting_encoding {
+        PostingEncoding::Flat => format!("relify_squared_l2(p.\"vector\", {query})"),
+        PostingEncoding::Lvq4 => {
+            format!("relify_lvq4_l2(p.\"code\", p.\"offset\", p.\"scale\", {query})")
+        }
+        PostingEncoding::Lvq8 => {
+            format!("relify_lvq8_l2(p.\"code\", p.\"offset\", p.\"scale\", {query})")
+        }
+        PostingEncoding::Source => unreachable!("source encoding handled above"),
+    }
 }
 
 fn validated_datafusion_source_name(
@@ -390,7 +572,9 @@ fn datafusion_index_only_columns(resolved: &ResolvedSearch) -> Result<Vec<(Strin
         .enumerate()
         .map(|(position, key)| (format!("key_{}", position + 1), key.clone()))
         .collect::<Vec<_>>();
-    columns.push(("vector".into(), resolved.vector_field.clone()));
+    if resolved.posting_encoding == PostingEncoding::Flat {
+        columns.push(("vector".into(), resolved.vector_field.clone()));
+    }
     Ok(columns)
 }
 
@@ -515,18 +699,20 @@ pub fn datafusion_source_relation_required(resolved: &ResolvedSearch) -> Result<
         datafusion_cluster_filter(resolved)?,
         DataFusionClusterFilter::Exact
     ) {
-        if resolved.store_vectors {
+        if resolved.posting_encoding != PostingEncoding::Source {
             return Err(Error::InvalidArgument(
                 "exact search cannot use stored IVF vectors".into(),
             ));
         }
         return Ok(true);
     }
-    if !resolved.store_vectors || resolved.filter.is_some() {
+    if resolved.posting_encoding == PostingEncoding::Source || resolved.filter.is_some() {
         return Ok(true);
     }
     Ok(resolved.projection.iter().any(|column| {
-        column != &resolved.vector_field && !resolved.source_key_fields.contains(column)
+        !resolved.source_key_fields.contains(column)
+            && (resolved.posting_encoding != PostingEncoding::Flat
+                || column != &resolved.vector_field)
     }))
 }
 
@@ -729,8 +915,8 @@ pub(crate) fn execute(input: &SearchInput<'_>) -> Result<(Vec<RecordBatch>, Sche
         &source_keys,
         &source_by_key,
     )?;
-    let store_vectors = input.snapshot.parameter_bool("store_vectors")?;
-    let posting_vectors = if store_vectors {
+    let posting_encoding = PostingEncoding::from_snapshot(input.snapshot)?;
+    let posting_vectors = if posting_encoding == PostingEncoding::Flat {
         let (vectors, posting_dimension) = borrow_source_vectors(input.postings, "vector")?;
         if posting_dimension != dimension {
             return Err(Error::InvalidSchema(format!(
@@ -739,13 +925,17 @@ pub(crate) fn execute(input: &SearchInput<'_>) -> Result<(Vec<RecordBatch>, Sche
             )));
         }
         Some(vectors)
-    } else {
+    } else if posting_encoding == PostingEncoding::Source {
         if input.postings.schema().field_with_name("vector").is_ok() {
             return Err(Error::InvalidSchema(
                 "ivf_postings.vector must be absent when store_vectors is false".into(),
             ));
         }
         None
+    } else {
+        return Err(Error::InvalidArgument(
+            "the test-only reference executor does not support quantized postings".into(),
+        ));
     };
 
     let mut hits = Vec::with_capacity(candidates.len());

@@ -7,7 +7,7 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion::prelude::{SessionContext, col, lit};
-use relify_meta::{IndexSnapshot, RelationReference};
+use relify_meta::{IndexSnapshot, PostingEncoding, RelationReference};
 use uuid::Uuid;
 
 use super::LocalSession;
@@ -166,7 +166,7 @@ impl LocalSession {
                 vector_field,
                 source_key_fields: Vec::new(),
                 postings_relation_key: None,
-                store_vectors: false,
+                posting_encoding: PostingEncoding::Source,
                 cluster_selection: None,
                 nlist: None,
                 ntotal: None,
@@ -200,7 +200,7 @@ impl LocalSession {
             vector_field: snapshot.vector_field.clone(),
             source_key_fields: snapshot.source_key_fields.clone(),
             postings_relation_key: Some(postings_relation_key),
-            store_vectors: snapshot.parameter_bool("store_vectors")?,
+            posting_encoding: PostingEncoding::from_snapshot(snapshot)?,
             cluster_selection: Some(cluster_selection),
             nlist: Some(nlist),
             ntotal: Some(snapshot.parameter_usize("ntotal")?),

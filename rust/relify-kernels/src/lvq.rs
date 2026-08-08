@@ -3,7 +3,7 @@
 use crate::{CpuBackend, DistanceKernel, KernelError, Result};
 
 /// Number of bits used by one LVQ dimension.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LvqBits {
     /// Two dimensions packed into each byte.
     Four,
@@ -74,6 +74,12 @@ impl LvqEncodedBatch {
     #[must_use]
     pub fn scales(&self) -> &[f32] {
         &self.scales
+    }
+
+    /// Consumes the batch and returns codes, offsets, and scales.
+    #[must_use]
+    pub fn into_parts(self) -> (Vec<u8>, Vec<f32>, Vec<f32>) {
+        (self.codes, self.offsets, self.scales)
     }
 
     /// Borrows the encoded buffers for distance evaluation.

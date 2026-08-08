@@ -565,7 +565,7 @@ def _build_local(
         vector_field=request.column,
         source_key_fields=list(request.key),
         nlist=request.config.nlist,
-        store_vectors=request.config.store_vectors,
+        posting_encoding=request.config.resolved_posting_encoding,
         writer_options=native_writer_options(builder, request.writer_options),
         partitions=request.writer_options.partitions,
         threads=builder.threads,
@@ -596,8 +596,10 @@ def _refresh_local(
         source=source,
         index_name=request.index,
         nlist=request.config.nlist if request.config is not None else None,
-        store_vectors=(
-            request.config.store_vectors if request.config is not None else None
+        posting_encoding=(
+            request.config.resolved_posting_encoding
+            if request.config is not None
+            else None
         ),
         writer_options=native_writer_options(builder, request.writer_options),
         partitions=request.writer_options.partitions,

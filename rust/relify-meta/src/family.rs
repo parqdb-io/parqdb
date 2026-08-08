@@ -53,6 +53,28 @@ impl PostingEncoding {
             Self::Lvq4 | Self::Lvq8 => None,
         }
     }
+
+    /// Resolves the postings encoding declared by an IVF snapshot.
+    pub fn from_snapshot(snapshot: &IndexSnapshot) -> Result<Self> {
+        if snapshot.index_family != "ivf" {
+            return invalid("posting encoding is defined only for IVF indexes");
+        }
+        match snapshot.index_schema_version {
+            1 => Ok(
+                if parse_boolean_parameter(&snapshot.parameters, "store_vectors")? {
+                    Self::Flat
+                } else {
+                    Self::Source
+                },
+            ),
+            2 => snapshot
+                .parameters
+                .get("posting_encoding")
+                .and_then(|value| Self::from_metadata(value))
+                .ok_or_else(|| crate::Error::new("invalid IVF posting_encoding parameter")),
+            _ => invalid("unsupported IVF index schema version"),
+        }
+    }
 }
 
 /// Portable schema contract implemented by one index family.

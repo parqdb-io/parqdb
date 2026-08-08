@@ -20,9 +20,17 @@ def test_ivf_requires_a_positive_value(nlist: int) -> None:
 
 def test_ivf_stores_vectors_by_default_and_requires_a_boolean() -> None:
     assert relify.IVF(1).store_vectors is True
+    assert relify.IVF(1).resolved_posting_encoding == "flat"
     assert relify.IVF(1, store_vectors=False).store_vectors is False
+    assert relify.IVF(1, store_vectors=False).resolved_posting_encoding == "source"
+    assert relify.IVF(1, posting_encoding="lvq4").resolved_posting_encoding == "lvq4"
+    assert relify.IVF(1, posting_encoding="lvq8").resolved_posting_encoding == "lvq8"
     with pytest.raises(TypeError, match="store_vectors must be a boolean"):
         relify.IVF(1, store_vectors=cast(Any, 1))
+    with pytest.raises(TypeError, match="posting_encoding must be a string"):
+        relify.IVF(1, posting_encoding=cast(Any, 1))
+    with pytest.raises(ValueError, match="unsupported posting_encoding"):
+        relify.IVF(1, posting_encoding="pq")
 
 
 def test_write_options_are_explicit_and_validated() -> None:

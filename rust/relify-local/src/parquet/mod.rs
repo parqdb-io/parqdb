@@ -329,7 +329,7 @@ async fn write_hive_cid_stream(
         .filter(|index| *index != cid_index)
         .collect::<Vec<_>>();
     let output_schema = Arc::new(schema.project(&projection)?);
-    let properties = match output_schema.field_with_name("vector") {
+    let dictionary_disabled_column = match output_schema.field_with_name("vector") {
         Ok(vector_field) => {
             let vector_path = match vector_field.data_type() {
                 DataType::List(element)
@@ -343,9 +343,16 @@ async fn write_hive_cid_stream(
                     )));
                 }
             };
-            options.postings_writer_properties(vector_path)?
+            Some(vector_path)
         }
-        Err(_) => options.writer_properties()?,
+        Err(_) if output_schema.field_with_name("code").is_ok() => {
+            Some(ColumnPath::new(vec!["code".into()]))
+        }
+        Err(_) => None,
+    };
+    let properties = match dictionary_disabled_column {
+        Some(column) => options.postings_writer_properties(column)?,
+        None => options.writer_properties()?,
     };
     let mut current_cid = None;
     let mut writer: Option<AsyncArrowWriter<ParquetObjectWriter>> = None;
