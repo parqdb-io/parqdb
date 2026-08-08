@@ -10,40 +10,23 @@ The benchmark runs Relify with LVQ8 by default and also supports `lvq4` and
 `flat`. The standalone Faiss runner uses IVF-SQ8 by default and also supports
 `sq4` and `flat`.
 
-## Reproduce on GIST1M
+## GIST1M
 
-One command downloads the public
+[`prepare_gist.py`](tools/prepare_gist.py) downloads the public
 [ANN-Benchmarks GIST1M dataset](https://github.com/erikbern/ann-benchmarks#data-sets),
-checks out and compiles a specified Relify commit, then runs Relify and Faiss in
-separate containers:
+verifies its SHA-256, and converts it to Parquet in bounded batches:
 
 ```bash
-curl -fsSL \
-  https://raw.githubusercontent.com/petrizhang/relify/main/benchmarks/container/run-gist.sh \
-  | sh -s -- <RELIFY_COMMIT>
+uv run --no-sync python -m benchmarks.tools.prepare_gist \
+  --root /data/relify-benchmarks
 ```
 
-The script selects Docker or Podman and uses one image for dataset preparation,
-the isolated Relify and Faiss runs, and result merging. Relify and Faiss run in
-separate resource-constrained containers. The image-owned benchmark harness is
-fixed across both runs, including the Python, NumPy, and PyArrow versions. The
-requested Relify commit is compiled and installed without replacing those
-runtime dependencies. Allow at least 20 GiB of free disk.
-`relify-gist-benchmark/` retains downloads, compiled artifacts, indexes, and raw
-JSON results for reuse. Merged build and query results are written under
-`relify-gist-benchmark/current/`.
-
-The default workload uses all 1,000,000 base vectors, 100 of the 1,000 public
-queries, GT@100, `nlist=1024`, Relify LVQ8, Faiss SQ8, and an `nprobe` sweep of
-`1,4,16,64,256`. Set `RELIFY_ENCODING=flat` and `FAISS_ENCODING=flat` to
-compare exact-vector indexes. Resource defaults are 8 vCPU and 16 GiB per
-implementation container.
-
-The image definitions are under [`benchmarks/container`](container). The GIST
-image uses [`prepare_gist.py`](tools/prepare_gist.py), which downloads
-`https://ann-benchmarks.com/gist-960-euclidean.hdf5`, verifies its SHA-256, and
-converts it to Parquet in bounded batches. Download and conversion are dataset
-preparation and are not included in index build time.
+The prepared directory contains one million 960-dimensional base vectors, 1,000
+queries, and GT@100. Download and conversion are dataset preparation and are not
+included in index build time. Use `benchmarks.build`, `benchmarks.query`, and the
+standalone `benchmarks.tools.faiss` runner with the prepared files. Run the two
+implementations under equivalent resource limits, then combine their JSON files
+with `benchmarks.tools.merge_results`.
 
 ## Wikipedia 35M
 
@@ -92,10 +75,10 @@ checksum and does not rewrite the source data.
 
 ## Build Wikipedia
 
-Run each implementation in a fresh **32 vCPU, 128 GiB** container. Both read the
-same original Parquet columns. The default compares Relify LVQ8 with Faiss
-IVF-SQ8. Both use `nlist=8192`. Each implementation draws a seeded bounded
-sample of up to 256 training vectors per centroid.
+Run each implementation in a fresh environment limited to **32 vCPU and 128
+GiB**. Both read the same original Parquet columns. The default compares Relify
+LVQ8 with Faiss IVF-SQ8. Both use `nlist=8192`. Each implementation draws a
+seeded bounded sample of up to 256 training vectors per centroid.
 Input inspection and training-sample materialization are recorded as preparation
 and excluded from `build_seconds`. The build timer includes centroid training,
 full-data assignment, index organization, persistence, and publication.
@@ -121,11 +104,8 @@ Run the Faiss baseline with the same source and workload arguments using
 `build-faiss.json`. Build results
 include preparation time, build time, vectors per second, persisted index bytes,
 and peak process RSS. The peak covers preparation as well as the timed build.
-Raw cgroup counters remain in the result for diagnostics, but they are not used
-as the comparable peak-memory metric because a cgroup may contain unrelated
-processes outside an isolated benchmark container.
 
-Merge the independently executed results only after both containers complete:
+Merge the independently executed results only after both runs complete:
 
 ```bash
 python -m benchmarks.tools.merge_results \
@@ -136,9 +116,10 @@ python -m benchmarks.tools.merge_results \
 
 ## Query Wikipedia
 
-Run each implementation in a fresh **32 vCPU, 128 GiB** container. Index loading,
-query extraction from the source table, and warmup are outside query latency.
-Queries execute one at a time with intra-query parallelism.
+Run each implementation in a fresh environment limited to **32 vCPU and 128
+GiB**. Index loading, query extraction from the source table, and warmup are
+outside query latency. Queries execute one at a time with intra-query
+parallelism.
 
 The release workload reports `Recall@20,000` and sweeps `nprobe` from 1 to 4,096.
 The published GT supports workloads up to `K=100,000` without changing the
@@ -179,13 +160,14 @@ benchmark revisions, or common workload parameters.
 
 ## Constrained Memory
 
-The same persisted indexes may also be queried in a **1 vCPU, 2 GiB** container
-to characterize storage-backed execution. Relify reads its Parquet index
-without `cache_index`; Faiss opens the standard persisted index with read-only
-mmap. Queries run once in source order without actively evicting the page cache,
-so frequently accessed index partitions may remain cached. This is a resource
-profile of the same query workload, not a different dataset or index.
+The same persisted indexes may also be queried in an environment limited to **1
+vCPU and 2 GiB** to characterize storage-backed execution. Relify reads its
+Parquet index without `cache_index`; Faiss opens the standard persisted index
+with read-only mmap. Queries run once in source order without actively evicting
+the page cache, so frequently accessed index partitions may remain cached. This
+is a resource profile of the same query workload, not a different dataset or
+index.
 
-Committed results must preserve the raw JSON and identify the declared container
-resources. Machine-specific CPU affinity and NUMA configuration are execution
+Committed results must preserve the raw JSON and identify the declared resource
+limits. Machine-specific CPU affinity and NUMA configuration are execution
 details and are not part of the portable benchmark contract.
