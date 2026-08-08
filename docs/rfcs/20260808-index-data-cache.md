@@ -196,7 +196,7 @@ sequenceDiagram
     participant S as Published index relation
 
     Q1->>C: get_or_load(fragment key)
-    C-->>Q1: miss; become loader
+    C-->>Q1: cache miss, caller becomes loader
     Q1->>R: read complete row group
     R->>S: read projected column chunks
 
