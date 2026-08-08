@@ -1,4 +1,4 @@
-# ParquetPageCache
+# DecompressedParquetPageCache
 
 ## Problem
 
@@ -22,13 +22,14 @@ not depend on which data is resident.
 | What is cached? | Complete, validated, decompressed Parquet pages. Values remain in their Parquet encoding. |
 | What is the cache granularity? | One physical page from one leaf column in one Parquet row group. |
 | Where is the cache integrated? | At the Page-provider boundary: lookup before Page-body I/O, admission after validation and decompression, and output before definition-level and value decoding. |
-| How is pruning preserved? | File, row-group, column, and page pruning determine which pages are requested before cache lookup. |
-| How are correctness and concurrency handled? | Immutable object identity, per-page single-flight loading, atomic admission, and reference-counted page buffers. |
+| How is pruning preserved? | File, row-group, and column pruning determine which column chunks are opened before page lookup. |
+| How are correctness and concurrency handled? | StarRocks-compatible file identity, per-page single-flight loading, atomic admission, and reference-counted page buffers. |
 | How is memory controlled? | A session-owned byte budget, allocation-lifetime accounting, oversized-page bypass, and byte-weighted LRU eviction. |
 
-`ParquetPageCache` is a Parquet reader cache, not an Arrow column cache or the
-operating system's file cache. Arrow arrays created by a query may reference
-cached Page buffers, but arrays and execution batches are not cache entries.
+`DecompressedParquetPageCache` is a Parquet reader cache, not an Arrow column
+cache or the operating system's file cache. Arrow arrays created by a query may
+reference cached Page buffers, but arrays and execution batches are not cache
+entries.
 
 ## Scope
 
@@ -50,8 +51,9 @@ It also does not add:
 
 ```mermaid
 flowchart LR
-    query[Query Parquet data] --> prune[Prune files, row groups, columns, and pages]
-    prune --> page[Request physical page]
+    query[Query Parquet data] --> prune[Prune files, row groups, and columns]
+    prune --> chunk[Open selected column chunk]
+    chunk --> page[Read next physical page]
     page --> lookup{Parquet Page cached}
     lookup -->|Yes| decode[Standard value decoder]
     lookup -->|No| read[Read compressed page bytes]
@@ -65,6 +67,39 @@ flowchart LR
 Hits and misses return the same Parquet `Page` representation to the standard
 decoder. The cache changes how a Page is obtained, not index semantics or query
 results.
+
+## StarRocks Reference Design
+
+StarRocks 4.1 has a general remote-data cache below its file readers and a
+separate in-memory Page cache inside its Parquet `PageReader`. The latter is the
+reference for this RFC.
+
+The StarRocks reader receives the start and length of a column chunk and walks
+its Pages sequentially. For each current Page offset it:
+
+1. looks up a key composed of the file cache key and Page offset;
+2. on a hit, deserializes the cached Page header, obtains the cached body, and
+   advances to the next Page without reading the body from storage; or
+3. on a miss, reads the Page header and body, optionally decompresses the body,
+   and admits the complete Page.
+
+The cached header supplies the compressed and uncompressed lengths needed to
+advance the reader. This path does not require a Parquet OffsetIndex. StarRocks
+may cache either compressed or decompressed bodies according to compression
+benefit; Relify deliberately admits only decompressed bodies so a warm hit also
+avoids decompression.
+
+StarRocks constructs a compact file key from a 64-bit filename hash, a cache
+type prefix, and a 32-bit value derived from modification time or file size. It
+appends the 64-bit Page offset for Page-cache lookup. Modification time is
+preferred; file size is the fallback for sources that do not expose
+modification time because their files are not overwritten.
+
+StarRocks returns a reference-counted `PageHandle` with each hit. An entry held
+by an active reader is not eligible for LRU eviction. Its LRU implementation
+may temporarily exceed capacity when all candidates are pinned. Relify follows
+the same lifetime model, with the stricter admission behavior defined in Clause
+6.
 
 ## 1. Cache Unit
 
@@ -102,35 +137,32 @@ The conceptual key is:
 
 ```rust
 struct ParquetPageKey {
-    object_store: ObjectStoreIdentity,
-    object: ImmutableObjectIdentity,
+    file_cache_key: FileCacheKey,
     page_offset: u64,
 }
 ```
 
-`page_offset` is the physical offset of the Page header. The object identity
-includes the canonical path, size, and exact object version or ETag. The object
-store identity prevents equal paths in different stores from colliding. A
-Parquet object without an exact identity is not admitted unless its storage
-contract guarantees immutability.
+`page_offset` is the physical offset of the Page header. `file_cache_key`
+follows StarRocks: it hashes the filename and cache type, then includes the
+file's modification time when available or its file size otherwise. The file
+metadata used by the scan supplies these values.
 
 Row-group and leaf-column identity may be retained as entry metadata for
-validation and diagnostics. They are not part of the key because an immutable
-object and Page offset already identify the bytes, including when multiple
-tables or snapshots reference the same object.
+validation and diagnostics. They are not part of the key because the file
+cache key and Page offset identify the cached Page.
 
-A caller may provide an expected Page span obtained from the Parquet offset
-index. If it disagrees with the cached descriptor or the parsed Page header,
-the reader reports corrupt or inconsistent metadata. It must not create another
-entry for the same object and offset. Arbitrary `(offset, length)` reads belong
-to a byte-range cache and are not accepted by `ParquetPageCache`.
+The cache does not accept arbitrary `(offset, length)` reads. The reader begins
+at the column-chunk offset from Parquet metadata. On a miss it learns the Page
+span from the Page header; on a hit the cached descriptor supplies the same
+span. The end of that span becomes the next Page offset. No OffsetIndex is
+required.
 
 ### Why Page granularity
 
 A Page is the smallest reusable Parquet unit that can be validated and
-decompressed independently. It preserves column projection and page pruning,
-does not depend on DataFusion batch boundaries, and has one clear backing
-allocation for accounting and eviction.
+decompressed independently. It preserves column projection, does not depend on
+DataFusion batch boundaries, and has one clear backing allocation for
+accounting and eviction.
 
 Rejected units are:
 
@@ -156,16 +188,17 @@ DataSourceExec
 ```
 
 `AsyncFileReader` returns compressed file ranges. Caching those ranges is a
-byte-range cache, not `ParquetPageCache`. The cache belongs at the next
-boundary, where a reader can identify a physical Page and either:
+byte-range cache, not `DecompressedParquetPageCache`. The cache belongs at the
+next boundary, where a reader can identify a physical Page and either:
 
 1. return a resident decompressed `Page`; or
 2. read its header and compressed body, validate and decompress it, atomically
    admit it, and return the same `Page` representation.
 
-Lookup must happen before reading the Page body so a hit avoids storage I/O.
-The cache key and cached Page metadata must also let the reader advance to the
-next physical Page without reading the skipped body.
+Lookup happens at the current sequential Page offset before reading its body.
+The first Page offset comes from the column-chunk metadata. A miss reads the
+header to discover the compressed body length; a hit obtains that length from
+the cached Page metadata. Both paths then advance to the same next Page offset.
 
 DataFusion 54's `ParquetFileReaderFactory` and `AsyncFileReader` expose byte
 ranges below this boundary. `ParquetPushDecoder` does not currently expose a
@@ -176,9 +209,10 @@ prototype that provides this boundary through either:
 - a Relify-owned cache-aware `PageReader` adapter that reuses arrow-rs Page and
   value decoders.
 
-Relify must not fork or copy the Parquet decoder. A cache implemented only in
-`AsyncFileReader`, or by retaining output `RecordBatch` objects, does not satisfy
-this RFC.
+Relify vendors the required arrow-rs/DataFusion reader change and keeps it
+narrowly scoped to Page production and lifetime. It must not fork or copy the
+value decoders. A cache implemented only in `AsyncFileReader`, or by retaining
+output `RecordBatch` objects, does not satisfy this RFC.
 
 The cache and adapter are generic index infrastructure. Their interfaces
 contain no cluster, distance, quantization, or Top-K concepts.
@@ -195,10 +229,10 @@ metadata whose payload points into the Page buffer. It does not copy the code
 bytes.
 
 ```text
-ParquetPageCache entry: decompressed PLAIN payload
-                       |
-                       +-- BinaryViewArray for query A
-                       +-- BinaryViewArray for query B
+DecompressedParquetPageCache entry: decompressed PLAIN payload
+                                   |
+                                   +-- BinaryViewArray for query A
+                                   +-- BinaryViewArray for query B
 ```
 
 The `BinaryViewArray` retains a reference to the Page buffer. Evicting the Page
@@ -220,9 +254,8 @@ Caching must not weaken the storage-backed scan path.
 | File pruning | Reject files before creating Page requests. |
 | Row-group pruning | Reject row groups before creating Page requests. |
 | Column projection | Request Pages only for projected leaf columns. |
-| Page-index pruning | Do not look up Pages excluded by the selected access plan. |
 | Predicate pushdown | Reuse Pages, then apply the query's predicate and row selection through the standard decoder. |
-| Dynamic filters | Apply new pruning information to future Page requests; dynamic values never enter cache keys. |
+| Dynamic filters | Apply new file, row-group, and row-selection information through the standard scan path; dynamic values never enter cache keys. |
 
 A query that consumes only part of a Page may still admit the complete Page
 because the cache entry is immutable and query-independent. Dictionary Pages
@@ -231,10 +264,17 @@ chunk.
 
 ## 5. Consistency and Concurrency
 
-Relify-managed index objects are immutable after publication. A new object
-version receives a different identity, while snapshots that reference the same
-immutable object safely reuse its Pages. Correctness does not depend on timely
-invalidation by an index catalog.
+File identity and invalidation follow StarRocks. The cache key uses the filename
+and modification time when the storage exposes one. If modification time is
+unavailable, it uses file size; this is intended for sources whose files are not
+overwritten. A modified file therefore receives a different cache key when its
+reported modification time or fallback size changes.
+
+Deleting a file or removing a table does not synchronously invalidate its cache
+entries. Once metadata no longer selects the file, new scans cannot reach those
+keys. Unreferenced entries remain until normal LRU eviction. Eviction removes
+the lookup mapping, while a running reader's Page handle keeps the underlying
+buffer alive until that reader releases it.
 
 An entry becomes visible only after the complete Page has been read, parsed,
 decompressed, and structurally validated. Failed, partial, corrupt, or
@@ -243,7 +283,7 @@ returned to the query.
 
 Parquet CRC handling remains the responsibility of the standard reader when a
 file provides it. CRC is not a cache key, descriptor field, or
-`ParquetPageCache` requirement.
+`DecompressedParquetPageCache` requirement.
 
 Concurrent misses for the same key use single-flight loading. One task reads
 and prepares the Page; other tasks await the same result. Requests for different
@@ -254,9 +294,9 @@ invalidate references held by running decoders or Arrow arrays.
 
 ## 6. Memory and Eviction
 
-`relify-local` owns one `ParquetPageCache` per `LocalSession`. The cache is an
-execution resource and is never serialized into index metadata or the catalog.
-Closing the session releases its cache references.
+`relify-local` owns one `DecompressedParquetPageCache` per `LocalSession`. The
+cache is an execution resource and is never serialized into index metadata or
+the catalog. Closing the session releases its cache references.
 
 Capacity is charged against the decompressed Page allocation and entry
 overhead. The memory reservation remains attached to the backing allocation
@@ -265,7 +305,7 @@ from LRU lookup therefore moves its bytes to a retired count; it does not
 release the reservation early.
 
 Query-local `BinaryView` metadata, numeric Arrow buffers, distance state, and
-Top-K state are query memory rather than `ParquetPageCache` memory.
+Top-K state are query memory rather than `DecompressedParquetPageCache` memory.
 
 The initial policy is byte-weighted LRU. It must:
 
@@ -332,7 +372,7 @@ without payload copying.
 3. Implement identity, single-flight loading, accounting, eviction, and
    metrics.
 4. Test cold, partial-hit, and warm scans under pruning, concurrent loads,
-   cancellation, snapshot refresh, and memory pressure.
+   cancellation, file replacement, file deletion, and memory pressure.
 5. Run GIST and Wikipedia benchmarks, then remove the whole-index cache path.
 
 The old path is removed only after the new path demonstrates:
@@ -352,7 +392,7 @@ provides a reader crate that Relify can adopt unchanged.
 | System | Cache design | Difference from Relify |
 | --- | --- | --- |
 | Databend Fuse | Decoded block columns and compressed column-chunk bytes | Fuse controls its writer, block metadata, and Parquet deserializer; a managed block is typically one single-row-group file. |
-| StarRocks external Parquet | Remote byte-range cache plus Page caching in its Parquet reader | StarRocks owns the full file, row-group, column, and Page reader stack. This is the closest architectural boundary. |
+| StarRocks external Parquet | Remote byte-range cache plus Page caching in its Parquet reader | This RFC follows its sequential Page discovery, file identity, deletion, and handle-lifetime model, while always caching decompressed bodies and enforcing a hard admission budget. |
 | Relify | Decompressed Parquet Pages consumed by arrow-rs decoders | Relify keeps open Parquet files and must add a narrow Page-provider boundary to DataFusion's reader. |
 
 The PLAIN `BYTE_ARRAY` layout changes the trade-off relative to Databend's
@@ -365,7 +405,11 @@ Relevant implementations:
 - [DataFusion 54 Parquet source](https://github.com/apache/datafusion/blob/54.0.0/datafusion/datasource-parquet/src/source.rs)
 - [arrow-rs 58 PageReader](https://github.com/apache/arrow-rs/blob/58.3.0/parquet/src/column/page.rs)
 - [Databend Fuse block reader](https://github.com/databendlabs/databend/blob/3c73a7f73585d8ace3ffcd568c4bdc7dd30f71c0/src/query/storages/fuse/src/io/read/block/block_reader_merge_io_async.rs)
-- [StarRocks Parquet page reader](https://github.com/StarRocks/starrocks/blob/4.1.1/be/src/formats/parquet/page_reader.cpp)
+- [StarRocks 4.1 Parquet PageReader](https://github.com/StarRocks/starrocks/blob/4.1.0/be/src/formats/parquet/page_reader.cpp)
+- [StarRocks file cache key](https://github.com/StarRocks/starrocks/blob/4.1.0/be/src/formats/parquet/utils.cpp)
+- [StarRocks Page cache](https://github.com/StarRocks/starrocks/blob/4.1.0/be/src/cache/mem_cache/page_cache.h)
+- [StarRocks reference-counted LRU](https://github.com/StarRocks/starrocks/blob/4.1.0/be/src/util/lru_cache.cpp)
+- [StarRocks Data Cache deletion behavior](https://docs.starrocks.io/docs/using_starrocks/caching/block_cache/)
 
 ## Alternatives
 
@@ -373,11 +417,12 @@ Relevant implementations:
   complete index to fit in memory and preserves two scan implementations.
 - **Decoded row-group-column cache:** avoids repeated value decoding but couples
   residency to Arrow materialization and complicates batch alignment, Page
-  pruning, and shared-buffer accounting.
+  lifetime, and shared-buffer accounting.
 - **Compressed byte-range cache:** avoids remote reads but repeats Page parsing,
   decompression, and value decoding. It may become a lower cache tier.
 - **OS file cache:** helps local file I/O but not remote object stores or
-  Parquet decompression. It is separate from `ParquetPageCache`.
+  Parquet decompression. It is separate from
+  `DecompressedParquetPageCache`.
 - **Native vector structures:** may be faster but create another index format
   and separate scan semantics.
 
@@ -385,22 +430,20 @@ Relevant implementations:
 
 1. Can the Page-provider boundary be implemented as a narrow maintained adapter
    without copying the arrow-rs decoder?
-2. How should the reader discover and key Pages before body reads when a file
-   has no Parquet offset index?
-3. What Page size best balances I/O pruning, decompression, View metadata, and
-   cache admission for LVQ codes?
-4. Should the default capacity be zero or a conservative fixed size?
-5. Is byte-weighted LRU sufficient for IVF access patterns, or is admission
+2. What Page size best balances I/O granularity, decompression, View metadata,
+   and cache admission for LVQ codes?
+3. Should the default capacity be zero or a conservative fixed size?
+4. Is byte-weighted LRU sufficient for IVF access patterns, or is admission
    control required initially?
-6. Should Iceberg enter the first implementation or follow the local Parquet
+5. Should Iceberg enter the first implementation or follow the local Parquet
    prototype?
 
 ## Future Work
 
 - Add a compressed memory or local-disk byte-range cache below
-  `ParquetPageCache`.
-- Coordinate `ParquetPageCache` and DataFusion query memory under shared
-  pressure.
-- Share immutable Page entries across compatible sessions.
+  `DecompressedParquetPageCache`.
+- Coordinate `DecompressedParquetPageCache` and DataFusion query memory under
+  shared pressure.
+- Share Page entries across compatible sessions.
 - Add workload-directed Page prefetching.
 - Reuse the page-aware scan path across additional index families.
