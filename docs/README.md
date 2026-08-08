@@ -43,6 +43,7 @@ configuration.
 ## Project Internals
 
 - [Architecture](architecture.md)
+- [RFCs](rfcs/)
 - [Roadmap](roadmap.md)
 - [Architecture decisions](decisions/)
 - [Contributing](../CONTRIBUTING.md)
