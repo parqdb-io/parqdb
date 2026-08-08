@@ -50,23 +50,73 @@ It also does not add:
 ## Architecture
 
 ```mermaid
-flowchart LR
-    query[Query Parquet data] --> prune[Prune files, row groups, and columns]
-    prune --> chunk[Open selected column chunk]
-    chunk --> page[Read next physical page]
-    page --> lookup{Parquet Page cached}
-    lookup -->|Yes| decode[Standard value decoder]
-    lookup -->|No| read[Read compressed page bytes]
-    read --> unpack[Validate and decompress page]
-    unpack --> admit[Admit complete page]
-    admit --> decode
-    decode --> arrays[Query-local Arrow arrays]
-    arrays --> search[Distance and Top-K]
+sequenceDiagram
+    autonumber
+    actor Client
+    participant Session as LocalSession
+    participant Planner as DataFusion Planner
+    participant Reader as Parquet PageReader
+    participant Cache as DecompressedParquetPageCache
+    participant Storage as File or Object Storage
+    participant Decoder as Arrow Value Decoder
+    participant TopK as Fused Distance and Top-K
+
+    Client->>Session: Submit vector search
+    Session->>Planner: Build physical plan
+    Planner->>Planner: Resolve files and project columns
+    Planner->>Planner: Prune files and row groups
+    Planner->>Reader: Execute selected column chunks
+
+    loop Each sequential Page in a selected column chunk
+        Reader->>Reader: Build key from filename, mtime or size, and Page offset
+        Reader->>Cache: get_or_load(key, loader)
+        alt Resident Page
+            Cache-->>Reader: Decompressed Page and PageHandle
+        else Cache miss
+            Cache->>Cache: Create or join single-flight load
+            alt This request owns the load
+                Cache->>Reader: Invoke loader
+                Reader->>Storage: Read Page header and compressed body
+                Storage-->>Reader: Page bytes
+                Reader->>Reader: Parse, validate, and decompress complete Page
+                Reader->>Cache: Complete load
+                alt Page fits the available cache budget
+                    Cache->>Cache: Evict unpinned LRU entries and admit Page
+                    Cache-->>Reader: Cached Page and PageHandle
+                else Admission would exceed the budget
+                    Cache-->>Reader: Query-owned Page without admission
+                end
+            else Another request owns the load
+                Cache-->>Reader: Await and reuse the same load result
+            end
+        end
+
+        Reader->>Reader: Advance using cached or parsed Page span
+        Reader->>Decoder: Supply decompressed encoded Page
+        alt PLAIN BYTE_ARRAY code
+            Decoder->>Decoder: Parse lengths and build BinaryView metadata
+            Note over Decoder,Cache: BinaryView retains the Page buffer
+        else Other supported Parquet encoding or type
+            Decoder->>Decoder: Run the standard value decoder
+        end
+        Decoder-->>TopK: Query-local Arrow RecordBatch
+        TopK->>TopK: Update distance and Top-K state
+    end
+
+    TopK-->>Session: Ordered search results
+    Session-->>Client: Return results
+    Note over Reader,Cache: Page and Arrow references pin cache allocations
+    TopK-->>Cache: Release final Page references as batches are dropped
+
+    opt Capacity reduction, explicit clear, or later cache pressure
+        Cache->>Cache: Remove eligible entries from lookup
+        Cache->>Cache: Free each allocation after its final reference
+    end
 ```
 
-Hits and misses return the same Parquet `Page` representation to the standard
-decoder. The cache changes how a Page is obtained, not index semantics or query
-results.
+The sequence uses the same Parquet `Page` representation for hits, admitted
+misses, and bypassed misses. Cache pressure changes admission only: a query can
+always continue with a query-owned Page.
 
 ## StarRocks Reference Design
 
