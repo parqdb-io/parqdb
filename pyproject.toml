@@ -54,6 +54,7 @@ Issues = "https://github.com/petrizhang/relify/issues"
 
 [dependency-groups]
 benchmark = [
+    "h5py>=3.12,<4",
     "numpy>=1.26,<3",
 ]
 benchmark-faiss = [
