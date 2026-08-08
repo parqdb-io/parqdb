@@ -27,11 +27,6 @@ lakehouse data with the compute engines you already use. It stores vector
 indexes as open Parquet or Iceberg tables, allowing DataFusion, StarRocks, and
 Spark to query them directly with SQL while source data stays where it is.
 
-Relify targets analytical and offline vector workloads such as large-k
-retrieval, similarity joins, and vector search composed with analytical
-queries. Dedicated vector databases remain the better fit for latency-sensitive,
-high-concurrency online serving.
-
 ## Quick Start
 
 Relify supports standard CPython 3.11 through 3.14 on Linux x86_64 and macOS
@@ -133,23 +128,6 @@ See the [local](https://github.com/petrizhang/relify/blob/main/docs/guides/local
 [Spark](https://github.com/petrizhang/relify/blob/main/docs/guides/spark.md), and
 [StarRocks](https://github.com/petrizhang/relify/blob/main/docs/guides/starrocks.md)
 guides for installation and configuration.
-
-## How It Works
-
-![Relify builds an open index beside the source table and queries both with the host compute engine](https://raw.githubusercontent.com/petrizhang/relify/main/assets/how-it-works.svg)
-
-Source rows remain in their original Parquet or Iceberg table. Building an IVF
-index writes only portable metadata, centroids, and postings as open table data.
-
-At query time, an engine-specific adapter binds the source and index to
-DataFusion, StarRocks, or Spark. The engine performs candidate pruning, source
-filtering, distance calculation, top-k, and subsequent analytical SQL in its
-own runtime.
-
-The [open index specification](https://github.com/petrizhang/relify/blob/main/spec/README.md)
-defines the shared schema and query semantics; the
-[architecture guide](https://github.com/petrizhang/relify/blob/main/docs/architecture.md)
-describes the implementation boundaries.
 
 ## Benchmarks
 
