@@ -1,772 +1,392 @@
 # Bounded Index Data Cache
 
-## Summary
+## Problem
 
-Replace the current all-or-nothing in-memory index path with a bounded,
-read-through cache for decoded index data. Published Parquet or Iceberg data
-remains the source of truth. A cache hit supplies decoded Arrow column arrays;
-a miss uses the standard Arrow Parquet decoder through a narrow cache-aware
-reader integration and may populate the cache. Queries use the same logical and
-physical scan contract in both cases.
+Relify currently has two index scan paths:
+
+- `cache_index()` materializes the complete index and scans it through a
+  memory-only implementation;
+- an uncached query scans and decodes Parquet through DataFusion.
+
+The first path is fast only when the complete index fits in memory. It has no
+capacity or eviction policy, duplicates data during snapshot refresh, and
+implements scan semantics separately from the storage-backed path.
+
+Relify needs one storage-backed scan path with a bounded read-through cache.
+Published Parquet or Iceberg data remains authoritative. Hot decoded data may
+stay in memory, but correctness and query results must not depend on residency.
+
+## Decisions
+
+The first implementation makes six decisions:
+
+| Question | Decision |
+| --- | --- |
+| What is cached? | Complete, unfiltered Arrow columns produced by the standard Parquet decoder. |
+| What is the cache granularity? | One top-level column from one physical Parquet row group. |
+| Where is the cache integrated? | In a cache-aware row-group scan adapter around DataFusion's Parquet decoder. Lookup happens before decode; admission happens at complete decoder output. |
+| How is pruning preserved? | File, row-group, and column pruning happen before lookup. Partial decoder output is never admitted. |
+| How are correctness and concurrency handled? | Exact immutable object identity, per-key single-flight loading, atomic admission, and reference-counted values. |
+| How is memory controlled? | A session-owned byte budget, retained-buffer accounting, oversized-entry bypass, and byte-weighted LRU eviction. |
+
+These choices are coupled. Caching a page would require integration below the
+decoder and would still pay value-decoding and Arrow-allocation costs. Caching
+an entire row group would waste memory across different projections. A decoded
+row-group column avoids both problems while remaining reusable by ordinary
+DataFusion operators.
+
+## Scope
 
 The first implementation covers index relations in the local DataFusion
-backend. It does not cache source tables or introduce a persistent local copy
-of an index.
+backend. It does not cache source tables, query results, or arbitrary
+DataFusion plans.
 
-## Motivation
+It also does not add:
 
-The current `cache_index()` implementation materializes every relation in one
-index snapshot. Cached IVF postings then use `CachedIvfScanExec`, while an
-uncached query uses DataFusion's Parquet scan. This path was useful for
-measuring in-memory performance, but it is not a stable serving architecture:
+- a persistent cache across process restarts;
+- a cache shared by multiple processes;
+- a raw byte-range or local-disk cache;
+- a replacement Parquet decoder;
+- nested-column caching; or
+- automatic cache sizing from machine memory.
 
-- an index must fit entirely in memory;
-- cache memory has no capacity or eviction policy;
-- cached and uncached queries use different scan implementations;
-- warming a new snapshot duplicates substantial data before the old snapshot
-  is released;
-- repeated Parquet decoding is avoided only after explicit whole-index
-  materialization.
+## Architecture
 
-The index files are already immutable, partitioned, and selectively scanned.
-Relify should retain those properties and cache only the hot decoded row-group
-columns that actual queries touch.
-
-## Goals
-
-- Keep published index relations as the only durable source of truth.
-- Bound cache memory independently of total index size.
-- Reuse decoded Arrow data across queries and avoid repeated Parquet decoding
-  for hot columns.
-- Preserve file and row-group pruning before cache lookup.
-- Preserve projection, filtering, distance, and Top-K semantics across hits and
-  misses.
-- Use one cache-aware index scan contract instead of separate memory-only and
-  storage-backed query implementations.
-- Remain correct during concurrent queries, eviction, index refresh, and
-  session shutdown.
-- Provide enough metrics to distinguish storage I/O, Parquet decoding, cache
-  lookup, and vector computation.
-
-## Non-Goals
-
-- Caching arbitrary source tables or SQL query results.
-- A generic cache for every DataFusion data source.
-- A distributed cache shared by multiple processes or machines.
-- A persistent cache that must survive process restart.
-- Reimplementing Parquet decoding.
-- Adding a raw byte-range or local-disk cache in the first implementation.
-- Automatically choosing a cache capacity from machine memory.
-
-## User Experience
-
-An index query always reads the current immutable index snapshot. When an
-eligible decoded row-group column is resident, the query reuses it. Otherwise,
-Relify reads and decodes the column from the published relation. The query
-result does not depend on whether any column was cached.
-
-The cache has a session-level byte capacity. A zero capacity disables decoded
-data caching without changing the scan plan's semantics. The default capacity
-is left unresolved by this RFC.
-
-Read-through loading is automatic. The existing `cache_index()` and
-`is_index_cached()` methods describe whole-index residency and do not fit a
-partially resident cache; this RFC removes them. An explicit clear operation
-and cache statistics replace `uncache_index()` and the boolean status method.
-Workload-directed prewarming can be designed separately if cold-query latency
-requires it.
-
-## Interfaces
-
-### Session API
-
-Cache capacity is a Relify session variable rather than a `connect()` argument:
-
-```python
-session.set("relify.index_cache_capacity", "4GiB")
+```mermaid
+flowchart LR
+    query[Query index snapshot] --> prune[Prune files and row groups]
+    prune --> project[Resolve required columns]
+    project --> lookup{Column cached}
+    lookup -->|Yes| columns[Complete Arrow columns]
+    lookup -->|No| reader[Row-group scan adapter]
+    storage[Published Parquet or Iceberg] --> reader
+    reader --> decoder[Standard Parquet decoder]
+    decoder --> complete{Complete and reusable}
+    complete -->|Yes| capacity{Capacity available}
+    complete -->|No| bypass[Do not cache]
+    capacity -->|Yes| admit[Admit column]
+    capacity -->|No| columns
+    admit --> columns
+    bypass --> batches[Ordinary Arrow batches]
+    columns --> select[Apply row selection and filters]
+    select --> batches
+    batches --> search[Distance and Top-K]
 ```
 
-The value accepts integer bytes or the binary suffixes `KiB`, `MiB`, and
-`GiB`. `Session.set()` applies the change eagerly to the current session.
+The cache is not another index representation. Hits and misses converge on
+ordinary Arrow batches before the vector search operators.
 
-The same variable is visible to SQL:
+## 1. Cached Value and Granularity
 
-```sql
-SET relify.index_cache_capacity = '4GiB';
+### Cached value
+
+The cache retains the decoded Arrow representation. A hit skips storage I/O,
+Parquet decompression, value decoding, and Arrow allocation for that column.
+
+Only complete, unfiltered columns are reusable. Output produced with a partial
+`RowSelection`, predicate, or runtime filter must not be admitted because it
+does not represent the physical row-group column.
+
+### Cache unit
+
+The logical unit is:
+
+```text
+one physical Parquet row group x one top-level column
 ```
 
-`0` disables admission and releases unpinned entries. Reducing the capacity
-removes least-recently-used entries from lookup immediately. Memory pinned by
-running queries is released when those queries finish. Invalid sizes fail
-without changing the current capacity.
+In memory, one entry may contain several Arrow arrays because DataFusion can
+split a row group at its execution batch size. The arrays remain separately
+reference counted and are not concatenated.
 
-The session exposes two operational methods:
+This granularity provides projection reuse. A query for `pid` and `code` can
+reuse a cached `pid` while loading `code`; a later query for `pid` and `key_1`
+can reuse the same `pid`. When several columns miss in one row group, the
+reader must load them in one projected pass and admit them independently.
 
-```python
-stats = session.index_cache_stats()
-session.clear_index_cache()                         # all indexes
-session.clear_index_cache("documents_embedding")   # one logical index
-```
+The first implementation admits only top-level, non-nested columns. Nested
+columns may span multiple Parquet leaves and need a separate identity and
+reconstruction contract.
 
-`clear_index_cache()` removes entries from future lookup but does not cancel or
-alter running queries. Clearing an index covers all of its snapshot identities
-still present in the session cache.
+### Rejected granularities
 
-`index_cache_stats()` returns an immutable `IndexCacheStats` value:
+| Unit | Reason not selected |
+| --- | --- |
+| Complete index | Requires the complete index to fit in memory. |
+| File | Too coarse for row-group and column pruning. |
+| Complete row group | Retains unrequested columns and reduces reuse across projections. |
+| Parquet page | Requires page-reader integration and still pays Parquet value decoding and Arrow allocation. |
+| Filtered batch | Query-specific and unsafe to reuse. |
 
-```python
-@dataclass(frozen=True)
-class IndexCacheStats:
-    capacity_bytes: int
-    resident_bytes: int
-    retired_bytes: int
-    entry_count: int
-    hit_count: int
-    hit_bytes: int
-    miss_count: int
-    miss_bytes: int
-    load_count: int
-    load_wait_count: int
-    admission_count: int
-    eviction_count: int
-    oversized_bypass_count: int
-    capacity_bypass_count: int
-```
+## 2. Reader Integration
 
-`resident_bytes` includes entries removed from lookup but still pinned by a
-running query; `retired_bytes` is the subset no longer available for lookup.
-`entry_count` counts entries still available for lookup. Counters are
-cumulative for the session and are not reset by a clear operation. Per-query
-hit, miss, read, and decode metrics remain available through
-`Session.analyze(query)`.
+The integration is owned by a cache-aware row-group scan adapter:
 
-The existing `IndexCacheInfo`, `cache_index()`, `is_index_cached()`, and
-`uncache_index()` APIs are removed. Relify has not published a stable release
-that promises these whole-index semantics.
+1. DataFusion resolves files, metadata, projection, and surviving row groups.
+2. The adapter constructs a key for each required row-group column.
+3. It returns cache hits and claims misses through the cache's single-flight
+   interface.
+4. It invokes the standard Arrow Parquet decoder once for all claimed columns
+   in that row group.
+5. It admits only complete column output.
+6. It assembles hits and misses into aligned Arrow batches without copying
+   their data buffers.
 
-### Rust Cache Boundary
+The adapter coordinates lookup and admission at row-group-column granularity.
+It does not implement a new `PageReader`, decompressor, encoding decoder, or
+schema converter.
 
-The cache implementation is private to `relify-local`; it is not a backend
-contract and does not belong in `relify-core`. Its conceptual interface is:
+DataFusion 54 does not expose this boundary through
+`ParquetFileReaderFactory`: that interface supplies metadata and compressed
+bytes below the decoder. `ParquetAccessPlan` selects row groups, but the normal
+scan stream does not expose enough physical provenance to recover complete
+row-group columns from its output.
+
+The first implementation therefore depends on a narrow hook around
+DataFusion's Parquet row-group decoder. The hook may be upstreamed to
+DataFusion or implemented in a Relify-owned adapter, but Relify must not fork
+or copy the Parquet decoder. Proving this hook is maintainable is the first
+implementation gate; cache policy work does not begin before that result.
+
+The adapter is generic index infrastructure. Its interfaces contain no `cid`,
+distance, quantization, or Top-K concepts.
+
+## 3. Pruning and Filtering
+
+Caching must not weaken the storage-backed scan path.
+
+| Existing optimization | Required behavior with the cache |
+| --- | --- |
+| File pruning | Reject files before constructing cache keys. |
+| Row-group pruning | Reject row groups before constructing cache keys. |
+| Column projection | Look up and decode only required columns. |
+| Page-index pruning | Preserve the standard reader path; do not admit partially decoded columns. |
+| Predicate pushdown | Predicate columns may be decoded first. Partial output is not admitted. |
+| Dynamic filters | Apply current file and row-group pruning before lookup and apply row-level filtering to assembled output. Dynamic values never enter cache keys. |
+
+The hard case is a row group with both a complete cache hit and a miss decoded
+under a partial `RowSelection`. The hit contains all rows while the miss does
+not. The first implementation must either:
+
+- apply one authoritative selection to both sides without copying full
+  columns; or
+- bypass decoded hits for that row group and use the standard reader path.
+
+It must not silently disable page pruning, late materialization, or dynamic
+filtering to increase the hit rate. Efficient mixed hit and selected-miss
+execution requires prototype evidence and is not assumed by this RFC.
+
+## 4. Identity, Consistency, and Concurrency
+
+### Identity
+
+A path alone is not a safe cache key. The conceptual key is:
 
 ```rust
-#[derive(Clone, Eq, Hash, PartialEq)]
 struct IndexColumnKey {
     relation: ExactRelationIdentity,
     object: ObjectIdentity,
     row_group: usize,
     column: PhysicalColumnIdentity,
 }
-
-struct DecodedIndexColumn {
-    field: FieldRef,
-    arrays: Arc<[ArrayRef]>,
-    row_count: usize,
-    retained_bytes: usize,
-}
-
-impl IndexDataCache {
-    async fn get_or_load_columns<F, Fut>(
-        &self,
-        keys: &[IndexColumnKey],
-        load_missing: F,
-    ) -> Result<Vec<Arc<DecodedIndexColumn>>>
-    where
-        F: FnOnce(Vec<IndexColumnKey>) -> Fut,
-        Fut: Future<Output = Result<Vec<(IndexColumnKey, DecodedIndexColumn)>>>;
-
-    fn set_capacity(&self, bytes: usize);
-    fn clear(&self, scope: CacheScope);
-    fn stats(&self) -> IndexCacheStats;
-}
 ```
 
-These types describe ownership, not a public Rust API commitment. The cache
-owns admission, per-column single-flight coordination, accounting, and
-eviction. It passes only caller-owned misses to the load closure, allowing all
-missing columns from one row group to be decoded in one projected reader pass.
-The load closure owns storage access and decoding. This keeps the cache
-independent of Parquet, Iceberg, DataFusion plans, and specific index families.
+The identities include:
 
-### DataFusion Scan Boundary
+- the published index snapshot and relation role;
+- the canonical object path;
+- the object version or ETag when available;
+- the Parquet row-group ordinal;
+- the physical field path and type; and
+- the column-chunk offset and length when available.
 
-A cache-aware index relation provider owns the DataFusion integration. The
-integration must run inside the Parquet reader boundary where the object,
-physical row group, projection, and complete decoded output are known together.
-It:
+Iceberg relations also include the table UUID and exact snapshot ID.
+Relify-managed index objects must not be overwritten after publication. A new
+snapshot receives a different identity, so correctness does not depend on
+timely invalidation of old entries.
 
-1. receives an exact relation identity and the normal DataFusion scan inputs;
-2. delegates file listing, metadata, and pruning to the existing relation
-   provider;
-3. converts each required column of every surviving Parquet row group into a
-   cache key;
-4. looks up those decoded columns before row-group decoding;
-5. invokes Arrow's standard Parquet decoder once for all missing columns in a
-   row group and admits each complete, unfiltered column independently;
-6. assembles cache hits and decoded misses into aligned Arrow batches without
-   copying their buffers; and
-7. returns ordinary Arrow batches to the downstream physical plan.
+### Atomic publication
 
-DataFusion 54 does not expose this decoded boundary through
-`ParquetFileReaderFactory`: that interface supplies metadata and compressed
-bytes below the decoder. `ParquetAccessPlan` can select row groups, but the
-normal scan output is an untagged `RecordBatch` stream and cannot be safely
-turned back into row-group column entries. The implementation therefore
-requires a narrow hook around DataFusion's Parquet morselizer and Arrow decoder.
-It may be implemented upstream in DataFusion or in a Relify-owned adapter, but
-it must not fork or reimplement the Parquet decoder.
+An entry becomes visible only after the complete column has been decoded and
+validated. Failed, corrupt, partial, or cancelled loads are not cached. A
+storage or decode failure is returned exactly as it is on the uncached path.
 
-The provider is generic across Relify index relations. IVF planning may select
-cluster files before calling it, but the provider and `IndexDataCache` have no
-`cid`, distance, quantization, or Top-K API. Future index families reuse this
-boundary without adding cache-specific branches to their search operators.
+### Concurrent loads
 
-## Reference Design
+Concurrent misses for the same key use single-flight loading. One task loads
+the column; other tasks await that result. A multi-column request claims all
+currently unowned misses before issuing one projected read. It waits only for
+columns already owned by another load.
 
-### Architecture
+Cache values are reference counted. Eviction and explicit clearing remove an
+entry from future lookup but cannot invalidate arrays held by a running query.
+Retired but pinned buffers remain accounted until their final reference is
+released.
 
-The cache is inserted between physical pruning and the normal downstream
-search operators. A hit and a miss converge on the same Arrow-column boundary:
+## 5. Memory Ownership and Eviction
 
-```mermaid
-flowchart LR
-    query[Relify index query] --> snapshot[Resolve exact index snapshot]
-    snapshot --> pruning[File and row-group pruning]
-    pruning --> projection[Resolve required columns]
-    projection --> lookup{Decoded columns resident?}
+`relify-local` owns one `IndexDataCache` per `LocalSession`. The cache is an
+execution resource and is never serialized into index metadata or the catalog.
+Closing the session releases it.
 
-    lookup -->|Hits| columns[Complete Arrow columns]
-    lookup -->|Missing columns| reader[Cache-aware DataFusion reader hook]
-    storage[(Published Parquet or Iceberg relation)] --> reader
-    reader --> decoded[Complete decoded columns]
-    decoded --> admission{Cache capacity available?}
-    admission -->|Yes| cache[(Bounded decoded cache)]
-    cache --> columns
-    admission -->|No, bypass| columns
+The capacity is measured in retained Arrow buffer bytes plus cache-entry
+overhead. Accounting must:
 
-    columns --> batches[Assemble Arrow batches]
-    batches --> filters[Row and runtime filters]
-    filters --> search[Distance and Top-K]
+- avoid double-counting buffers shared by arrays in one entry;
+- include retired entries still pinned by running queries;
+- conservatively account for buffers whose ownership cannot be determined;
+- reject an entry larger than the complete cache capacity; and
+- bypass admission when the budget cannot be reserved.
+
+Cache pressure must not fail a valid query. A miss can always continue as a
+normal storage-backed read without admission.
+
+The initial policy is byte-weighted LRU. Frequency-aware admission or SLRU may
+replace it if benchmark evidence shows that one-time scans evict useful hot
+columns. Decoder buffers, result batches, distance state, and Top-K state are
+query memory, not cache memory.
+
+## 6. Interfaces and Observability
+
+### Session API
+
+Capacity is a session variable:
+
+```python
+session.set("relify.index_cache_capacity", "4GiB")
 ```
 
-The cache never becomes an alternative index representation. It retains the
-same Arrow arrays produced by the storage-backed path and can be disabled
-without selecting another query implementation.
+The same variable is available through SQL:
 
-### Ownership and Scope
-
-`relify-local` owns one `IndexDataCache` per `LocalSession`. Catalog and
-metadata crates remain independent of Arrow, DataFusion, and memory policy.
-The cache accepts only relations belonging to a validated, published index
-snapshot.
-
-The cache is an execution resource. It is never serialized into index metadata
-or the SQLite catalog. Closing the session releases it without changing the
-published index.
-
-### Source of Truth and Identity
-
-Cache correctness relies on exact immutable relation identity:
-
-- a managed Parquet relation is identified by its published index snapshot,
-  relation role, and canonical object path;
-- an Iceberg relation is additionally bound to its table UUID and exact
-  snapshot ID;
-- an object version or ETag is included when the storage implementation
-  provides one.
-
-Relify-managed index objects must not be overwritten after publication. When a
-new index snapshot is published, its relation identity changes. Old cache
-entries may be removed eagerly to reclaim memory, but identity separation, not
-invalidation timing, provides correctness.
-
-### Cache Unit
-
-The logical cache unit is one complete, unfiltered decoded column from one
-physical Parquet row group. In Parquet terms this corresponds to a column chunk;
-in memory it is represented by one or more Arrow arrays because DataFusion may
-split a large row group at its configured batch size. The arrays remain
-independently reference counted and are not concatenated into a new buffer.
-
-The key contains at least:
-
-```text
-exact relation identity
-object path and available object version
-row-group ordinal
-physical field identity and type
-column-chunk offset and length when available
+```sql
+SET relify.index_cache_capacity = '4GiB';
 ```
 
-The first implementation admits only top-level, non-nested index columns, for
-which one logical column maps to one physical Parquet leaf. Nested columns must
-bypass admission until their multi-leaf identity and reconstruction contract
-are defined.
+`0` disables admission and retires current entries. Reducing capacity evicts
+least-recently-used entries from lookup immediately; pinned entries are freed
+when their queries release them.
 
-Filters, query vectors, `nprobes`, `k`, and the query projection as a whole are
-not part of the key. File and row-group pruning happen before loading a column;
-row-level filters and runtime filters are applied after the required complete
-columns are assembled. Filtered or partially decoded output is not admitted
-because it cannot be safely reused by another query. Physical field identity
-includes the field path and type, not only the column name. Process restart
-naturally separates entries decoded by different Relify or Arrow versions.
+Operational methods are:
 
-Row-group-column granularity is the proposed contract, not a requirement to
-implement a new Parquet decoder. It does require a reader integration that can
-intercept complete columns before row-level filtering. DataFusion's standard
-Arrow decoder remains responsible for decompression, decoding, null handling,
-and schema conversion. The first implementation must validate that this hook
-can be maintained without copying DataFusion's Parquet reader.
-
-Independent column entries preserve reuse across projections. A query that
-needs `pid` and `code` can reuse a cached `pid` while decoding only `code`; a
-later query that needs `pid` and `key_1` reuses the same `pid` entry. Missing
-columns from one row group are decoded together so this granularity does not
-turn one projected scan into one scan per column.
-
-### Pruning and Filter Contract
-
-The standard
-[DataFusion 54 Parquet source](https://github.com/apache/datafusion/blob/54.0.0/datafusion/datasource-parquet/src/source.rs)
-provides the following baseline:
-
-| Capability | DataFusion 54 behavior |
-| --- | --- |
-| Projection pushdown | Reads and decodes only columns required by the physical projection and predicates. |
-| Static I/O pruning | Uses partition values, file statistics, row-group statistics, Bloom filters, page indexes, and an optional external `ParquetAccessPlan`. |
-| Decoder row filtering | Can decode predicate columns first and pass a `RowSelection` to later columns when pushdown filters are enabled. |
-| Dynamic filters | Re-evaluates file-level pruning when opening a file and may stop an active file stream as the filter narrows. Row-group access plans are not continuously rebuilt from new dynamic-filter values after decoding starts. |
-| Decoded-cache hook | Not exposed. `ParquetFileReaderFactory` operates below decoding, while `ParquetMorselizer` is crate-private. |
-
-The cache must preserve DataFusion's storage optimizations:
-
-| Optimization | Required cache behavior |
-| --- | --- |
-| File and row-group pruning | Apply partition, index, statistics, and Bloom-filter pruning before cache lookup. Pruned row groups create no cache traffic. |
-| Column pruning | Construct keys only for columns required by projection, predicates, and downstream operators. Decode only missing required columns. |
-| Page-index pruning | If a miss is decoded with a partial `RowSelection`, do not admit the partial arrays. The standard reader retains page-level I/O pruning. |
-| Decoder row filtering and late materialization | A partial miss falls back to the standard reader and is not admitted. A complete cache hit may evaluate the same predicate after assembling the cached columns. |
-| Dynamic filters | Preserve DataFusion's file-level pruning, early stopping, and row-level evaluation. Dynamic filter values never enter cache keys. Re-pruning each unopened row group from a newly updated filter is a future reader optimization, not a first-version requirement. |
-
-The conservative first implementation may bypass decoded hits for a row group
-when mixing them with a partial miss would require reproducing DataFusion's
-`RowSelection` or late-materialization state. This gives up a possible cache hit
-but preserves the standard cold path and all I/O pruning. Mixed hit and partial
-miss execution can be added only after the reader hook exposes one authoritative
-selection to both sides.
-
-### Read Path
-
-The cache-aware index scan performs these steps:
-
-1. Resolve the exact published index snapshot.
-2. Apply index pruning, including IVF cluster-to-file pruning.
-3. Apply DataFusion file and row-group pruning.
-4. Construct one key per required column of each remaining row group.
-5. Return resident columns directly.
-6. Decode all missing columns for a row group in one reader pass.
-7. Admit only successfully and completely decoded columns.
-8. Assemble aligned batches from hit and miss columns without copying buffers.
-9. Apply row-level and runtime filters, then continue to distance and Top-K
-   execution.
-
-Hits and misses may occur in one query. Their output schema, partitioning, and
-ordering contract must be identical. Cache-specific operators must not contain
-IVF distance or Top-K logic; they only provide decoded index data.
-
-### Concurrency
-
-Concurrent misses for the same column key use single-flight loading. One task
-reads and decodes the column while other tasks await the same result. A failed
-or cancelled load is not cached, and another query may retry it. A multi-column
-load claims all currently unowned misses before issuing one projected read;
-overlapping queries wait only for columns already being loaded and may load
-their remaining columns independently.
-
-```mermaid
-sequenceDiagram
-    participant Q1 as Query 1
-    participant Q2 as Query 2
-    participant C as IndexDataCache
-    participant R as Cache-aware Parquet reader
-    participant S as Published index relation
-
-    Q1->>C: get_or_load_columns(pid, code)
-    C-->>Q1: cache miss, caller becomes loader
-    Q1->>R: read missing row-group columns
-    R->>S: read projected column chunks
-
-    Q2->>C: get_or_load_columns(pid, key_1)
-    C-->>Q2: wait for pid, caller owns key_1
-    Q2->>R: read missing key_1 column
-    R->>S: read key_1 column chunk
-
-    S-->>R: immutable Parquet bytes
-    R-->>C: complete Arrow columns from both loads
-    C-->>Q1: shared pid and code references
-    C-->>Q2: shared pid and key_1 references
-
-    Note over Q1,Q2: Both queries continue through the same filter and search operators
+```python
+stats = session.index_cache_stats()
+session.clear_index_cache()
+session.clear_index_cache("documents_embedding")
 ```
 
-Cache values are reference counted. Eviction removes an entry from future
-lookup but cannot invalidate a column held by a running query. Capacity
-accounting must continue to include an evicted value until its final query
-reference is released; otherwise concurrent scans can exceed the configured
-budget by repeatedly replacing pinned entries.
+Clearing affects future lookup, not running queries. The existing
+`cache_index()`, `is_index_cached()`, and `uncache_index()` APIs are removed
+because partial residency cannot be represented by a whole-index boolean.
 
-When capacity cannot be reserved without violating the hard cache budget, a
-miss remains a normal storage-backed read and bypasses admission. Cache
-pressure must not fail an otherwise valid query.
+### Cache boundary
 
-### Capacity and Eviction
+The cache is private to `relify-local`, not a backend or `relify-core` API. Its
+conceptual operation is:
 
-The cache is weighted by retained Arrow buffer bytes plus entry overhead, not
-by row or entry count. The implementation must avoid double-counting shared
-buffers across an entry's batch-sized arrays and must account conservatively
-when exact ownership cannot be determined.
+```rust
+async fn get_or_load_columns(
+    keys: &[IndexColumnKey],
+    load_missing: LoadMissingColumns,
+) -> Result<Vec<Arc<DecodedIndexColumn>>>;
+```
 
-The first eviction policy is byte-weighted LRU. An entry larger than the total
-capacity is never admitted. Admission occurs only after a complete column is
-available, so a cancelled scan cannot leave a partial entry.
+`DecodedIndexColumn` owns the field, batch-sized arrays, row count, and
+retained-byte count. The cache owns lookup, single-flight coordination,
+admission, accounting, and eviction. The load closure owns storage and decode.
 
-SLRU or frequency-aware admission may be added later if scans that are touched
-once displace useful hot data. That policy change does not alter cache keys or
-the scan contract.
+### Metrics
 
-The cache budget controls retained cache data. Temporary decoder buffers,
-query output, distance state, and Top-K state remain query memory and continue
-to follow DataFusion's execution-memory behavior.
+Session and `EXPLAIN ANALYZE` metrics must report:
 
-### Existing Cache Migration
-
-The final implementation removes the complete `CachedIndex` materialization,
-`CachedIvfPostings`, `CachedIvfScanExec`, and the whole-index cache API.
-Temporary coexistence is allowed only while performance and correctness are
-compared during development.
-
-The optimized cached postings scan currently maintains a `cid`-to-range
-directory and over-partitions selected work. Equivalent cluster pruning and
-parallelism must be preserved by planning physical files and row groups, not by
-recreating a whole-index memory structure.
-
-ADR 0001 remains the record of the first explicit cache design. Once this RFC
-is implemented, a short follow-up ADR will mark that design as superseded.
-
-### Observability
-
-Session-level cache statistics must include:
-
-- capacity, live bytes, and entry count;
-- hit, miss, and single-flight wait counts;
+- capacity, resident bytes, retired bytes, and entry count;
+- hits, misses, and single-flight waits;
 - hit and miss bytes;
-- admitted, evicted, oversized-bypassed, and capacity-bypassed entries;
-- storage-read and decode time for misses.
+- admissions, evictions, and capacity or oversized bypasses; and
+- storage-read and decode time on misses.
 
-The cache-aware scan must expose per-plan hit and miss metrics through
-`EXPLAIN ANALYZE`. Metrics must make it possible to prove that a warm query did
-not read or decode a resident column.
+The metrics must prove that a warm hit performed neither storage I/O nor
+Parquet decoding.
 
-### Failure and Consistency Behavior
+## Rollout
 
-- Missing or corrupt cache data is treated as a miss; the published relation
-  remains authoritative.
-- A storage or decode failure is returned exactly as it would be without the
-  cache.
-- Publishing or selecting a new snapshot cannot return data from an older
-  snapshot because its exact relation identity differs.
-- Eviction and explicit cache removal do not affect already running queries.
-- Cache entries are not written back to index storage.
-
-## Rollout and Validation
-
-Implementation proceeds in three stages:
-
-1. Build a reader-hook prototype and prove that complete row-group columns can
-   be intercepted before row-level filtering without copying DataFusion's
-   Parquet decoder or changing results, projection, pruning, or runtime-filter
+1. Build the reader-hook prototype. Verify complete column capture, zero-copy
+   batch assembly, projection, row selection, page pruning, and dynamic-filter
    behavior.
-2. Add the bounded cache, single-flight loading, and metrics while retaining
-   the old path only as a benchmark comparison.
-3. Run correctness, concurrency, memory-pressure, GIST, and Wikipedia
-   benchmarks, then remove the old complete-index path.
+2. Implement the bounded cache, identity, single-flight loading, accounting,
+   eviction, and metrics.
+3. Compare uncached, partially cached, and warm results under concurrent loads,
+   cancellation, snapshot refresh, and memory pressure.
+4. Run GIST and Wikipedia benchmarks, then remove `CachedIndex`,
+   `CachedIvfPostings`, `CachedIvfScanExec`, and the whole-index cache API.
 
-The implementation is ready to replace the old path only when it demonstrates:
+The old path is removed only after the new path demonstrates:
 
-- identical results for uncached, partially cached, and fully warm queries;
-- no repeated Parquet decoding for cache hits;
-- bounded live cache memory under concurrent eviction and pinned readers;
-- no material cold-query regression attributable to cache integration;
-- preserved scaling across configured DataFusion execution parallelism.
+- identical results for cold, partial-hit, and warm queries;
+- no repeated I/O or decode for resident columns;
+- bounded retained cache memory with concurrent eviction and pinned readers;
+- no material cold-query regression; and
+- preserved parallel scaling and pruning behavior.
 
-## Drawbacks
+## Prior Art
 
-- A row-group column may still be too large for a small cache when an index was
-  written with large row groups or unusually wide values.
-- Coordinating per-column hits, in-flight loads, and one multi-column miss read
-  is more complex than caching a complete projected row group.
-- Applying row-level filters after cache lookup may give up decoder-level
-  filtering for cacheable scans. The prototype must measure this tradeoff and
-  preserve row-group pruning.
-- A session-owned cache duplicates hot data across multiple sessions in one
-  process.
-- Reference-counted readers make strict accounting more complex than a simple
-  LRU whose values are never pinned.
+Databend and StarRocks both place caches inside storage readers they own. They
+support the direction of this RFC but do not provide a reusable reader crate
+that Relify can adopt unchanged.
+
+| System | Cached units | Reader ownership | Lesson for Relify |
+| --- | --- | --- | --- |
+| Databend Fuse | Decoded block columns plus compressed column-chunk bytes | Owns writer, metadata, block reader, and Parquet deserializer | Cache decoded data by column, use immutable physical identity, and admit only complete unselected columns. |
+| StarRocks external Parquet | Raw object-store blocks and compressed or decompressed Parquet pages | Owns file, row-group, column, and page readers | Put caches below pruning and preserve lazy column reads and runtime-filter pruning. |
+| Relify | Proposed decoded row-group columns | Uses DataFusion and Arrow readers | Add only the narrow decoded-column hook; retain the standard decoder and open index format. |
+
+Databend's decoded cache is keyed by block path, column ID, offset, and length.
+Its Fuse writer emits one managed block per Parquet object, giving its reader a
+stable block-column identity. Relify instead accepts open index relations and
+must include snapshot, object, row-group, and physical-column identity.
+
+StarRocks' `CacheInputStream` caches remote byte ranges, while its Parquet
+`PageReader` caches encoded page data. A hit may avoid remote I/O and
+decompression, but it still decodes values into vectorized columns. Relify's
+decoded cache targets that remaining CPU and allocation cost.
+
+Relevant implementations:
+
+- [DataFusion 54 Parquet source](https://github.com/apache/datafusion/blob/54.0.0/datafusion/datasource-parquet/src/source.rs)
+- [Databend Fuse block reader](https://github.com/databendlabs/databend/blob/3c73a7f73585d8ace3ffcd568c4bdc7dd30f71c0/src/query/storages/fuse/src/io/read/block/block_reader_merge_io_async.rs)
+- [Databend Parquet deserializer](https://github.com/databendlabs/databend/blob/3c73a7f73585d8ace3ffcd568c4bdc7dd30f71c0/src/query/storages/fuse/src/io/read/block/parquet/deserialize.rs)
+- [StarRocks Parquet file reader](https://github.com/StarRocks/starrocks/blob/4.1.1/be/src/formats/parquet/file_reader.cpp)
+- [StarRocks Parquet page reader](https://github.com/StarRocks/starrocks/blob/4.1.1/be/src/formats/parquet/page_reader.cpp)
 
 ## Alternatives
 
-### Keep the complete explicit cache
-
-This gives the simplest warm path and strong benchmark performance, but it
-requires the complete index to fit in memory and preserves two independent
-scan implementations. It does not meet the serving or memory-safety goals.
-
-### Cache compressed byte ranges only
-
-A `ParquetFileReaderFactory` or object-store layer can cache remote byte
-ranges. This is useful for object-storage latency but does not remove Parquet
-decompression, decoding, or Arrow allocation, which remained material in local
-profiling. It is a possible second cache level, not a replacement for the
-decoded cache.
-
-### Drive one standard scan per row group
-
-Relify could attach a single-row-group `ParquetAccessPlan` to a cloned
-`PartitionedFile`, execute an independent standard scan, collect all of its
-batches, and split that result into column entries. This avoids modifying
-DataFusion internals, but repeats reader, metadata, stream, and scheduling setup
-for every row group. It also creates a second scan orchestration layer solely to
-recover provenance that the standard output stream discarded. This is useful as
-a feasibility experiment, not as the production architecture.
-
-### Rely on the operating-system page cache
-
-The OS page cache avoids repeated local disk I/O but still leaves Parquet
-decoding and Arrow materialization on every query. It also provides no portable
-control over remote object storage.
-
-### Cache native vector-index structures
-
-A purpose-built in-memory postings representation can be faster, but it creates
-a second index representation with separate correctness, invalidation, and
-scan semantics. This RFC keeps decoded Arrow columns reusable by the normal
-relational execution path.
-
-### Cache arbitrary DataFusion plans
-
-`DataFrame.cache()` materializes a complete result as a memory table. It does
-not provide bounded fragment admission or transparent partial hits and would
-turn query-specific plans into cache keys. The proposed cache is limited to
-immutable Relify index relations.
-
-## Databend Reference Design
-
-Databend is the closest reference for the decoded-cache idea, but its ownership
-boundary is materially different from Relify's. The description below follows
-Databend commit
-[`3c73a7f`](https://github.com/databendlabs/databend/tree/3c73a7f73585d8ace3ffcd568c4bdc7dd30f71c0).
-
-### Managed Physical Unit
-
-The Fuse engine owns the writer, table metadata, reader, and cache. Its
-[block writer](https://github.com/databendlabs/databend/blob/3c73a7f73585d8ace3ffcd568c4bdc7dd30f71c0/src/query/storages/fuse/src/io/write/block_writer.rs)
-serializes one `DataBlock` into one Parquet object. The resulting `BlockMeta`
-records the object location, row count, compression, and the physical offset and
-length of each column. The
-[Parquet block adapter](https://github.com/databendlabs/databend/blob/3c73a7f73585d8ace3ffcd568c4bdc7dd30f71c0/src/query/storages/fuse/src/io/read/block/parquet/deserialize.rs)
-reconstructs one Parquet row group from those selected column chunks and emits a
-single `RecordBatch`.
-
-Databend's logical decoded-cache unit is therefore not an arbitrary row group
-from an externally supplied Parquet file. It is one decoded column array from a
-Fuse-managed block. Under the Fuse layout, that corresponds to one column of the
-block's single Parquet row group.
-
-### Two Data Cache Levels
-
-For every projected column, the
-[Fuse block reader](https://github.com/databendlabs/databend/blob/3c73a7f73585d8ace3ffcd568c4bdc7dd30f71c0/src/query/storages/fuse/src/io/read/block/block_reader_merge_io_async.rs)
-checks these sources in order:
-
-1. The in-memory decoded-column cache. A hit returns an Arrow `ArrayRef` and
-   skips storage I/O, decompression, decoding, and Arrow allocation.
-2. The raw column-data cache. This is a hybrid memory and local-disk cache of
-   compressed Parquet column-chunk bytes. A disk hit is promoted into its memory
-   tier, but still requires Parquet decoding.
-3. Object storage. Missed column ranges are coalesced by merge I/O, and the
-   returned compressed bytes may be admitted to the raw cache.
-
-Columns from all three sources are combined in one `BlockReadResult`, so a scan
-may reuse one decoded column, decode another from local raw bytes, and fetch a
-third from object storage. The read hierarchy is:
-
-```mermaid
-flowchart LR
-    metadata[Block metadata and projected columns] --> decoded{Decoded column cache}
-    decoded -->|Hit| assemble[Assemble DataBlock]
-    decoded -->|Miss| raw{Raw column cache}
-    raw -->|Memory or disk hit| decode[Arrow Parquet decoder]
-    raw -->|Miss| remote[Merge range reads]
-    remote --> raw_admit[Admit compressed column bytes]
-    raw_admit --> decode
-    decode --> eligible{Complete unselected column?}
-    eligible -->|Yes| decoded_admit[Admit Arrow ArrayRef]
-    decoded_admit --> assemble
-    eligible -->|No| assemble
-```
-
-The decoded cache is a byte-bounded in-memory LRU. Its weight is the Arrow
-array's reported memory size. The raw cache is independently bounded and may
-use both memory and disk; disk population is asynchronous. Databend can release
-the in-memory decoded and raw tiers under memory pressure without changing the
-Fuse table on object storage.
-
-### Key and Admission Rules
-
-Both cache levels use:
-
-```text
-block path
-column ID
-column-chunk offset
-column-chunk length
-```
-
-The physical offset and length distinguish rewritten layouts even when a
-logical column ID is unchanged. Because Fuse plans reads from block metadata
-and controls block publication, the reader has all four fields before it reads
-or decodes the column.
-
-The decoded cache admits only non-nested columns decoded without a row
-selection. A selected or partially decoded column is not reusable and is not
-admitted. When a complete decoded array is already cached, a later query may
-apply its row selection to that array after the hit. This preserves reuse across
-different predicates while preventing filtered results from entering the
-cache. These rules are implemented directly in Databend's
-[Parquet deserializer](https://github.com/databendlabs/databend/blob/3c73a7f73585d8ace3ffcd568c4bdc7dd30f71c0/src/query/storages/fuse/src/io/read/block/parquet/mod.rs).
-
-### Differences from Relify
-
-| Dimension | Databend Fuse | Proposed Relify cache |
-| --- | --- | --- |
-| Ownership | One engine owns writing, metadata, pruning, reading, decoding, and caching. | Relify owns immutable index relations but executes them through DataFusion and Arrow interfaces. |
-| Durable format | Fuse-managed block objects and Fuse snapshot metadata; each block is written as one Parquet object. | Open Parquet or Iceberg index relations intended to remain queryable outside Relify. |
-| Decoded unit | One Arrow array for one column of a Fuse block. | One row-group column, represented by one or more batch-sized Arrow arrays. |
-| Projection reuse | Independent column entries allow partial hits across different projections. | Independent column entries provide the same reuse; one miss read may populate multiple columns. |
-| Raw cache | Hybrid memory and local-disk cache of compressed column chunks. | Explicitly outside the first implementation. |
-| Reader boundary | Cache lookup and admission are inside `BlockReader` and its Parquet deserializer. | Requires a new hook around DataFusion's row-group decoder; the existing public reader factory is below that boundary. |
-| Filtering | Full columns are admitted only without row selection; selections may be applied after a decoded hit. | Complete unfiltered columns are admitted; partial decoder output bypasses admission. |
-| Identity | Block path, column ID, physical offset, and physical length. | Exact index relation and snapshot, object identity and version, row-group ordinal, and physical column identity. |
-| Scope | General Fuse table data, managed as a node-level engine cache. | Relify index relations in one local session; source-table data is initially excluded. |
-
-Relify should copy the separation of decoded and raw cache levels, immutable
-physical identities, per-column granularity, and unfiltered admission rule. It
-cannot copy Databend's placement without also owning a reader boundary. The
-first Relify milestone is
-therefore a reader-hook feasibility result, not the cache policy itself. If that
-hook cannot be implemented or upstreamed without maintaining a fork of
-DataFusion's Parquet reader, this decoded column design should not proceed.
-
-## StarRocks Reference Design
-
-StarRocks also integrates caching into readers it owns. The external Parquet
-path and the native Segment path use the same process-level cache manager but
-cache different physical objects. This description follows StarRocks 4.1.1.
-
-### External Parquet Cache Levels
-
-The external Parquet path may use two cache levels:
-
-1. [`CacheInputStream`](https://github.com/StarRocks/starrocks/blob/4.1.1/be/src/io/cache_input_stream.cpp)
-   caches fixed-size ranges of the remote object. The block cache may have
-   memory, local-disk, and peer-cache sources. Its file identity is derived from
-   the path plus modification time, or file size when modification time is not
-   available; the block offset selects the cached range. A hit avoids remote
-   I/O but still requires Parquet decompression, encoding decode, and column
-   materialization.
-2. [`parquet::PageReader`](https://github.com/StarRocks/starrocks/blob/4.1.1/be/src/formats/parquet/page_reader.cpp)
-   checks `StoragePageCache` by file identity and Parquet page offset. The entry
-   contains the page header and payload. Depending on the compression ratio,
-   StarRocks stores either compressed payload or decompressed payload. A
-   decompressed-page hit also skips decompression, but the Parquet page remains
-   encoded and must still be decoded into vectorized columns.
-
-This answers the reader-boundary question directly: StarRocks did not attach a
-decoded cache outside a generic Parquet scan. It implements and owns the C++
-Parquet `FileReader`, `GroupReader`, column readers, and `PageReader`, with cache
-lookup and admission inside that stack.
-
-The native Segment path is similar but uses StarRocks' own page format.
-[`PageIO`](https://github.com/StarRocks/starrocks/blob/4.1.1/be/src/storage/rowset/page_io.cpp)
-checks `StoragePageCache`, then reads, verifies, decompresses, and performs its
-storage-page decode before admission. The cached value is still a storage page,
-not a fully materialized vectorized column.
-
-### Pruning and Filtering
-
-StarRocks keeps pruning decisions above the cache lookup:
-
-- [`FileReader`](https://github.com/StarRocks/starrocks/blob/4.1.1/be/src/formats/parquet/file_reader.cpp)
-  creates readers only for materialized columns. It rejects row groups using
-  scan ranges, row-group statistics, Bloom filters, and page indexes before
-  preparing their data readers.
-- [`GroupReader`](https://github.com/StarRocks/starrocks/blob/4.1.1/be/src/formats/parquet/group_reader.cpp)
-  collects I/O ranges only from selected columns. Predicate columns are read as
-  active columns; other projected columns may be read lazily after the row
-  filter has reduced the range.
-- Runtime filters are checked before the next unopened row group is prepared.
-  If current row-group metadata proves that the runtime predicate cannot match,
-  that row group is skipped without data-page reads.
-- The raw block cache may read beyond a requested page because it aligns reads
-  to its fixed block size, but it does not cause the Parquet reader to scan
-  unrelated columns or row groups.
-
-### Differences from Relify
-
-| Dimension | StarRocks external Parquet | Proposed Relify cache |
-| --- | --- | --- |
-| Reader ownership | StarRocks owns the complete Parquet reader and places both cache lookups inside it. | Relify uses DataFusion and Arrow and needs an explicit decoded-column hook. |
-| Memory-cache unit | One Parquet page containing compressed or decompressed encoded data. | One completely decoded row-group column represented by Arrow arrays. |
-| Work avoided by the highest hit | Remote I/O and sometimes decompression. | Remote or local I/O, decompression, Parquet encoding decode, and Arrow allocation. |
-| Column reuse | Page entries are naturally reached only through selected column readers. | Column entries are directly reusable across different query projections. |
-| Partial filtering | Page and late-materialization state remain inside the reader. | Partial decoder output is not admitted; the initial implementation may bypass hits to preserve the standard path. |
-| Raw tier | Fixed-size memory, disk, and optional peer blocks. | Not included in the first implementation. |
-
-StarRocks demonstrates how reader-owned caches preserve I/O, column, and
-runtime pruning. Its Page Cache is not a substitute for Relify's proposed
-decoded-column cache because it does not eliminate Parquet value decoding and
-Arrow allocation, which are material costs in Relify's current profiles.
-
-## Other Prior Art
-
-[Velox](https://facebookincubator.github.io/velox/develop/memory.html)
-combines a process-wide file cache with explicit memory-pressure reclamation.
-These systems also own their storage readers; Relify must provide an explicit
-boundary around DataFusion rather than importing an engine-specific reader.
+- **Complete explicit cache:** fastest warm path, but requires the complete
+  index in memory and preserves two scan implementations.
+- **Compressed byte-range cache:** useful for remote I/O, but still pays decode
+  and Arrow-allocation costs. It may become a second cache level.
+- **One standard scan per row group:** avoids a reader hook, but repeats scan,
+  metadata, scheduling, and stream setup to recover provenance discarded by
+  the normal output stream.
+- **Operating-system page cache:** avoids some local I/O, but not Parquet decode
+  or remote object-store access.
+- **Native vector structures:** may be faster, but create another index format
+  and separate scan semantics.
 
 ## Unresolved Questions
 
-The following decisions require review or prototype evidence before this RFC
-is accepted:
-
-1. Should `relify.index_cache_capacity` default to disabled or a fixed
-   conservative size?
-2. Can a decoded row-group-column hook be upstreamed to DataFusion, or
-   implemented in Relify without copying and maintaining DataFusion's Parquet
-   reader?
-3. Can the first implementation safely combine complete column hits with
-   partially selected misses, or must that row group bypass decoded hits?
-4. Should Iceberg index relations enter the first implementation, or follow
-   after the Parquet path is validated?
-5. Does byte-weighted LRU resist the expected IVF access pattern, or is SLRU
-   required from the start?
+1. Can the decoded row-group-column hook be upstreamed to DataFusion or
+   maintained in a narrow Relify adapter without copying its Parquet reader?
+2. Can mixed complete hits and partially selected misses share one
+   authoritative `RowSelection` without copying full columns?
+3. Should the default capacity be zero or a conservative fixed size?
+4. Should Iceberg enter the first implementation or follow the Parquet
+   prototype?
+5. Is byte-weighted LRU sufficient for IVF access patterns, or is admission
+   control required from the first release?
 
 ## Future Work
 
-- Add a raw memory or local-disk byte-range cache below the decoded cache for
-  remote object storage.
-- Coordinate cache and DataFusion query memory through a shared memory
-  arbitration mechanism when DataFusion exposes a suitable reclaim callback.
-- Share immutable cache entries across compatible sessions in one process.
-- Add asynchronous or workload-directed prefetching.
-- Let additional index families reuse the same cache-aware relation scan.
+- Add a raw memory or local-disk byte-range cache below the decoded cache.
+- Coordinate cache and DataFusion query memory through shared memory pressure.
+- Share immutable entries across compatible sessions.
+- Add workload-directed prefetching.
+- Reuse the cache-aware relation scan across additional index families.
