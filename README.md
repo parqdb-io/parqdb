@@ -25,6 +25,8 @@ lakehouse data with the compute engines you already use. It stores vector
 indexes as open Parquet or Iceberg tables, allowing DataFusion, StarRocks, and
 Spark to query them directly with SQL while source data stays where it is.
 
+If Relify is useful to you, a ⭐ helps others find the project.
+
 ## Quick Start
 
 Relify supports standard CPython 3.11 through 3.14 on Linux x86_64 and macOS
@@ -107,8 +109,6 @@ requirements.
   model and query contract instead of maintaining a separate copy per runtime.
 - **SQL-native execution.** Cluster pruning, source filtering, joins, distance
   computation, and top-k remain inside the host engine's relational plan.
-
-If Relify is useful to you, a ⭐ helps others find the project.
 
 ## Compute Engines
 
