@@ -1,7 +1,8 @@
 <div align="center">
   <img src="https://raw.githubusercontent.com/petrizhang/relify/main/assets/relify-header.svg" alt="Relify" width="760">
   <p>
-    <strong>Lightweight vector index extension for the open lakehouse stack.</strong>
+    <strong>Open vector indexes for the SQL engines you already use.</strong><br>
+    <sub>Lightweight vector index extension for the open lakehouse stack.</sub>
   </p>
   <p>
     <a href="https://pypi.org/project/relify/"><img alt="PyPI" src="https://img.shields.io/pypi/v/relify.svg"></a>
@@ -114,6 +115,8 @@ requirements.
 - **SQL-native execution.** Cluster pruning, source filtering, joins, distance
   computation, and top-k remain inside the host engine's relational plan.
 
+If Relify is useful to you, a ⭐ helps others find the project.
+
 ## Compute Engines
 
 | Engine | Model | Current capability | Status |
@@ -135,9 +138,8 @@ guides for installation and configuration.
 
 ![Relify builds an open index beside the source table and queries both with the host compute engine](https://raw.githubusercontent.com/petrizhang/relify/main/assets/how-it-works.svg)
 
-Source rows remain in their original Parquet or Iceberg table. Building an
-IVF-Flat index writes only portable metadata, centroids, and postings as open
-table data.
+Source rows remain in their original Parquet or Iceberg table. Building an IVF
+index writes only portable metadata, centroids, and postings as open table data.
 
 At query time, an engine-specific adapter binds the source and index to
 DataFusion, StarRocks, or Spark. The engine performs candidate pruning, source
