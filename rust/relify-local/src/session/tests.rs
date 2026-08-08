@@ -682,7 +682,7 @@ async fn assert_lvq_index(encoding: PostingEncoding, name: &str, code_size: i32)
             name,
             "embedding",
             &["source_pid".into()],
-            IvfConfig::with_encoding(2, encoding),
+            IvfConfig::new(2, encoding),
             &LocalBuildOptions::default(),
         )
         .await

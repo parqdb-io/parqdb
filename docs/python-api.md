@@ -354,19 +354,18 @@ documents.create_index(
     "documents_embedding",
     column="embedding",
     key=["document_id"],
-    config=relify.IVF(nlist=1024, posting_encoding="lvq8"),
+    config=relify.IVF(nlist=1024, encoding="lvq8"),
     wait_timeout=timedelta(minutes=5),
 )
 ```
 
 The vector column must be a required `list<float32>` with required, finite
 elements of one fixed dimension. Keys may be composite and are copied into the
-postings table without creating an internal row identifier. `posting_encoding`
+postings table without creating an internal row identifier. `encoding`
 accepts `flat`, `lvq4`, `lvq8`, or `source`. `flat` stores exact vectors, while
 LVQ stores compact per-vector codes and evaluates approximate distance directly
 from the postings table. `source` stores only keys and resolves candidate
-vectors from the source. For compatibility, omitting `posting_encoding` maps
-`store_vectors=True` to `flat` and `store_vectors=False` to `source`.
+vectors from the source. Omitting `encoding` selects `flat`.
 
 The same table method is implemented by every backend. Local and Spark
 sessions expose `session.default_builder` and use it when `builder` is omitted;

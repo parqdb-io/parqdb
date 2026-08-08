@@ -105,7 +105,7 @@ def build_initial(
     config = request.config
     writer_options = request.writer_options
     _validate_request(index, column, key, config, writer_options)
-    posting_encoding = config.resolved_posting_encoding
+    posting_encoding = config.encoding
     if posting_encoding not in {"source", "flat"}:
         raise NotImplementedError(
             "the Spark builder does not support quantized IVF postings"

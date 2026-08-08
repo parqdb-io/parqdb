@@ -211,7 +211,7 @@ def test_local_lvq_build_and_search(tmp_path: Path) -> None:
             name,
             column="embedding",
             key=["document_id"],
-            config=relify.IVF(nlist=2, posting_encoding=encoding),
+            config=relify.IVF(nlist=2, encoding=encoding),
             wait_timeout=WAIT,
         )
         snapshot = session.indexes.load(name).metadata["snapshots"][0]
@@ -380,7 +380,7 @@ def test_vectors_can_be_omitted_from_postings(tmp_path: Path) -> None:
         "compact_index",
         column="embedding",
         key=["document_id"],
-        config=relify.IVF(nlist=2, store_vectors=False),
+        config=relify.IVF(nlist=2, encoding="source"),
         wait_timeout=WAIT,
     )
 

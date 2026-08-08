@@ -483,7 +483,7 @@ impl PyNativeSession {
                 &index_name,
                 &vector_field,
                 &source_key_fields,
-                IvfConfig::with_encoding(nlist, posting_encoding),
+                IvfConfig::new(nlist, posting_encoding),
                 &LocalBuildOptions {
                     writer_options,
                     partitions,
@@ -524,7 +524,7 @@ impl PyNativeSession {
         let writer_options = writer_options.options.clone();
         let progress = progress.map(|tracker| tracker.progress.clone());
         let config = match (nlist, posting_encoding) {
-            (Some(nlist), Some(posting_encoding)) => Some(IvfConfig::with_encoding(
+            (Some(nlist), Some(posting_encoding)) => Some(IvfConfig::new(
                 nlist,
                 parse_posting_encoding(&posting_encoding)?,
             )),

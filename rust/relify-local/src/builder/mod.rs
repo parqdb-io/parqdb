@@ -855,7 +855,7 @@ pub(crate) async fn build_ivf_with_options(
         source,
         vector_field,
         source_key_fields,
-        IvfConfig::new(nlist, true),
+        IvfConfig::new(nlist, PostingEncoding::Flat),
         output_root,
         writer_options,
     )

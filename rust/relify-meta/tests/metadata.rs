@@ -1,12 +1,9 @@
 //! Integration tests for Relify metadata validation.
 
-use std::collections::BTreeMap;
-use std::sync::Arc;
-
 use relify_meta::{
-    Error, IndexFamily, IndexFamilyRegistry, IndexMetadata, IndexSnapshot, PostingEncoding,
-    RelationReference, SnapshotLogEntry,
+    IndexMetadata, IndexSnapshot, PostingEncoding, RelationReference, SnapshotLogEntry,
 };
+use std::collections::BTreeMap;
 use uuid::Uuid;
 
 fn parquet(uri: &str) -> RelationReference {
@@ -125,62 +122,6 @@ fn accepts_ivf_v2_posting_encodings() {
             encoding
         );
     }
-}
-
-struct TestFamily;
-
-impl IndexFamily for TestFamily {
-    fn name(&self) -> &'static str {
-        "test_family"
-    }
-
-    fn validate(&self, snapshot: &IndexSnapshot) -> relify_meta::Result<()> {
-        if snapshot.index_schema_version == 7 && snapshot.metric == "test_metric" {
-            Ok(())
-        } else {
-            Err(Error::new("invalid test-family snapshot"))
-        }
-    }
-}
-
-#[test]
-fn validates_registered_index_family_without_changing_metadata_core() {
-    let mut metadata = valid_metadata();
-    metadata.snapshots[0].index_family = "test_family".into();
-    metadata.snapshots[0].index_schema_version = 7;
-    metadata.snapshots[0].metric = "test_metric".into();
-
-    assert!(metadata.validate().is_err());
-
-    let mut registry = IndexFamilyRegistry::new();
-    registry.register(Arc::new(TestFamily)).unwrap();
-    metadata.validate_with_registry(&registry).unwrap();
-
-    let json = serde_json::to_vec(&metadata).unwrap();
-    assert_eq!(
-        IndexMetadata::from_json_slice_with_registry(&json, &registry).unwrap(),
-        metadata
-    );
-}
-
-#[test]
-fn rejects_duplicate_and_noncanonical_family_registrations() {
-    struct InvalidFamily;
-
-    impl IndexFamily for InvalidFamily {
-        fn name(&self) -> &'static str {
-            "Invalid-Family"
-        }
-
-        fn validate(&self, _snapshot: &IndexSnapshot) -> relify_meta::Result<()> {
-            Ok(())
-        }
-    }
-
-    let mut registry = IndexFamilyRegistry::new();
-    registry.register(Arc::new(TestFamily)).unwrap();
-    assert!(registry.register(Arc::new(TestFamily)).is_err());
-    assert!(registry.register(Arc::new(InvalidFamily)).is_err());
 }
 
 #[test]

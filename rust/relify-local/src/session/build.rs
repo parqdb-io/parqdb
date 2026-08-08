@@ -44,7 +44,7 @@ impl LocalSession {
             index_name,
             vector_field,
             source_key_fields,
-            IvfConfig::new(nlist, true),
+            IvfConfig::new(nlist, PostingEncoding::Flat),
             &LocalBuildOptions::default(),
         )
         .await
@@ -143,7 +143,7 @@ impl LocalSession {
         if current.source.identity_key() != source_reference.identity_key() {
             return Err(Error::IndexNotFound(index_name.to_owned()));
         }
-        let config = config.unwrap_or(IvfConfig::with_encoding(
+        let config = config.unwrap_or(IvfConfig::new(
             current.parameter_usize("nlist")?,
             PostingEncoding::from_snapshot(current)?,
         ));

@@ -67,7 +67,7 @@ def test_refresh_can_change_ivf_configuration(tmp_path: Path) -> None:
 
     vectors.refresh_index(
         "vectors_embedding",
-        config=relify.IVF(nlist=1, store_vectors=False),
+        config=relify.IVF(nlist=1, encoding="source"),
     )
     vectors.wait_for_index("vectors_embedding", timeout=WAIT)
 

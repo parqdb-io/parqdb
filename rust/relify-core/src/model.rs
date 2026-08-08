@@ -46,22 +46,9 @@ pub struct IvfConfig {
 }
 
 impl IvfConfig {
-    /// Creates a legacy IVF v1 configuration.
+    /// Creates an IVF configuration with one canonical postings encoding.
     #[must_use]
-    pub const fn new(nlist: usize, store_vectors: bool) -> Self {
-        Self {
-            nlist,
-            posting_encoding: if store_vectors {
-                PostingEncoding::Flat
-            } else {
-                PostingEncoding::Source
-            },
-        }
-    }
-
-    /// Creates an IVF configuration with an explicit postings encoding.
-    #[must_use]
-    pub const fn with_encoding(nlist: usize, posting_encoding: PostingEncoding) -> Self {
+    pub const fn new(nlist: usize, posting_encoding: PostingEncoding) -> Self {
         Self {
             nlist,
             posting_encoding,
@@ -117,18 +104,6 @@ pub struct PublishedIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn legacy_ivf_configuration_maps_to_v1_encodings() {
-        assert_eq!(
-            IvfConfig::new(16, false),
-            IvfConfig::with_encoding(16, PostingEncoding::Source)
-        );
-        assert_eq!(
-            IvfConfig::new(16, true),
-            IvfConfig::with_encoding(16, PostingEncoding::Flat)
-        );
-    }
 
     #[test]
     fn posting_encodings_have_canonical_metadata_names() {

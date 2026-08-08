@@ -7,8 +7,9 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::error::invalid;
+use crate::family::validate_family;
 use crate::serde_helpers::{deserialize_unique_map, lowercase_uuid};
-use crate::{Error, IndexFamilyRegistry, RelationReference, Result};
+use crate::{Error, RelationReference, Result};
 
 /// Entry recording when an index snapshot became current.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,11 +57,6 @@ pub struct IndexSnapshot {
 impl IndexSnapshot {
     /// Validates the snapshot and its family-defined fields.
     pub fn validate(&self) -> Result<()> {
-        self.validate_with_registry(&IndexFamilyRegistry::default())
-    }
-
-    /// Validates the snapshot with an explicit set of index-family contracts.
-    pub fn validate_with_registry(&self, registry: &IndexFamilyRegistry) -> Result<()> {
         if self.snapshot_id <= 0 || self.sequence_number <= 0 || self.timestamp_ms < 0 {
             return invalid(
                 "snapshot IDs and sequence numbers must be positive and timestamps must be non-negative",
@@ -86,7 +82,7 @@ impl IndexSnapshot {
         for reference in self.index_relations.values() {
             reference.validate()?;
         }
-        registry.validate(self)
+        validate_family(self)
     }
 
     /// Reads a positive family parameter as `usize`.
@@ -135,27 +131,14 @@ pub struct IndexMetadata {
 impl IndexMetadata {
     /// Parses and validates one JSON metadata document.
     pub fn from_json_slice(bytes: &[u8]) -> Result<Self> {
-        Self::from_json_slice_with_registry(bytes, &IndexFamilyRegistry::default())
-    }
-
-    /// Parses and validates JSON with an explicit set of index-family contracts.
-    pub fn from_json_slice_with_registry(
-        bytes: &[u8],
-        registry: &IndexFamilyRegistry,
-    ) -> Result<Self> {
         let metadata: Self =
             serde_json::from_slice(bytes).map_err(|error| Error(error.to_string()))?;
-        metadata.validate_with_registry(registry)?;
+        metadata.validate()?;
         Ok(metadata)
     }
 
     /// Validates this metadata document independently.
     pub fn validate(&self) -> Result<()> {
-        self.validate_with_registry(&IndexFamilyRegistry::default())
-    }
-
-    /// Validates this document with an explicit set of index-family contracts.
-    pub fn validate_with_registry(&self, registry: &IndexFamilyRegistry) -> Result<()> {
         if self.format_version != 1 {
             return invalid(format!(
                 "unsupported format-version {}",
@@ -179,7 +162,7 @@ impl IndexMetadata {
         let mut sequence_numbers = HashSet::new();
         let identity = SnapshotIdentity::from_snapshot(&self.snapshots[0]);
         for snapshot in &self.snapshots {
-            snapshot.validate_with_registry(registry)?;
+            snapshot.validate()?;
             if SnapshotIdentity::from_snapshot(snapshot) != identity {
                 return invalid("logical identity fields must remain equal across snapshots");
             }
@@ -215,17 +198,8 @@ impl IndexMetadata {
 
     /// Validates this document as a legal update from `base`.
     pub fn validate_update_from(&self, base: &Self) -> Result<()> {
-        self.validate_update_from_with_registry(base, &IndexFamilyRegistry::default())
-    }
-
-    /// Validates an update with an explicit set of index-family contracts.
-    pub fn validate_update_from_with_registry(
-        &self,
-        base: &Self,
-        registry: &IndexFamilyRegistry,
-    ) -> Result<()> {
-        base.validate_with_registry(registry)?;
-        self.validate_with_registry(registry)?;
+        base.validate()?;
+        self.validate()?;
         if self.index_uuid != base.index_uuid {
             return invalid("index-uuid must remain unchanged");
         }
