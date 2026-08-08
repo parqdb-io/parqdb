@@ -26,6 +26,11 @@ from benchmarks.tools.harness import (
     sync_file,
     sync_tree,
 )
+from benchmarks.tools.ivf import (
+    FAISS_ENCODINGS,
+    RELIFY_ENCODINGS,
+    create_faiss_index,
+)
 
 
 def prepare_relify(
@@ -33,6 +38,7 @@ def prepare_relify(
     destination: Path,
     *,
     nlist: int,
+    encoding: str,
     threads: int,
 ) -> dict[str, Any]:
     if destination.exists():
@@ -50,7 +56,7 @@ def prepare_relify(
             "benchmark_embedding",
             column="embedding",
             key=["id"],
-            config=relify.IVF(nlist=nlist),
+            config=relify.IVF(nlist=nlist, encoding=encoding),
             builder=relify.Local(threads=threads),
             wait_timeout=timedelta(hours=24),
         )
@@ -62,7 +68,7 @@ def prepare_relify(
             "build_seconds": time.perf_counter() - started,
             "payload_bytes": directory_bytes(destination / "indexes"),
             "managed_bytes": directory_bytes(destination),
-            "store_vectors": True,
+            "encoding": encoding,
         }
         evict_tree(destination / "indexes")
         result["page_cache_evicted_after_build"] = True
@@ -77,6 +83,7 @@ def prepare_faiss(
     destination: Path,
     *,
     nlist: int,
+    encoding: str,
     threads: int,
     shard_rows: int,
     batch_rows: int,
@@ -96,10 +103,12 @@ def prepare_faiss(
             seed=KMEANS_SEED,
             batch_rows=batch_rows,
         )
-        index = faiss.IndexIVFFlat(
+        index = create_faiss_index(
+            faiss,
             faiss.IndexFlatL2(source.dimension),
-            source.dimension,
-            nlist,
+            dimension=source.dimension,
+            nlist=nlist,
+            encoding=encoding,
         )
         index.cp.niter = KMEANS_MAX_ITERATIONS
         index.cp.seed = KMEANS_SEED
@@ -149,6 +158,7 @@ def prepare_faiss(
             "payload_bytes": inverted_lists_path.stat().st_size,
             "metadata_bytes": index_path.stat().st_size,
             "inverted_lists_type": "OnDiskInvertedLists",
+            "encoding": encoding,
             "training_rows": training_rows,
             "shard_rows": shard_rows,
             "shards": len(shard_paths),
@@ -178,6 +188,10 @@ def _write_metadata(path: Path, metadata: dict[str, Any]) -> None:
 
 
 def prepare(args: argparse.Namespace) -> dict[str, Any]:
+    supported = RELIFY_ENCODINGS if args.implementation == "relify" else FAISS_ENCODINGS
+    encoding = args.encoding or supported[0]
+    if encoding not in supported:
+        raise ValueError(f"unsupported {args.implementation} encoding: {encoding}")
     source = inspect_parquet_source(args.source_parquet)
     if not 1 <= args.nlist <= source.rows:
         raise ValueError(f"nlist must be in 1..={source.rows}")
@@ -222,6 +236,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             source,
             output / "relify",
             nlist=args.nlist,
+            encoding=encoding,
             threads=args.threads,
         )
     else:
@@ -229,6 +244,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             source,
             output / "faiss",
             nlist=args.nlist,
+            encoding=encoding,
             threads=args.threads,
             shard_rows=args.shard_rows,
             batch_rows=args.batch_rows,
@@ -251,6 +267,11 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--source-parquet", type=Path, required=True)
     command.add_argument("--output", type=Path, required=True)
     command.add_argument("--nlist", type=int, default=8_192)
+    command.add_argument(
+        "--encoding",
+        choices=tuple(dict.fromkeys((*RELIFY_ENCODINGS, *FAISS_ENCODINGS))),
+        help="defaults to lvq8 for Relify and sq8 for Faiss",
+    )
     command.add_argument("--threads", type=int, default=32)
     command.add_argument("--shard-rows", type=int, default=1_048_576)
     command.add_argument("--batch-rows", type=int, default=65_536)

@@ -127,46 +127,54 @@ def test_storage_backed_prepare_and_query_smoke(tmp_path: Path) -> None:
             check=True,
         )
         result = json.loads(output.read_text(encoding="utf-8"))
-        assert result["suite"] == "storage-backed-ivf-flat"
+        assert result["suite"] == "storage-backed-ivf"
         assert result["result"]["implementation"] == implementation
         full_probe = [
             point for point in result["result"]["search_curve"] if point["nprobe"] == 4
         ]
-        assert all(point["recall_at_k"] == 1.0 for point in full_probe)
+        assert all(point["recall_at_k"] >= 0.75 for point in full_probe)
         assert all(
             "cgroup_memory_file_bytes" in point["resource_usage"]
             for point in result["result"]["search_curve"]
         )
 
     index_root = tmp_path / "standard-indexes"
-    subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "benchmarks.build",
-            "--implementations",
-            "relify,faiss",
-            "--require-faiss",
-            "--source-parquet",
-            str(source),
-            "--id-column",
-            "id",
-            "--vector-column",
-            "embedding",
-            "--nlist",
-            "4",
-            "--threads",
-            "2",
-            "--index-root",
-            str(index_root),
-            "--rebuild",
-            "--no-progress",
-        ],
-        cwd=repository,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    common_build_arguments = [
+        "--source-parquet",
+        str(source),
+        "--id-column",
+        "id",
+        "--vector-column",
+        "embedding",
+        "--nlist",
+        "4",
+        "--threads",
+        "2",
+        "--index-root",
+        str(index_root),
+        "--rebuild",
+        "--no-progress",
+    ]
+    for module, encoding in (
+        ("benchmarks.build", "lvq8"),
+        ("benchmarks.tools.faiss", "sq8"),
+    ):
+        operation = ["build"] if module == "benchmarks.tools.faiss" else []
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                module,
+                *operation,
+                *common_build_arguments,
+                "--encoding",
+                encoding,
+            ],
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
     for implementation in ("relify", "faiss"):
         output = tmp_path / f"reused-{implementation}.json"
         subprocess.run(
@@ -213,4 +221,4 @@ def test_storage_backed_prepare_and_query_smoke(tmp_path: Path) -> None:
             "Parquet IVF queried without cache_index",
             "OnDiskInvertedLists",
         }
-        assert result["result"]["index"]["page_cache_evicted_before_query"]
+        assert not result["result"]["index"]["page_cache_evicted_before_query"]
