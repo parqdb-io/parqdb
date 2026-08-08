@@ -77,6 +77,35 @@ requires it.
 
 ## Reference Design
 
+### Architecture
+
+The cache is inserted between physical pruning and the normal downstream
+search operators. A hit and a miss converge on the same Arrow-fragment
+boundary:
+
+```mermaid
+flowchart LR
+    query[Relify index query] --> snapshot[Resolve exact index snapshot]
+    snapshot --> pruning[File and row-group pruning]
+    pruning --> lookup{Decoded fragment resident?}
+
+    lookup -->|Yes| fragment[Complete Arrow fragment]
+    lookup -->|No| reader[Standard DataFusion Parquet reader]
+    storage[(Published Parquet or Iceberg relation)] --> reader
+    reader --> decoded[Complete decoded fragment]
+    decoded --> admission{Cache capacity available?}
+    admission -->|Yes| cache[(Bounded decoded cache)]
+    cache --> fragment
+    admission -->|No, bypass| fragment
+
+    fragment --> filters[Row and runtime filters]
+    filters --> search[Distance and Top-K]
+```
+
+The cache never becomes an alternative index representation. It retains the
+same Arrow fragments produced by the storage-backed path and can be disabled
+without selecting another query implementation.
+
 ### Ownership and Scope
 
 `relify-local` owns one `IndexDataCache` per `LocalSession`. Catalog and
@@ -157,6 +186,30 @@ IVF distance or Top-K logic; they only provide decoded index data.
 Concurrent misses for the same key use single-flight loading. One task reads
 and decodes the fragment while other tasks await the same result. A failed or
 cancelled load is not cached, and another query may retry it.
+
+```mermaid
+sequenceDiagram
+    participant Q1 as Query 1
+    participant Q2 as Query 2
+    participant C as IndexDataCache
+    participant R as DataFusion Parquet reader
+    participant S as Published index relation
+
+    Q1->>C: get_or_load(fragment key)
+    C-->>Q1: miss; become loader
+    Q1->>R: read complete row group
+    R->>S: read projected column chunks
+
+    Q2->>C: get_or_load(same key)
+    C-->>Q2: join in-flight load
+
+    S-->>R: immutable Parquet bytes
+    R-->>C: complete Arrow fragment
+    C-->>Q1: shared fragment reference
+    C-->>Q2: shared fragment reference
+
+    Note over Q1,Q2: Both queries continue through the same filter and search operators
+```
 
 Cache values are reference counted. Eviction removes an entry from future
 lookup but cannot invalidate a fragment held by a running query. Capacity
