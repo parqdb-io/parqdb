@@ -3,7 +3,7 @@
 from ._native import BuildAlreadyRunningError
 from .build import IndexStatus
 from .catalog import CatalogEntry, IndexCatalog, IndexInfo, open_index_catalog
-from .config import IVF, Local, WriteOptions
+from .config import IVF, Local, SessionConfig, WriteOptions
 from .identifier import TableIdentifier
 from .maintenance import Maintenance, MaintenanceObject
 from .query import VectorQuery
@@ -22,6 +22,7 @@ __all__ = [
     "Maintenance",
     "MaintenanceObject",
     "Session",
+    "SessionConfig",
     "SourceTable",
     "Table",
     "TableIdentifier",

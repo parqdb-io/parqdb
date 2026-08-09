@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use relify_catalog::{IndexIdentifier, SqliteCatalog};
 use relify_core::{IndexArtifacts, IndexFormat};
@@ -9,8 +9,8 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 use crate::{
-    IndexRepository, InitialIndex, MetadataStore, RefreshedIndex, new_snapshot_id, publish_initial,
-    publish_refresh,
+    IndexRepository, InitialIndex, MetadataCacheConfig, MetadataStore, RefreshedIndex,
+    new_snapshot_id, publish_initial, publish_refresh,
 };
 
 fn repository(temporary: &TempDir) -> IndexRepository {
@@ -20,6 +20,26 @@ fn repository(temporary: &TempDir) -> IndexRepository {
         .to_string();
     let metadata = MetadataStore::open(Warehouse::open(&root, StorageRegistry::default()).unwrap());
     IndexRepository::new(catalog, metadata)
+}
+
+fn metadata_store(temporary: &TempDir, cache_capacity: usize) -> MetadataStore {
+    metadata_store_with_config(
+        temporary,
+        MetadataCacheConfig::new(cache_capacity, usize::MAX),
+    )
+}
+
+fn metadata_store_with_config(
+    temporary: &TempDir,
+    cache_config: MetadataCacheConfig,
+) -> MetadataStore {
+    let root = url::Url::from_directory_path(temporary.path().join("warehouse"))
+        .unwrap()
+        .to_string();
+    MetadataStore::open_with_cache_config(
+        Warehouse::open(&root, StorageRegistry::default()).unwrap(),
+        cache_config,
+    )
 }
 
 fn source(uri: &str) -> RelationReference {
@@ -121,6 +141,127 @@ async fn metadata_store_rejects_foreign_locations() {
 }
 
 #[tokio::test]
+async fn metadata_store_reuses_cached_immutable_documents_across_clones() {
+    let temporary = TempDir::new().unwrap();
+    let writer = metadata_store(&temporary, 1);
+    let metadata = metadata_document(&writer);
+    let location = writer.write_initial(&metadata).await.unwrap();
+    let reader = metadata_store(&temporary, 1);
+    assert_eq!(reader.load(&location).await.unwrap(), metadata);
+    let cached_reader = reader.clone();
+    std::fs::remove_file(url::Url::parse(&location).unwrap().to_file_path().unwrap()).unwrap();
+
+    assert_eq!(cached_reader.load(&location).await.unwrap(), metadata);
+    cached_reader.invalidate(&location);
+    assert!(cached_reader.load(&location).await.is_err());
+}
+
+#[tokio::test]
+async fn metadata_store_evicts_the_least_recently_used_document() {
+    let temporary = TempDir::new().unwrap();
+    let store = metadata_store(&temporary, 2);
+    let first = metadata_document(&store);
+    let first_location = store.write_initial(&first).await.unwrap();
+    let second = metadata_document(&store);
+    let second_location = store.write_initial(&second).await.unwrap();
+
+    assert_eq!(store.load(&first_location).await.unwrap(), first);
+
+    let third = metadata_document(&store);
+    let third_location = store.write_initial(&third).await.unwrap();
+    for location in [&first_location, &second_location, &third_location] {
+        std::fs::remove_file(url::Url::parse(location).unwrap().to_file_path().unwrap()).unwrap();
+    }
+
+    assert_eq!(store.load(&first_location).await.unwrap(), first);
+    assert_eq!(store.load(&third_location).await.unwrap(), third);
+    assert!(store.load(&second_location).await.is_err());
+}
+
+#[tokio::test]
+async fn metadata_store_rejects_documents_larger_than_its_byte_budget() {
+    let temporary = TempDir::new().unwrap();
+    let writer = metadata_store(&temporary, 1);
+    let metadata = metadata_document(&writer);
+    let location = writer.write_initial(&metadata).await.unwrap();
+    let document_size = usize::try_from(
+        std::fs::metadata(url::Url::parse(&location).unwrap().to_file_path().unwrap())
+            .unwrap()
+            .len(),
+    )
+    .unwrap();
+    let reader =
+        metadata_store_with_config(&temporary, MetadataCacheConfig::new(1, document_size - 1));
+
+    assert_eq!(reader.load(&location).await.unwrap(), metadata);
+    std::fs::remove_file(url::Url::parse(&location).unwrap().to_file_path().unwrap()).unwrap();
+
+    assert!(reader.load(&location).await.is_err());
+}
+
+#[tokio::test]
+async fn metadata_store_evicts_entries_to_enforce_its_byte_budget() {
+    let temporary = TempDir::new().unwrap();
+    let writer = metadata_store(&temporary, 2);
+    let first = metadata_document(&writer);
+    let first_location = writer.write_initial(&first).await.unwrap();
+    let second = metadata_document(&writer);
+    let second_location = writer.write_initial(&second).await.unwrap();
+    let document_size = [&first_location, &second_location]
+        .into_iter()
+        .map(|location| {
+            usize::try_from(
+                std::fs::metadata(url::Url::parse(location).unwrap().to_file_path().unwrap())
+                    .unwrap()
+                    .len(),
+            )
+            .unwrap()
+        })
+        .max()
+        .unwrap();
+    let reader = metadata_store_with_config(&temporary, MetadataCacheConfig::new(2, document_size));
+
+    assert_eq!(reader.load(&first_location).await.unwrap(), first);
+    assert_eq!(reader.load(&second_location).await.unwrap(), second);
+    for location in [&first_location, &second_location] {
+        std::fs::remove_file(url::Url::parse(location).unwrap().to_file_path().unwrap()).unwrap();
+    }
+
+    assert!(reader.load(&first_location).await.is_err());
+    assert_eq!(reader.load(&second_location).await.unwrap(), second);
+}
+
+#[tokio::test]
+async fn metadata_store_applies_resolved_bounds_before_cache_access() {
+    let temporary = TempDir::new().unwrap();
+    let root = url::Url::from_directory_path(temporary.path().join("warehouse"))
+        .unwrap()
+        .to_string();
+    let config = Arc::new(Mutex::new(MetadataCacheConfig::new(2, usize::MAX)));
+    let resolved_config = Arc::clone(&config);
+    let store = MetadataStore::open_with_cache_config_resolver(
+        Warehouse::open(&root, StorageRegistry::default()).unwrap(),
+        move || *resolved_config.lock().unwrap(),
+    );
+    let first = metadata_document(&store);
+    let first_location = store.write_initial(&first).await.unwrap();
+    let second = metadata_document(&store);
+    let second_location = store.write_initial(&second).await.unwrap();
+
+    *config.lock().unwrap() = MetadataCacheConfig::new(1, usize::MAX);
+    assert_eq!(
+        store.cache_config(),
+        MetadataCacheConfig::new(1, usize::MAX)
+    );
+    for location in [&first_location, &second_location] {
+        std::fs::remove_file(url::Url::parse(location).unwrap().to_file_path().unwrap()).unwrap();
+    }
+
+    assert!(store.load(&first_location).await.is_err());
+    assert_eq!(store.load(&second_location).await.unwrap(), second);
+}
+
+#[tokio::test]
 async fn repository_loads_discovers_and_selects_published_indexes() {
     let temporary = TempDir::new().unwrap();
     let repository = repository(&temporary);
@@ -168,6 +309,23 @@ async fn repository_loads_discovers_and_selects_published_indexes() {
             .snapshot_id,
         snapshot_id
     );
+}
+
+#[tokio::test]
+async fn repository_registration_requires_metadata_to_exist_in_storage() {
+    let temporary = TempDir::new().unwrap();
+    let repository = repository(&temporary);
+    let metadata = metadata_document(repository.metadata_store());
+    let location = repository
+        .metadata_store()
+        .write_initial(&metadata)
+        .await
+        .unwrap();
+    std::fs::remove_file(url::Url::parse(&location).unwrap().to_file_path().unwrap()).unwrap();
+    let identifier = IndexIdentifier::root("missing_metadata").unwrap();
+
+    assert!(repository.register(&identifier, &location).await.is_err());
+    assert!(!repository.exists(&identifier).unwrap());
 }
 
 #[tokio::test]

@@ -7,7 +7,7 @@ use arrow::array::{Array, Int32Array};
 use arrow::compute::BatchCoalescer;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion::catalog::{MemTable, TableProvider};
+use datafusion::catalog::TableProvider;
 use datafusion::dataframe::DataFrame;
 use futures::StreamExt;
 
@@ -30,7 +30,7 @@ impl CachedIvfPostings {
     pub(crate) async fn load(
         dataframe: DataFrame,
         batch_size: usize,
-    ) -> Result<(Arc<Self>, Arc<dyn TableProvider>, usize)> {
+    ) -> Result<(Arc<dyn TableProvider>, usize)> {
         let schema = Arc::clone(dataframe.schema().inner());
         let streams = dataframe.execute_stream_partitioned().await?;
         let partitions =
@@ -41,8 +41,7 @@ impl CachedIvfPostings {
             .map(RecordBatch::get_array_memory_size)
             .sum();
         let postings = Arc::new(Self::from_partitions(&partitions, batch_size)?);
-        let provider = Arc::new(MemTable::try_new(schema, partitions)?) as Arc<dyn TableProvider>;
-        Ok((postings, provider, resident_bytes))
+        Ok((postings.provider(), resident_bytes))
     }
 
     pub(super) fn from_partitions(
@@ -110,6 +109,10 @@ impl CachedIvfPostings {
 
     pub(super) fn fragments(&self, cid: i32) -> Option<&[ClusterFragment]> {
         self.fragments.get(&cid).map(Vec::as_slice)
+    }
+
+    pub(super) fn cluster_ids(&self) -> impl Iterator<Item = i32> + '_ {
+        self.fragments.keys().copied()
     }
 
     pub(super) fn batch(&self, index: usize) -> &RecordBatch {

@@ -32,6 +32,15 @@ pub(crate) struct PyNativeIndexRepository {
     runtime: Arc<Runtime>,
 }
 
+impl PyNativeIndexRepository {
+    pub(crate) fn from_repository(repository: IndexRepository, runtime: Arc<Runtime>) -> Self {
+        Self {
+            repository: Arc::new(repository),
+            runtime,
+        }
+    }
+}
+
 #[pymethods]
 impl PyNativeIndexRepository {
     #[new]
@@ -47,13 +56,10 @@ impl PyNativeIndexRepository {
             StorageRegistry::new(storage_options.unwrap_or_default()),
         )
         .map_err(runtime_error)?;
-        Ok(Self {
-            repository: Arc::new(IndexRepository::new(
-                catalog,
-                MetadataStore::open(warehouse),
-            )),
-            runtime: shared_runtime()?,
-        })
+        Ok(Self::from_repository(
+            IndexRepository::new(catalog, MetadataStore::open(warehouse)),
+            shared_runtime()?,
+        ))
     }
 
     fn index_exists(&self, name: &str) -> PyResult<bool> {

@@ -32,6 +32,52 @@ def test_session_does_not_require_explicit_close(tmp_path: Path) -> None:
     assert not hasattr(session, "context")
 
 
+def test_session_uses_datafusion_config_and_runtime(tmp_path: Path) -> None:
+    config = (
+        relify.SessionConfig()
+        .set("relify.metadata.cache.max_entries", "7")
+        .set("relify.metadata.cache.max_bytes", "4096")
+        .with_target_partitions(3)
+        .with_information_schema()
+    )
+    assert isinstance(config, relify.datafusion.SessionConfig)
+    runtime = relify.datafusion.RuntimeEnvBuilder().with_greedy_memory_pool(1 << 20)
+    session = relify.connect(
+        tmp_path / "configured",
+        config=config,
+        runtime=runtime,
+    )
+
+    assert isinstance(session, relify.datafusion.SessionContext)
+    assert session.sql("SHOW relify.metadata.cache.max_entries").to_pydict()[
+        "value"
+    ] == ["7"]
+    assert session.sql("SHOW datafusion.execution.target_partitions").to_pydict()[
+        "value"
+    ] == ["3"]
+    session.sql("SET relify.metadata.cache.max_entries = 8")
+    assert session.sql("SHOW relify.metadata.cache.max_entries").to_pydict()[
+        "value"
+    ] == ["8"]
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "expected"),
+    [
+        ("config", object(), "config must be relify.datafusion.SessionConfig"),
+        ("runtime", object(), "runtime must be relify.datafusion.RuntimeEnvBuilder"),
+    ],
+)
+def test_session_rejects_invalid_datafusion_initialization_options(
+    tmp_path: Path,
+    name: str,
+    value: object,
+    expected: str,
+) -> None:
+    with pytest.raises(TypeError, match=expected):
+        relify.connect(tmp_path / name, **cast(Any, {name: value}))
+
+
 def test_table_only_resolves_registered_names(tmp_path: Path) -> None:
     session = relify.connect(tmp_path / "relify-data")
 

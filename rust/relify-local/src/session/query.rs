@@ -17,8 +17,8 @@ use super::source::{
 use crate::query::{
     compile_datafusion_sql, compile_index_only_plan, datafusion_centroid_relation_required,
     datafusion_cluster_relation_required, datafusion_source_relation_required,
-    selected_cluster_ids, selected_cluster_ids_from_values, squared_l2_udf,
-    use_native_cluster_routing, validated_cluster_search,
+    selected_cluster_ids, selected_cluster_ids_from_values, use_native_cluster_routing,
+    validated_cluster_search,
 };
 use crate::{ClusterSelection, Error, ResolvedSearch, Result, SearchRequest};
 
@@ -233,7 +233,6 @@ impl LocalSession {
         resolved: &ResolvedSearch,
     ) -> Result<datafusion::dataframe::DataFrame> {
         let context = self.parquet.context();
-        context.register_udf(squared_l2_udf());
         if let Some(postings) = self.index_only_postings(resolved).await? {
             return compile_index_only_plan(postings, resolved);
         }
@@ -282,16 +281,11 @@ impl LocalSession {
             let dataframe = match &resolved.cluster_selection {
                 Some(ClusterSelection::Native(cids)) => {
                     execution.cluster_selection = Some(ClusterSelection::All);
-                    match self.cached_cluster_dataframe(key, cids)? {
-                        Some(dataframe) => dataframe,
-                        None => self
-                            .uncached_relation_dataframe(key, IndexRelationLayout::HiveCid)
-                            .await?
-                            .filter(col("cid").in_list(
-                                cids.iter().copied().map(lit).collect::<Vec<_>>(),
-                                false,
-                            ))?,
-                    }
+                    select_clusters(
+                        self.index_relation_dataframe(key, IndexRelationLayout::HiveCid)
+                            .await?,
+                        cids,
+                    )?
                 }
                 _ => {
                     self.index_relation_dataframe(key, IndexRelationLayout::HiveCid)
@@ -445,19 +439,11 @@ impl LocalSession {
             return Ok(None);
         };
         match &resolved.cluster_selection {
-            Some(ClusterSelection::Native(cids)) => {
-                if let Some(dataframe) = self.cached_cluster_dataframe(key, cids)? {
-                    return Ok(Some(dataframe));
-                }
-                Ok(Some(
-                    self.uncached_relation_dataframe(key, IndexRelationLayout::HiveCid)
-                        .await?
-                        .filter(
-                            col("cid")
-                                .in_list(cids.iter().copied().map(lit).collect::<Vec<_>>(), false),
-                        )?,
-                ))
-            }
+            Some(ClusterSelection::Native(cids)) => Ok(Some(select_clusters(
+                self.index_relation_dataframe(key, IndexRelationLayout::HiveCid)
+                    .await?,
+                cids,
+            )?)),
             Some(ClusterSelection::All) => Ok(Some(
                 self.index_relation_dataframe(key, IndexRelationLayout::HiveCid)
                     .await?,
@@ -498,6 +484,14 @@ impl LocalSession {
         };
         Ok((selection, nlist))
     }
+}
+
+fn select_clusters(
+    dataframe: datafusion::dataframe::DataFrame,
+    cids: &[i32],
+) -> Result<datafusion::dataframe::DataFrame> {
+    Ok(dataframe
+        .filter(col("cid").in_list(cids.iter().copied().map(lit).collect::<Vec<_>>(), false))?)
 }
 
 async fn compile_registered_search(

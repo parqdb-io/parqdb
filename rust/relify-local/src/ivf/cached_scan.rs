@@ -1,4 +1,4 @@
-//! Query-local scans over session-cached IVF postings.
+//! Filter-aware scans over session-cached IVF postings.
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
@@ -11,9 +11,9 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::{DataFusionError, Result as DataFusionResult};
+use datafusion::common::{DataFusionError, Result as DataFusionResult, ScalarValue};
 use datafusion::execution::TaskContext;
-use datafusion::logical_expr::{Expr, TableType};
+use datafusion::logical_expr::{Expr, Operator, TableProviderFilterPushDown, TableType};
 use datafusion::physical_expr::expressions::DynamicFilterPhysicalExpr;
 use datafusion::physical_expr::utils::collect_columns;
 use datafusion::physical_expr::{EquivalenceProperties, PhysicalExpr};
@@ -32,7 +32,6 @@ use datafusion::physical_plan::{
 use futures::StreamExt;
 
 use super::CachedIvfPostings;
-use crate::{Error, Result};
 
 const SCAN_PARTITIONS_PER_WORKER: usize = 4;
 
@@ -45,7 +44,6 @@ struct BatchRange {
 
 struct CachedIvfProvider {
     postings: Arc<CachedIvfPostings>,
-    partitions: Arc<[Arc<[BatchRange]>]>,
 }
 
 struct CachedIvfScanExec {
@@ -70,17 +68,10 @@ impl fmt::Debug for CachedIvfScanExec {
 }
 
 impl CachedIvfPostings {
-    pub(crate) fn provider(
-        self: &Arc<Self>,
-        cids: &[i32],
-        worker_count: usize,
-    ) -> Result<Arc<dyn TableProvider>> {
-        let target_partitions = worker_count.saturating_mul(SCAN_PARTITIONS_PER_WORKER);
-        let partitions = route_ranges(self, cids, target_partitions)?;
-        Ok(Arc::new(CachedIvfProvider {
+    pub(crate) fn provider(self: &Arc<Self>) -> Arc<dyn TableProvider> {
+        Arc::new(CachedIvfProvider {
             postings: Arc::clone(self),
-            partitions: partitions.into(),
-        }))
+        })
     }
 }
 
@@ -88,8 +79,7 @@ impl fmt::Debug for CachedIvfProvider {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("CachedIvfProvider")
-            .field("partitions", &self.partitions.len())
-            .field("ranges", &range_count(&self.partitions))
+            .field("clusters", &self.postings.cluster_ids().count())
             .finish_non_exhaustive()
     }
 }
@@ -106,22 +96,39 @@ impl TableProvider for CachedIvfProvider {
 
     async fn scan(
         &self,
-        _state: &dyn Session,
+        state: &dyn Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         _limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        if !filters.is_empty() {
-            return Err(DataFusionError::Internal(
-                "CachedIvfProvider received unsupported logical filters".into(),
-            ));
-        }
+        let cids = selected_cids(&self.postings, filters);
+        let target_partitions = state
+            .config()
+            .target_partitions()
+            .saturating_mul(SCAN_PARTITIONS_PER_WORKER);
+        let partitions = route_ranges(&self.postings, &cids, target_partitions).into();
         Ok(Arc::new(CachedIvfScanExec::try_new(
             Arc::clone(&self.postings),
-            Arc::clone(&self.partitions),
+            partitions,
             projection.cloned(),
             vec![],
         )?))
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
+        Ok(filters
+            .iter()
+            .map(|filter| {
+                if cid_filter_values(filter).is_some() {
+                    TableProviderFilterPushDown::Exact
+                } else {
+                    TableProviderFilterPushDown::Unsupported
+                }
+            })
+            .collect())
     }
 }
 
@@ -289,12 +296,10 @@ fn route_ranges(
     postings: &CachedIvfPostings,
     cids: &[i32],
     target_partitions: usize,
-) -> Result<Vec<Arc<[BatchRange]>>> {
+) -> Vec<Arc<[BatchRange]>> {
     let mut ranges = selected_ranges(postings, cids);
     if ranges.is_empty() {
-        return Err(Error::InvalidMetadata(
-            "selected IVF clusters contain no postings".into(),
-        ));
+        return vec![Arc::from([])];
     }
     ranges.sort_unstable_by_key(|range| Reverse(range.length));
     let partition_count = target_partitions.max(1).min(ranges.len());
@@ -307,10 +312,78 @@ fn route_ranges(
         partitions[partition].push(range);
         loads.push(Reverse((rows + range.length, partition)));
     }
-    Ok(partitions
+    partitions
         .into_iter()
         .map(|ranges| Arc::from(ranges.into_boxed_slice()))
-        .collect())
+        .collect()
+}
+
+fn selected_cids(postings: &CachedIvfPostings, filters: &[Expr]) -> Vec<i32> {
+    let mut selected = None::<BTreeSet<i32>>;
+    for values in filters.iter().filter_map(cid_filter_values) {
+        selected = Some(match selected {
+            Some(current) => current.intersection(&values).copied().collect(),
+            None => values,
+        });
+    }
+    selected.map_or_else(
+        || postings.cluster_ids().collect(),
+        |values| values.into_iter().collect(),
+    )
+}
+
+fn cid_filter_values(filter: &Expr) -> Option<BTreeSet<i32>> {
+    match filter {
+        Expr::InList(list) if !list.negated && is_cid_column(&list.expr) => list
+            .list
+            .iter()
+            .map(cid_literal)
+            .collect::<Option<BTreeSet<_>>>(),
+        Expr::BinaryExpr(binary) => match binary.op {
+            Operator::Eq => {
+                if is_cid_column(&binary.left) {
+                    cid_literal(&binary.right).map(|value| BTreeSet::from([value]))
+                } else if is_cid_column(&binary.right) {
+                    cid_literal(&binary.left).map(|value| BTreeSet::from([value]))
+                } else {
+                    None
+                }
+            }
+            Operator::Or => {
+                let mut values = cid_filter_values(&binary.left)?;
+                values.extend(cid_filter_values(&binary.right)?);
+                Some(values)
+            }
+            Operator::And => {
+                let left = cid_filter_values(&binary.left)?;
+                let right = cid_filter_values(&binary.right)?;
+                Some(left.intersection(&right).copied().collect())
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn is_cid_column(expression: &Expr) -> bool {
+    matches!(expression, Expr::Column(column) if column.name == "cid")
+}
+
+fn cid_literal(expression: &Expr) -> Option<i32> {
+    let Expr::Literal(value, _) = expression else {
+        return None;
+    };
+    match value {
+        ScalarValue::Int8(Some(value)) => Some(i32::from(*value)),
+        ScalarValue::Int16(Some(value)) => Some(i32::from(*value)),
+        ScalarValue::Int32(value) => *value,
+        ScalarValue::Int64(Some(value)) => i32::try_from(*value).ok(),
+        ScalarValue::UInt8(Some(value)) => Some(i32::from(*value)),
+        ScalarValue::UInt16(Some(value)) => Some(i32::from(*value)),
+        ScalarValue::UInt32(Some(value)) => i32::try_from(*value).ok(),
+        ScalarValue::UInt64(Some(value)) => i32::try_from(*value).ok(),
+        _ => None,
+    }
 }
 
 fn selected_ranges(postings: &CachedIvfPostings, cids: &[i32]) -> Vec<BatchRange> {
@@ -401,10 +474,10 @@ mod tests {
     use arrow::array::{ArrayRef, Int32Array, Int64Array};
     use datafusion::common::ScalarValue;
     use datafusion::logical_expr::Operator;
-    use datafusion::physical_expr::expressions::{BinaryExpr, Column, lit};
+    use datafusion::physical_expr::expressions::{BinaryExpr, Column, lit as physical_lit};
     use datafusion::physical_plan::collect;
     use datafusion::physical_plan::filter_pushdown::ChildFilterPushdownResult;
-    use datafusion::prelude::SessionContext;
+    use datafusion::prelude::{SessionConfig, SessionContext, col, lit};
 
     fn postings_batch(cids: Vec<i32>, keys: Vec<i64>) -> RecordBatch {
         RecordBatch::try_from_iter([
@@ -424,7 +497,11 @@ mod tests {
         let column = Arc::new(Column::new(name, index)) as Arc<dyn PhysicalExpr>;
         Arc::new(DynamicFilterPhysicalExpr::new(
             vec![Arc::clone(&column)],
-            Arc::new(BinaryExpr::new(column, Operator::GtEq, lit(minimum))),
+            Arc::new(BinaryExpr::new(
+                column,
+                Operator::GtEq,
+                physical_lit(minimum),
+            )),
         ))
     }
 
@@ -474,10 +551,12 @@ mod tests {
     #[tokio::test]
     async fn provider_routes_clusters_and_pushes_projection_into_the_scan() {
         let postings = cached_postings();
-        let provider = postings.provider(&[0, 2], 2).unwrap();
+        let provider = postings.provider();
         let context = SessionContext::new();
         let dataframe = context
             .read_table(provider)
+            .unwrap()
+            .filter(col("cid").in_list(vec![lit(0_i32), lit(2_i32)], false))
             .unwrap()
             .select_columns(&["key_1"])
             .unwrap();
@@ -488,12 +567,28 @@ mod tests {
         let batches = collect(plan, context.task_ctx()).await.unwrap();
 
         assert!(formatted.contains("CachedIvfScanExec"), "{formatted}");
+        assert!(!formatted.contains("FilterExec"), "{formatted}");
         assert!(!formatted.contains("DataSourceExec"), "{formatted}");
         assert_eq!(keys(&batches), [0, 1, 4, 5]);
         assert!(
             batches
                 .iter()
                 .all(|batch| batch.schema().fields().len() == 1)
+        );
+    }
+
+    #[test]
+    fn provider_pushes_down_only_cid_selection_filters() {
+        let provider = cached_postings().provider();
+        let cid = col("cid").in_list(vec![lit(0_i32), lit(2_i32)], false);
+        let key = col("key_1").gt(lit(2_i64));
+
+        assert_eq!(
+            provider.supports_filters_pushdown(&[&cid, &key]).unwrap(),
+            [
+                TableProviderFilterPushDown::Exact,
+                TableProviderFilterPushDown::Unsupported,
+            ]
         );
     }
 
@@ -504,10 +599,13 @@ mod tests {
             .collect::<Vec<_>>();
         let postings = Arc::new(CachedIvfPostings::from_partitions(&partitions, 8).unwrap());
         let cids = (0_i32..8).collect::<Vec<_>>();
-        let provider = postings.provider(&cids, 2).unwrap();
-        let context = SessionContext::new();
+        let provider = postings.provider();
+        let context =
+            SessionContext::new_with_config(SessionConfig::new().with_target_partitions(2));
         let plan = context
             .read_table(provider)
+            .unwrap()
+            .filter(col("cid").in_list(cids.into_iter().map(lit).collect(), false))
             .unwrap()
             .create_physical_plan()
             .await
@@ -522,14 +620,19 @@ mod tests {
     #[tokio::test]
     async fn independent_cluster_views_can_execute_concurrently() {
         let postings = cached_postings();
+        let provider = postings.provider();
         let context = SessionContext::new();
         let left = context
-            .read_table(postings.provider(&[0, 1], 2).unwrap())
+            .read_table(Arc::clone(&provider))
+            .unwrap()
+            .filter(col("cid").in_list(vec![lit(0_i32), lit(1_i32)], false))
             .unwrap()
             .select_columns(&["key_1"])
             .unwrap();
         let right = context
-            .read_table(postings.provider(&[2, 3], 2).unwrap())
+            .read_table(provider)
+            .unwrap()
+            .filter(col("cid").in_list(vec![lit(2_i32), lit(3_i32)], false))
             .unwrap()
             .select_columns(&["key_1"])
             .unwrap();
@@ -543,7 +646,7 @@ mod tests {
     #[tokio::test]
     async fn scan_applies_key_runtime_filters_before_emitting_batches() {
         let postings = cached_postings();
-        let partitions = route_ranges(&postings, &[0, 1, 2, 3], 2).unwrap().into();
+        let partitions = route_ranges(&postings, &[0, 1, 2, 3], 2).into();
         let filter = dynamic_filter("key_1", 1, ScalarValue::Int64(Some(5)));
         let plan =
             Arc::new(CachedIvfScanExec::try_new(postings, partitions, None, vec![filter]).unwrap())
@@ -577,7 +680,7 @@ mod tests {
     #[test]
     fn physical_pushdown_attaches_only_supported_runtime_filters() {
         let postings = cached_postings();
-        let partitions = route_ranges(&postings, &[0, 1], 1).unwrap().into();
+        let partitions = route_ranges(&postings, &[0, 1], 1).into();
         let plan = CachedIvfScanExec::try_new(postings, partitions, None, vec![]).unwrap();
         let key = dynamic_filter("key_1", 1, ScalarValue::Int64(Some(1)));
         let unrelated = dynamic_filter("vector", 2, ScalarValue::Int64(Some(1)));

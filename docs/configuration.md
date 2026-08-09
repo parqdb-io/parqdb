@@ -30,6 +30,36 @@ session = relify.connect("./relify-data")
 | `index_root` | Optional independent `file`, `s3`, or `hdfs` warehouse URI |
 | `storage_options` | String key/value options passed to object-store or HDFS clients |
 | `iceberg` | Optional PyIceberg catalog used to query Iceberg sources and indexes |
+| `config` | Optional DataFusion `SessionConfig` used to create the session |
+| `runtime` | Optional `relify.datafusion.RuntimeEnvBuilder` used to create the session |
+
+DataFusion and Relify options share one configuration object:
+
+```python
+config = (
+    relify.SessionConfig()
+    .set("datafusion.execution.target_partitions", "8")
+    .set("relify.metadata.cache.max_entries", "128")
+    .set("relify.metadata.cache.max_bytes", str(16 * 1024 * 1024))
+)
+runtime = relify.datafusion.RuntimeEnvBuilder().with_greedy_memory_pool(
+    4 * 1024 * 1024 * 1024
+)
+session = relify.connect("./relify-data", config=config, runtime=runtime)
+```
+
+Metadata cache limits can also be changed on a running session with DataFusion
+SQL:
+
+```python
+session.sql("SET relify.metadata.cache.max_entries = 256")
+session.sql("SET relify.metadata.cache.max_bytes = 33554432")
+```
+
+The new bounds are enforced before the next metadata cache access. Set either
+limit to `0` to disable the cache. The byte budget is based on serialized
+metadata size; parsed objects have additional allocator overhead, so this is a
+bounded cache policy rather than a hard process-memory limit.
 
 ### Explicit catalog and warehouse
 

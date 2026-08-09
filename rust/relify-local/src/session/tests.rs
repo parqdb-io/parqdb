@@ -8,6 +8,8 @@ use arrow::array::{Array, Float32Builder, Int32Array, Int64Array, ListBuilder, S
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
+use datafusion::execution::memory_pool::{GreedyMemoryPool, MemoryPool};
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use relify_meta::{IndexMetadata, PostingEncoding, SnapshotLogEntry};
 use rusqlite::Connection;
 use tempfile::TempDir;
@@ -15,7 +17,7 @@ use uuid::Uuid;
 
 use super::*;
 use crate::local_uri::directory_to_file_uri;
-use crate::{IvfConfig, MaintenanceKind};
+use crate::{IvfConfig, MaintenanceKind, relify_session_config};
 
 struct MemoryEntry {
     entry: CatalogEntry,
@@ -27,6 +29,76 @@ fn age_catalog_tombstones(session: &LocalSession) {
     connection
         .execute("UPDATE catalog_tombstones SET unreachable_since_ms = 0", [])
         .unwrap();
+}
+
+#[test]
+fn metadata_cache_config_is_shared_with_repository_handles() {
+    let temporary = TempDir::new().unwrap();
+    let config = MetadataCacheConfig::new(7, 4096);
+    let datafusion_config = relify_session_config()
+        .set_str("relify.metadata.cache.max_entries", "7")
+        .set_str("relify.metadata.cache.max_bytes", "4096");
+    let session = LocalSession::open_with_options(
+        temporary.path(),
+        LocalSessionOptions::new(datafusion_config, RuntimeEnvBuilder::default()),
+    )
+    .unwrap();
+    let repository = session.index_repository();
+
+    assert_eq!(session.metadata_cache_config(), config);
+    assert_eq!(repository.metadata_store().cache_config(), config);
+}
+
+#[tokio::test]
+async fn metadata_cache_config_tracks_datafusion_session_set() {
+    let temporary = TempDir::new().unwrap();
+    let session = LocalSession::open(temporary.path()).unwrap();
+
+    session
+        .context()
+        .sql("SET relify.metadata.cache.max_entries = 7")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    session
+        .context()
+        .sql("SET relify.metadata.cache.max_bytes = 4096")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        session.metadata_cache_config(),
+        MetadataCacheConfig::new(7, 4096)
+    );
+    assert_eq!(
+        session.index_repository().metadata_store().cache_config(),
+        MetadataCacheConfig::new(7, 4096)
+    );
+}
+
+#[test]
+fn session_preserves_datafusion_config_and_runtime() {
+    let temporary = TempDir::new().unwrap();
+    let config = relify_session_config().with_target_partitions(3);
+    let memory_pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(4096));
+    let runtime = RuntimeEnvBuilder::default().with_memory_pool(Arc::clone(&memory_pool));
+    let session = LocalSession::open_with_options(
+        temporary.path(),
+        LocalSessionOptions::new(config, runtime),
+    )
+    .unwrap();
+    let context = session.context();
+
+    assert_eq!(context.copied_config().target_partitions(), 3);
+    assert!(Arc::ptr_eq(
+        &context.runtime_env().memory_pool,
+        &memory_pool
+    ));
 }
 
 #[derive(Default)]
@@ -432,6 +504,7 @@ async fn backend_cache_materializes_and_releases_complete_index_snapshots() {
     };
     let plan = session.explain_search(&request, false).await.unwrap();
     assert!(plan.contains("IvfTopKExec"), "{plan}");
+    assert!(plan.contains("CachedIvfScanExec"), "{plan}");
     assert!(!plan.contains("FilterExec"), "{plan}");
     assert!(!plan.contains("cid IN"), "{plan}");
     let sql = session.search_sql(&request).await.unwrap();
@@ -446,6 +519,10 @@ async fn backend_cache_materializes_and_releases_complete_index_snapshots() {
     let cached_sql_plan = datafusion::physical_plan::displayable(cached_sql_plan.as_ref())
         .indent(false)
         .to_string();
+    assert!(
+        cached_sql_plan.contains("CachedIvfScanExec"),
+        "{cached_sql_plan}"
+    );
     let cached_parquet_scans = cached_sql_plan.matches("file_type=parquet").count();
     assert!(session.uncache_index("direct_index").unwrap());
     assert!(!session.uncache_index("direct_index").unwrap());
@@ -465,6 +542,53 @@ async fn backend_cache_materializes_and_releases_complete_index_snapshots() {
         uncached_sql_plan.matches("file_type=parquet").count() > cached_parquet_scans,
         "{uncached_sql_plan}"
     );
+}
+
+#[tokio::test]
+async fn cached_source_join_uses_runtime_filter_and_matches_uncached_results() {
+    let (_temporary, session, source_path) = direct_pid_fixture().await;
+    let request = SearchRequest {
+        source: RelationReference::Parquet {
+            uri: directory_to_file_uri(&source_path).unwrap(),
+        },
+        index: Some("direct_index".into()),
+        column: None,
+        query: vec![0.0, 0.0],
+        nprobe: Some(1),
+        limit: 2,
+        projection: Some(vec!["source_pid".into(), "label".into()]),
+        filter: None,
+        bypass_index: false,
+    };
+    let (uncached, uncached_schema) = session.search(&request).await.unwrap();
+    let sql = session.search_sql(&request).await.unwrap();
+
+    session.cache_index("direct_index").await.unwrap();
+    let plan = session.explain_search(&request, false).await.unwrap();
+    assert!(plan.contains("CachedIvfScanExec"), "{plan}");
+    assert!(plan.contains("runtime_filters=1"), "{plan}");
+    let (cached, cached_schema) = session.search(&request).await.unwrap();
+    assert_eq!(cached_schema, uncached_schema);
+    assert_eq!(cached, uncached);
+    let cached_sql = session
+        .context()
+        .sql(&sql)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    assert!(session.uncache_index("direct_index").unwrap());
+    let uncached_sql = session
+        .context()
+        .sql(&sql)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(cached_sql, uncached_sql);
 }
 
 #[tokio::test]
@@ -904,6 +1028,30 @@ async fn orphan_removal_preserves_reachable_data_and_removes_dropped_data() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn orphan_removal_invalidates_deleted_metadata_before_registration() {
+    let (_temporary, session, _source_path) = direct_pid_fixture().await;
+    let metadata_location = session.load_index_entry("direct_index").await.unwrap().0;
+    session.drop_index("direct_index").unwrap();
+    age_catalog_tombstones(&session);
+
+    let removed = session.remove_orphans(i64::MAX, false).await.unwrap();
+    assert!(
+        removed
+            .iter()
+            .any(|object| object.kind == MaintenanceKind::Metadata)
+    );
+    assert!(!file_uri_to_path(&metadata_location).unwrap().exists());
+
+    assert!(
+        session
+            .register_index("resurrected", &metadata_location)
+            .await
+            .is_err()
+    );
+    assert!(session.list_indexes().unwrap().is_empty());
 }
 
 #[tokio::test]

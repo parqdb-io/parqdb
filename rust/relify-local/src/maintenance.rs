@@ -125,6 +125,9 @@ pub(crate) async fn remove_orphans(
                 })) => {}
                 Err(error) => return Err(error.into()),
             }
+            if candidate.object.kind == MaintenanceKind::Metadata {
+                metadata_store.invalidate(member);
+            }
         }
         removed.push(candidate.object);
     }

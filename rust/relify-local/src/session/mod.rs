@@ -19,7 +19,7 @@ use datafusion::prelude::SessionContext;
 #[cfg(test)]
 use relify_catalog::{CatalogEntry, Error as CatalogError, IndexIdentifier};
 use relify_catalog::{IndexCatalog, SqliteCatalog, TableCatalog};
-use relify_index::{IndexRepository, MetadataStore};
+use relify_index::{IndexRepository, MetadataCacheConfig, MetadataStore};
 #[cfg(test)]
 use relify_meta::{IndexSnapshot, RelationReference};
 use relify_storage::{StorageRegistry, Warehouse};
@@ -29,6 +29,7 @@ use self::catalog::validate_index_name;
 use self::catalog_list::RelifyCatalogList;
 #[cfg(test)]
 use crate::SearchRequest;
+use crate::config::{LocalSessionOptions, metadata_cache_config};
 use crate::coordination::SessionCoordination;
 use crate::durability::{create_dir_all, sync_directory};
 use crate::local_uri::directory_to_file_uri;
@@ -108,6 +109,12 @@ impl LocalSession {
     /// Opens the local shortcut: `SQLite` catalog and `file` warehouse under
     /// `root`.
     pub fn open(root: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with_options(root, LocalSessionOptions::default())
+    }
+
+    /// Opens the local shortcut with explicit `DataFusion` initialization
+    /// options.
+    pub fn open_with_options(root: impl AsRef<Path>, options: LocalSessionOptions) -> Result<Self> {
         let root = prepare_root(root.as_ref())?;
         let warehouse = directory_to_file_uri(&root)?;
         let catalog = Arc::new(SqliteCatalog::open(root.join("catalog.sqlite"))?);
@@ -118,6 +125,7 @@ impl LocalSession {
             Some(catalog as Arc<dyn TableCatalog>),
             &warehouse,
             HashMap::new(),
+            options,
         )
     }
 
@@ -128,6 +136,22 @@ impl LocalSession {
         warehouse: &str,
         storage_options: HashMap<String, String>,
     ) -> Result<Self> {
+        Self::open_with_warehouse_options(
+            state_root,
+            warehouse,
+            storage_options,
+            LocalSessionOptions::default(),
+        )
+    }
+
+    /// Opens a separately configured warehouse with explicit `DataFusion`
+    /// initialization options.
+    pub fn open_with_warehouse_options(
+        state_root: impl AsRef<Path>,
+        warehouse: &str,
+        storage_options: HashMap<String, String>,
+        options: LocalSessionOptions,
+    ) -> Result<Self> {
         let state_root = prepare_root(state_root.as_ref())?;
         let catalog = Arc::new(SqliteCatalog::open(state_root.join("catalog.sqlite"))?);
         Self::from_parts(
@@ -137,6 +161,7 @@ impl LocalSession {
             Some(catalog as Arc<dyn TableCatalog>),
             warehouse,
             storage_options,
+            options,
         )
     }
 
@@ -146,6 +171,22 @@ impl LocalSession {
         database: impl AsRef<Path>,
         warehouse: &str,
         storage_options: HashMap<String, String>,
+    ) -> Result<Self> {
+        Self::open_sqlite_with_options(
+            database,
+            warehouse,
+            storage_options,
+            LocalSessionOptions::default(),
+        )
+    }
+
+    /// Opens an explicit `SQLite` catalog with `DataFusion` initialization
+    /// options.
+    pub fn open_sqlite_with_options(
+        database: impl AsRef<Path>,
+        warehouse: &str,
+        storage_options: HashMap<String, String>,
+        options: LocalSessionOptions,
     ) -> Result<Self> {
         let database = absolute_path(database.as_ref())?;
         let file_name = database
@@ -166,11 +207,21 @@ impl LocalSession {
             Some(catalog as Arc<dyn TableCatalog>),
             warehouse,
             storage_options,
+            options,
         )
     }
 
     /// Opens a session using a caller-supplied catalog and local warehouse.
     pub fn with_catalog(root: impl AsRef<Path>, catalog: Arc<dyn IndexCatalog>) -> Result<Self> {
+        Self::with_catalog_and_options(root, catalog, LocalSessionOptions::default())
+    }
+
+    /// Opens a caller-supplied catalog with `DataFusion` initialization options.
+    pub fn with_catalog_and_options(
+        root: impl AsRef<Path>,
+        catalog: Arc<dyn IndexCatalog>,
+        options: LocalSessionOptions,
+    ) -> Result<Self> {
         let root = prepare_root(root.as_ref())?;
         let warehouse = directory_to_file_uri(&root)?;
         Self::from_parts(
@@ -180,6 +231,7 @@ impl LocalSession {
             None,
             &warehouse,
             HashMap::new(),
+            options,
         )
     }
 
@@ -190,6 +242,24 @@ impl LocalSession {
         warehouse: &str,
         storage_options: HashMap<String, String>,
     ) -> Result<Self> {
+        Self::with_catalog_and_warehouse_options(
+            state_root,
+            catalog,
+            warehouse,
+            storage_options,
+            LocalSessionOptions::default(),
+        )
+    }
+
+    /// Opens independent catalog and warehouse implementations with explicit
+    /// `DataFusion` initialization options.
+    pub fn with_catalog_and_warehouse_options(
+        state_root: impl AsRef<Path>,
+        catalog: Arc<dyn IndexCatalog>,
+        warehouse: &str,
+        storage_options: HashMap<String, String>,
+        options: LocalSessionOptions,
+    ) -> Result<Self> {
         let state_root = prepare_root(state_root.as_ref())?;
         Self::from_parts(
             state_root.clone(),
@@ -198,6 +268,7 @@ impl LocalSession {
             None,
             warehouse,
             storage_options,
+            options,
         )
     }
 
@@ -208,11 +279,13 @@ impl LocalSession {
         table_catalog: Option<Arc<dyn TableCatalog>>,
         warehouse_root: &str,
         storage_options: HashMap<String, String>,
+        options: LocalSessionOptions,
     ) -> Result<Self> {
         sync_directory(&state_root)?;
         let registry = StorageRegistry::new(storage_options);
         let warehouse = Warehouse::open(warehouse_root, registry.clone())?;
-        let context = crate::query::relify_session_context();
+        let (session_config, runtime) = options.into_parts();
+        let context = crate::query::relify_session_context(session_config, runtime)?;
         let catalog_list = Arc::new(RelifyCatalogList::new(
             context.state().catalog_list().clone(),
             catalog,
@@ -220,11 +293,16 @@ impl LocalSession {
         ));
         context.register_catalog_list(Arc::clone(&catalog_list) as _);
         let index_catalog = Arc::clone(&catalog_list) as Arc<dyn IndexCatalog>;
+        let config_context = context.clone();
+        let metadata =
+            MetadataStore::open_with_cache_config_resolver(warehouse.clone(), move || {
+                metadata_cache_config(&config_context.copied_config())
+            });
         Ok(Self {
             catalog: Arc::clone(&index_catalog),
             table_catalog: catalog_list as Arc<dyn TableCatalog>,
             coordination: SessionCoordination::open(coordination_root)?,
-            indexes: IndexRepository::new(index_catalog, MetadataStore::open(warehouse.clone())),
+            indexes: IndexRepository::new(index_catalog, metadata),
             parquet: ParquetStore::with_context(registry, context.clone()),
             context,
             source_bindings: Arc::new(RwLock::new(HashMap::new())),
@@ -246,6 +324,18 @@ impl LocalSession {
     #[must_use]
     pub fn warehouse_root(&self) -> &str {
         self.warehouse.root()
+    }
+
+    /// Returns a backend-neutral handle to this session's index repository.
+    #[must_use]
+    pub fn index_repository(&self) -> IndexRepository {
+        self.indexes.clone()
+    }
+
+    /// Returns the active metadata-cache bounds.
+    #[must_use]
+    pub fn metadata_cache_config(&self) -> MetadataCacheConfig {
+        self.indexes.metadata_store().cache_config()
     }
 
     /// Returns the session's shared `DataFusion` execution context.
