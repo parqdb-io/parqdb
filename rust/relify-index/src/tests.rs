@@ -152,6 +152,8 @@ async fn metadata_store_reuses_cached_immutable_documents_across_clones() {
     std::fs::remove_file(url::Url::parse(&location).unwrap().to_file_path().unwrap()).unwrap();
 
     assert_eq!(cached_reader.load(&location).await.unwrap(), metadata);
+    cached_reader.invalidate(&location);
+    assert!(cached_reader.load(&location).await.is_err());
 }
 
 #[tokio::test]
@@ -307,6 +309,23 @@ async fn repository_loads_discovers_and_selects_published_indexes() {
             .snapshot_id,
         snapshot_id
     );
+}
+
+#[tokio::test]
+async fn repository_registration_requires_metadata_to_exist_in_storage() {
+    let temporary = TempDir::new().unwrap();
+    let repository = repository(&temporary);
+    let metadata = metadata_document(repository.metadata_store());
+    let location = repository
+        .metadata_store()
+        .write_initial(&metadata)
+        .await
+        .unwrap();
+    std::fs::remove_file(url::Url::parse(&location).unwrap().to_file_path().unwrap()).unwrap();
+    let identifier = IndexIdentifier::root("missing_metadata").unwrap();
+
+    assert!(repository.register(&identifier, &location).await.is_err());
+    assert!(!repository.exists(&identifier).unwrap());
 }
 
 #[tokio::test]

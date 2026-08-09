@@ -1031,6 +1031,30 @@ async fn orphan_removal_preserves_reachable_data_and_removes_dropped_data() {
 }
 
 #[tokio::test]
+async fn orphan_removal_invalidates_deleted_metadata_before_registration() {
+    let (_temporary, session, _source_path) = direct_pid_fixture().await;
+    let metadata_location = session.load_index_entry("direct_index").await.unwrap().0;
+    session.drop_index("direct_index").unwrap();
+    age_catalog_tombstones(&session);
+
+    let removed = session.remove_orphans(i64::MAX, false).await.unwrap();
+    assert!(
+        removed
+            .iter()
+            .any(|object| object.kind == MaintenanceKind::Metadata)
+    );
+    assert!(!file_uri_to_path(&metadata_location).unwrap().exists());
+
+    assert!(
+        session
+            .register_index("resurrected", &metadata_location)
+            .await
+            .is_err()
+    );
+    assert!(session.list_indexes().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn orphan_removal_preserves_an_unpublished_active_build_root() {
     let temporary = TempDir::new().unwrap();
     let session = LocalSession::open(temporary.path().join("relify")).unwrap();

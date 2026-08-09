@@ -116,6 +116,30 @@ def test_remove_orphans_dry_run_and_delete_dropped_index_data(
     assert (session.root / "catalog.sqlite").is_file()
 
 
+def test_removed_metadata_cannot_be_registered_from_session_cache(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "vectors.parquet"
+    write_vectors(source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
+    session = relify.connect(tmp_path / "relify-data")
+    vectors = register_source(session, source)
+    build_index(vectors, nlist=1)
+    entry = session.indexes.load("vectors_embedding")
+    session.indexes.drop("vectors_embedding")
+    _set_tombstone_time(session, datetime.now(UTC) - timedelta(days=30))
+
+    removed = session.maintenance.remove_orphans(
+        older_than=datetime.now(UTC),
+        dry_run=False,
+    )
+
+    assert any(candidate.kind == "metadata" for candidate in removed)
+    assert not _uri_path(entry.metadata_location).exists()
+    with pytest.raises(relify.StorageError):
+        session.indexes.register("resurrected", entry.metadata_location)
+    assert session.indexes.list() == []
+
+
 def test_lazy_query_is_protected_by_retention_without_a_query_lease(
     tmp_path: Path,
 ) -> None:

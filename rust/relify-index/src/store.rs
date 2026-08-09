@@ -151,6 +151,15 @@ impl MetadataStore {
         if let Some(metadata) = self.cache().get(location) {
             return Ok(metadata.as_ref().clone());
         }
+        self.load_from_storage(location).await
+    }
+
+    /// Removes one metadata document from the in-memory cache.
+    pub fn invalidate(&self, location: &str) {
+        self.cache().remove(location);
+    }
+
+    pub(crate) async fn load_from_storage(&self, location: &str) -> Result<IndexMetadata> {
         let bytes = self.warehouse.read(location).await?;
         let serialized_bytes = bytes.len();
         let metadata = Arc::new(IndexMetadata::from_json_slice(&bytes)?);

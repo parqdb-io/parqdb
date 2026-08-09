@@ -124,7 +124,7 @@ impl IndexRepository {
         identifier: &IndexIdentifier,
         metadata_location: &str,
     ) -> Result<()> {
-        let metadata = self.metadata.load(metadata_location).await?;
+        let metadata = self.metadata.load_from_storage(metadata_location).await?;
         self.catalog
             .register(identifier, metadata_location, &metadata)?;
         Ok(())
