@@ -29,12 +29,15 @@ by schema version 1. Its remaining fields are determined by
 |---|---|
 | `source` | None. Candidate vectors are read from the source table. |
 | `flat` | `vector: list<float>`. |
-| `lvq4` | `offset: float`, `scale: float`, `code: fixed(ceil(D / 2))`. |
-| `lvq8` | `offset: float`, `scale: float`, `code: fixed(D)`. |
+| `lvq4` | `offset: float`, `scale: float`, `code: binary`. |
+| `lvq8` | `offset: float`, `scale: float`, `code: binary`. |
 
 Fields not listed for the selected encoding must be absent. Every postings
 field is required. The source-key, row-count, and cluster-assignment
 requirements from schema version 1 continue to apply.
+
+Every `lvq4` code value must contain exactly `ceil(D / 2)` bytes. Every `lvq8`
+code value must contain exactly `D` bytes.
 
 ## LVQ Encoding
 
@@ -76,6 +79,9 @@ in `ivf_centroids`.
 ## Physical Layout
 
 The logical schema does not assign meaning to postings row order, file
-boundaries, Parquet row groups, encodings, or compression. Implementations may
-organize postings by `cid` and may disable generic compression for packed LVQ
-codes without changing the published index semantics.
+boundaries, Parquet row groups, encodings, or compression. In the Parquet
+profile, `code` is stored as `BYTE_ARRAY`. PLAIN encoding without dictionary is
+recommended so implementations can scan packed codes sequentially without
+dictionary indirection. Compression remains an implementation choice.
+Implementations may organize postings by `cid` without changing the published
+index semantics.

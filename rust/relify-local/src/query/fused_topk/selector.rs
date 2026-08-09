@@ -4,10 +4,7 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 use std::sync::Arc;
 
-use arrow::array::{
-    Array, ArrayRef, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, LargeListArray,
-    ListArray,
-};
+use arrow::array::{Array, ArrayRef, FixedSizeListArray, Float32Array, LargeListArray, ListArray};
 use arrow::compute::{interleave, interleave_record_batch};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -19,7 +16,7 @@ use datafusion::physical_expr::projection::ProjectionExpr;
 use datafusion::physical_plan::metrics::Time;
 
 use super::exec::{DistanceInput, VectorKind};
-use crate::query::lvq_code_values;
+use crate::query::lvq_code_rows;
 use relify_kernels::{DistanceKernel, LvqBatchView};
 
 #[derive(Debug)]
@@ -479,11 +476,10 @@ pub(super) fn compute_batch_distances(
             offset_index,
             scale_index,
         } => {
-            let codes = batch
-                .column(code_index)
-                .as_any()
-                .downcast_ref::<FixedSizeBinaryArray>()
-                .expect("validated FixedSizeBinary LVQ code column");
+            let codes = lvq_code_rows(
+                batch.column(code_index).as_ref(),
+                bits.code_size(query.len()),
+            )?;
             let offsets = batch
                 .column(offset_index)
                 .as_any()
@@ -494,16 +490,16 @@ pub(super) fn compute_batch_distances(
                 .as_any()
                 .downcast_ref::<Float32Array>()
                 .expect("validated Float32 LVQ scale column");
-            let view = LvqBatchView::try_new(
+            let view = LvqBatchView::try_new_rows(
                 bits,
                 query.len(),
-                lvq_code_values(codes)?,
+                codes,
                 offsets.values(),
                 scales.values(),
             )
             .map_err(|error| datafusion::common::DataFusionError::Execution(error.to_string()))?;
             kernel
-                .lvq_squared_l2_rows(view, query, distances)
+                .lvq_squared_l2_rows(&view, query, distances)
                 .map_err(|error| {
                     datafusion::common::DataFusionError::Execution(error.to_string())
                 })?;

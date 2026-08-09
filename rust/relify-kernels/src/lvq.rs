@@ -85,22 +85,172 @@ impl LvqEncodedBatch {
     /// Borrows the encoded buffers for distance evaluation.
     #[must_use]
     pub fn as_view(&self) -> LvqBatchView<'_> {
+        let code_size = self.bits.code_size(self.dimension);
         LvqBatchView {
             bits: self.bits,
             dimension: self.dimension,
-            codes: &self.codes,
+            codes: LvqCodeRows::from_encoded(&self.codes, code_size),
             offsets: &self.offsets,
             scales: &self.scales,
         }
     }
 }
 
-/// Validated borrowed LVQ buffers.
 #[derive(Debug, Clone, Copy)]
+struct LvqCodeSpan<'a> {
+    values: &'a [u8],
+    rows: usize,
+    stride: usize,
+}
+
+#[derive(Debug, Default)]
+enum LvqCodeSpans<'a> {
+    #[default]
+    Empty,
+    One(LvqCodeSpan<'a>),
+    Many(Vec<LvqCodeSpan<'a>>),
+}
+
+/// Checked borrowed LVQ code rows, optionally split across strided spans.
+///
+/// Storage adapters append spans through [`Self::push_span`]. The checked
+/// representation lets SIMD kernels consume non-contiguous storage without
+/// trusting an external behavioral contract.
+#[derive(Debug)]
+pub struct LvqCodeRows<'a> {
+    spans: LvqCodeSpans<'a>,
+    row_count: usize,
+    code_size: usize,
+}
+
+impl<'a> LvqCodeRows<'a> {
+    fn from_encoded(values: &'a [u8], code_size: usize) -> Self {
+        debug_assert!(code_size > 0);
+        debug_assert!(values.len().is_multiple_of(code_size));
+        let row_count = values.len() / code_size;
+        let spans = if row_count == 0 {
+            LvqCodeSpans::Empty
+        } else {
+            LvqCodeSpans::One(LvqCodeSpan {
+                values,
+                rows: row_count,
+                stride: code_size,
+            })
+        };
+        Self {
+            spans,
+            row_count,
+            code_size,
+        }
+    }
+
+    /// Creates an empty collection for rows of `code_size` bytes.
+    pub fn try_new(code_size: usize) -> Result<Self> {
+        if code_size == 0 {
+            return invalid("LVQ code size must be positive");
+        }
+        Ok(Self {
+            spans: LvqCodeSpans::Empty,
+            row_count: 0,
+            code_size,
+        })
+    }
+
+    /// Validates contiguous row-major code bytes.
+    pub fn try_from_packed(values: &'a [u8], code_size: usize) -> Result<Self> {
+        let mut codes = Self::try_new(code_size)?;
+        if !values.len().is_multiple_of(code_size) {
+            return invalid("LVQ code buffer does not contain complete rows");
+        }
+        let rows = values.len() / code_size;
+        if rows != 0 {
+            codes.push_span(values, rows, code_size)?;
+        }
+        Ok(codes)
+    }
+
+    /// Appends `rows` codes separated by `stride` bytes.
+    ///
+    /// `values` must contain exactly the bytes from the first code through the
+    /// final code, including any bytes between adjacent codes.
+    pub fn push_span(&mut self, values: &'a [u8], rows: usize, stride: usize) -> Result<()> {
+        if rows == 0 {
+            return invalid("LVQ code spans must contain at least one row");
+        }
+        if stride < self.code_size {
+            return invalid("LVQ code span stride is smaller than one code row");
+        }
+        let expected_bytes = (rows - 1)
+            .checked_mul(stride)
+            .and_then(|bytes| bytes.checked_add(self.code_size))
+            .ok_or_else(|| KernelError("LVQ code span shape overflows usize".into()))?;
+        if values.len() != expected_bytes {
+            return invalid("LVQ code span does not match its declared shape");
+        }
+        self.row_count = self
+            .row_count
+            .checked_add(rows)
+            .ok_or_else(|| KernelError("LVQ code row count overflows usize".into()))?;
+        let span = LvqCodeSpan {
+            values,
+            rows,
+            stride,
+        };
+        self.spans = match std::mem::take(&mut self.spans) {
+            LvqCodeSpans::Empty => LvqCodeSpans::One(span),
+            LvqCodeSpans::One(first) => LvqCodeSpans::Many(vec![first, span]),
+            LvqCodeSpans::Many(mut spans) => {
+                spans.push(span);
+                LvqCodeSpans::Many(spans)
+            }
+        };
+        Ok(())
+    }
+
+    /// Returns the number of code rows.
+    #[must_use]
+    pub const fn row_count(&self) -> usize {
+        self.row_count
+    }
+
+    fn spans(&self) -> impl Iterator<Item = &LvqCodeSpan<'a>> {
+        let (one, many) = match &self.spans {
+            LvqCodeSpans::Empty => (None, &[][..]),
+            LvqCodeSpans::One(span) => (Some(span), &[][..]),
+            LvqCodeSpans::Many(spans) => (None, spans.as_slice()),
+        };
+        one.into_iter().chain(many)
+    }
+
+    fn row(&self, mut row: usize) -> &[u8] {
+        for span in self.spans() {
+            if row < span.rows {
+                let offset = row * span.stride;
+                return &span.values[offset..offset + self.code_size];
+            }
+            row -= span.rows;
+        }
+        panic!("LVQ code row is out of bounds");
+    }
+
+    fn for_each_row(&self, mut visitor: impl FnMut(usize, &[u8])) {
+        let mut row = 0;
+        for span in self.spans() {
+            for offset in (0..span.rows).map(|index| index * span.stride) {
+                visitor(row, &span.values[offset..offset + self.code_size]);
+                row += 1;
+            }
+        }
+        debug_assert_eq!(row, self.row_count);
+    }
+}
+
+/// Validated borrowed LVQ buffers.
+#[derive(Debug)]
 pub struct LvqBatchView<'a> {
     bits: LvqBits,
     dimension: usize,
-    codes: &'a [u8],
+    codes: LvqCodeRows<'a>,
     offsets: &'a [f32],
     scales: &'a [f32],
 }
@@ -129,8 +279,42 @@ impl<'a> LvqBatchView<'a> {
             return invalid("LVQ code buffer does not match its declared shape");
         }
 
+        Self::try_new_rows(
+            bits,
+            dimension,
+            LvqCodeRows::try_from_packed(codes, code_size)?,
+            offsets,
+            scales,
+        )
+    }
+
+    /// Validates and borrows a row-oriented LVQ code source.
+    pub fn try_new_rows(
+        bits: LvqBits,
+        dimension: usize,
+        codes: LvqCodeRows<'a>,
+        offsets: &'a [f32],
+        scales: &'a [f32],
+    ) -> Result<Self> {
+        if dimension == 0 {
+            return invalid("vector dimension must be positive");
+        }
+        if offsets.len() != scales.len() {
+            return invalid("LVQ offset and scale row counts differ");
+        }
+        if codes.row_count() != offsets.len() {
+            return invalid("LVQ code, offset, and scale row counts differ");
+        }
+        if codes.code_size != bits.code_size(dimension) {
+            return invalid("LVQ code rows do not match the declared dimension");
+        }
+
         let levels = f32::from(bits.levels());
-        for row in 0..offsets.len() {
+        let mut validation_error = None;
+        codes.for_each_row(|row, row_codes| {
+            if validation_error.is_some() {
+                return;
+            }
             let offset = offsets[row];
             let scale = scales[row];
             if !offset.is_finite()
@@ -138,18 +322,22 @@ impl<'a> LvqBatchView<'a> {
                 || scale < 0.0
                 || !(offset + scale * levels).is_finite()
             {
-                return invalid("LVQ offsets and scales must define finite values");
+                validation_error = Some("LVQ offsets and scales must define finite values");
+                return;
             }
-            let row_codes = &codes[row * code_size..(row + 1) * code_size];
             if scale == 0.0 && row_codes.iter().any(|code| *code != 0) {
-                return invalid("constant LVQ rows must contain only zero codes");
+                validation_error = Some("constant LVQ rows must contain only zero codes");
+                return;
             }
             if bits == LvqBits::Four
                 && !dimension.is_multiple_of(2)
                 && row_codes.last().is_some_and(|code| code & 0xf0 != 0)
             {
-                return invalid("the unused LVQ4 high nibble must be zero");
+                validation_error = Some("the unused LVQ4 high nibble must be zero");
             }
+        });
+        if let Some(message) = validation_error {
+            return invalid(message);
         }
 
         Ok(Self {
@@ -163,32 +351,31 @@ impl<'a> LvqBatchView<'a> {
 
     /// Returns the quantization width.
     #[must_use]
-    pub const fn bits(self) -> LvqBits {
+    pub const fn bits(&self) -> LvqBits {
         self.bits
     }
 
     /// Returns the vector dimension.
     #[must_use]
-    pub const fn dimension(self) -> usize {
+    pub const fn dimension(&self) -> usize {
         self.dimension
     }
 
     /// Returns the number of encoded vectors.
     #[must_use]
-    pub fn row_count(self) -> usize {
+    pub fn row_count(&self) -> usize {
         self.offsets.len()
     }
 
     /// Decodes one row into `output`.
-    pub fn decode_row(self, row: usize, output: &mut [f32]) -> Result<()> {
+    pub fn decode_row(&self, row: usize, output: &mut [f32]) -> Result<()> {
         if row >= self.row_count() {
             return invalid("LVQ row is out of bounds");
         }
         if output.len() != self.dimension {
             return invalid("LVQ decode output has the wrong dimension");
         }
-        let code_size = self.bits.code_size(self.dimension);
-        let row_codes = &self.codes[row * code_size..(row + 1) * code_size];
+        let row_codes = self.codes.row(row);
         for (dimension, value) in output.iter_mut().enumerate() {
             *value = self.offsets[row]
                 + self.scales[row] * f32::from(code_at(self.bits, row_codes, dimension));
@@ -265,7 +452,7 @@ impl DistanceKernel {
     /// Computes squared-L2 distances from LVQ rows to one exact query vector.
     pub fn lvq_squared_l2_rows(
         self,
-        batch: LvqBatchView<'_>,
+        batch: &LvqBatchView<'_>,
         query: &[f32],
         output: &mut [f32],
     ) -> Result<()> {
@@ -321,10 +508,8 @@ fn code_at(bits: LvqBits, codes: &[u8], dimension: usize) -> u8 {
     }
 }
 
-fn lvq_squared_l2_rows_scalar(batch: LvqBatchView<'_>, query: &[f32], output: &mut [f32]) {
-    let code_size = batch.bits.code_size(batch.dimension);
-    for (row, distance) in output.iter_mut().enumerate() {
-        let row_codes = &batch.codes[row * code_size..(row + 1) * code_size];
+fn lvq_squared_l2_rows_scalar(batch: &LvqBatchView<'_>, query: &[f32], output: &mut [f32]) {
+    batch.codes.for_each_row(|row, row_codes| {
         let mut sum = 0.0_f32;
         for (dimension, query_value) in query.iter().copied().enumerate() {
             let decoded = batch.offsets[row]
@@ -332,14 +517,14 @@ fn lvq_squared_l2_rows_scalar(batch: LvqBatchView<'_>, query: &[f32], output: &m
             let delta = query_value - decoded;
             sum += delta * delta;
         }
-        *distance = sum;
-    }
+        output[row] = sum;
+    });
 }
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 #[allow(unsafe_code)]
-unsafe fn lvq_squared_l2_rows_avx2(batch: LvqBatchView<'_>, query: &[f32], output: &mut [f32]) {
+unsafe fn lvq_squared_l2_rows_avx2(batch: &LvqBatchView<'_>, query: &[f32], output: &mut [f32]) {
     use std::arch::x86_64::{
         _mm_and_si128, _mm_loadl_epi64, _mm_set1_epi8, _mm_srli_epi16, _mm_srli_si128,
         _mm_unpacklo_epi8, _mm256_add_ps, _mm256_cvtepi32_ps, _mm256_cvtepu8_epi32,
@@ -347,9 +532,8 @@ unsafe fn lvq_squared_l2_rows_avx2(batch: LvqBatchView<'_>, query: &[f32], outpu
         _mm256_sub_ps,
     };
 
-    let code_size = batch.bits.code_size(batch.dimension);
-    for (row, distance) in output.iter_mut().enumerate() {
-        let row_codes = unsafe { batch.codes.as_ptr().add(row * code_size) };
+    batch.codes.for_each_row(|row, row_codes| {
+        let row_codes = row_codes.as_ptr();
         let offset = _mm256_set1_ps(batch.offsets[row]);
         let scale = _mm256_set1_ps(batch.scales[row]);
         let mut accumulated = _mm256_setzero_ps();
@@ -397,14 +581,14 @@ unsafe fn lvq_squared_l2_rows_avx2(batch: LvqBatchView<'_>, query: &[f32], outpu
             let delta = query_value - decoded;
             sum += delta * delta;
         }
-        *distance = sum;
-    }
+        output[row] = sum;
+    });
 }
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f,avx512bw")]
 #[allow(unsafe_code)]
-unsafe fn lvq_squared_l2_rows_avx512(batch: LvqBatchView<'_>, query: &[f32], output: &mut [f32]) {
+unsafe fn lvq_squared_l2_rows_avx512(batch: &LvqBatchView<'_>, query: &[f32], output: &mut [f32]) {
     use std::arch::x86_64::{
         _mm_and_si128, _mm_loadl_epi64, _mm_loadu_si128, _mm_set1_epi8, _mm_srli_epi16,
         _mm_unpacklo_epi8, _mm512_add_ps, _mm512_cvtepi32_ps, _mm512_cvtepu8_epi32,
@@ -412,9 +596,8 @@ unsafe fn lvq_squared_l2_rows_avx512(batch: LvqBatchView<'_>, query: &[f32], out
         _mm512_sub_ps,
     };
 
-    let code_size = batch.bits.code_size(batch.dimension);
-    for (row, distance) in output.iter_mut().enumerate() {
-        let row_codes = unsafe { batch.codes.as_ptr().add(row * code_size) };
+    batch.codes.for_each_row(|row, row_codes| {
+        let row_codes = row_codes.as_ptr();
         let offset = _mm512_set1_ps(batch.offsets[row]);
         let scale = _mm512_set1_ps(batch.scales[row]);
         let mut accumulated = _mm512_setzero_ps();
@@ -449,8 +632,8 @@ unsafe fn lvq_squared_l2_rows_avx512(batch: LvqBatchView<'_>, query: &[f32], out
             let delta = query_value - decoded;
             sum += delta * delta;
         }
-        *distance = sum;
-    }
+        output[row] = sum;
+    });
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -507,6 +690,33 @@ mod tests {
     }
 
     #[test]
+    fn distance_kernel_accepts_non_contiguous_code_rows() {
+        let first = [1_u8, 2];
+        let second = [3_u8, 4];
+        let mut rows = LvqCodeRows::try_new(2).unwrap();
+        rows.push_span(&first, 1, 2).unwrap();
+        rows.push_span(&second, 1, 2).unwrap();
+        let view =
+            LvqBatchView::try_new_rows(LvqBits::Eight, 2, rows, &[0.0, 0.0], &[1.0, 1.0]).unwrap();
+        let mut distances = [0.0; 2];
+
+        detect()
+            .lvq_squared_l2_rows(&view, &[0.0, 0.0], &mut distances)
+            .unwrap();
+
+        assert_eq!(distances, [5.0, 25.0]);
+    }
+
+    #[test]
+    fn rejects_code_spans_with_the_wrong_shape() {
+        let mut rows = LvqCodeRows::try_new(2).unwrap();
+
+        assert!(rows.push_span(&[1_u8], 1, 2).is_err());
+        assert!(rows.push_span(&[1_u8, 2, 3], 2, 2).is_err());
+        assert!(rows.push_span(&[1_u8, 2], 1, 1).is_err());
+    }
+
+    #[test]
     fn rejects_invalid_source_matrices() {
         assert!(encode_lvq_rows(&[], 0, LvqBits::Eight).is_err());
         assert!(encode_lvq_rows(&[1.0], 2, LvqBits::Eight).is_err());
@@ -528,7 +738,7 @@ mod tests {
                 let view = encoded.as_view();
                 let mut actual = vec![0.0; view.row_count()];
                 detect()
-                    .lvq_squared_l2_rows(view, &query, &mut actual)
+                    .lvq_squared_l2_rows(&view, &query, &mut actual)
                     .unwrap();
 
                 let mut decoded = vec![0.0; dimension];
@@ -564,18 +774,18 @@ mod tests {
                 let encoded = encode_lvq_rows(&values, dimension, bits).unwrap();
                 let view = encoded.as_view();
                 let mut expected = vec![0.0; view.row_count()];
-                lvq_squared_l2_rows_scalar(view, &query, &mut expected);
+                lvq_squared_l2_rows_scalar(&view, &query, &mut expected);
 
                 if std::is_x86_feature_detected!("avx2") {
                     let mut actual = vec![0.0; view.row_count()];
-                    unsafe { lvq_squared_l2_rows_avx2(view, &query, &mut actual) };
+                    unsafe { lvq_squared_l2_rows_avx2(&view, &query, &mut actual) };
                     assert_distances_close(&actual, &expected);
                 }
                 if std::is_x86_feature_detected!("avx512f")
                     && std::is_x86_feature_detected!("avx512bw")
                 {
                     let mut actual = vec![0.0; view.row_count()];
-                    unsafe { lvq_squared_l2_rows_avx512(view, &query, &mut actual) };
+                    unsafe { lvq_squared_l2_rows_avx512(&view, &query, &mut actual) };
                     assert_distances_close(&actual, &expected);
                 }
             }
@@ -588,17 +798,17 @@ mod tests {
         let view = encoded.as_view();
         assert!(
             detect()
-                .lvq_squared_l2_rows(view, &[1.0], &mut [0.0])
+                .lvq_squared_l2_rows(&view, &[1.0], &mut [0.0])
                 .is_err()
         );
         assert!(
             detect()
-                .lvq_squared_l2_rows(view, &[1.0, f32::NAN], &mut [0.0])
+                .lvq_squared_l2_rows(&view, &[1.0, f32::NAN], &mut [0.0])
                 .is_err()
         );
         assert!(
             detect()
-                .lvq_squared_l2_rows(view, &[1.0, 2.0], &mut [])
+                .lvq_squared_l2_rows(&view, &[1.0, 2.0], &mut [])
                 .is_err()
         );
     }

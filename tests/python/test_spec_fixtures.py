@@ -8,6 +8,7 @@ from typing import Any
 import pyarrow.parquet as pq
 import pytest
 import relify
+from _support import register_source
 
 FIXTURES = Path(__file__).parents[2] / "spec" / "fixtures" / "v1"
 VALID = FIXTURES / "valid"
@@ -132,6 +133,37 @@ def register_fixture(session: relify.Session, fixture: Path, name: str) -> None:
     session.indexes.register(name, destination.as_uri())
 
 
+def localize_v2_fixture(warehouse: Path, directory: Path) -> tuple[Path, Path]:
+    local = warehouse / "fixture"
+    shutil.copytree(directory, local)
+    source = (local / "source.parquet").resolve()
+    centroids = (local / "ivf_centroids.parquet").resolve()
+    postings = (local / "ivf_postings").resolve()
+    metadata_root = (warehouse / "metadata").resolve()
+    metadata_root.mkdir()
+
+    metadata = json.loads((local / "metadata.json").read_text(encoding="utf-8"))
+    metadata["location"] = f"{metadata_root.as_uri()}/"
+    snapshot = metadata["snapshots"][0]
+    snapshot["source"] = {"profile": "parquet", "uri": source.as_uri()}
+    snapshot["index-relations"] = {
+        "ivf_centroids": {
+            "profile": "parquet",
+            "uri": centroids.as_uri(),
+        },
+        "ivf_postings": {
+            "profile": "parquet",
+            "uri": f"{postings.as_uri()}/",
+        },
+    }
+    metadata_path = metadata_root / "metadata.json"
+    metadata_path.write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return source, metadata_path
+
+
 def test_valid_metadata_fixture_is_accepted_by_the_native_reader(
     tmp_path: Path,
 ) -> None:
@@ -167,6 +199,33 @@ def test_v2_metadata_fixtures_are_accepted_by_the_native_reader(
     snapshot = entry.metadata["snapshots"][0]
     assert snapshot["index-schema-version"] == 2
     assert snapshot["parameters"]["posting_encoding"] == encoding
+
+
+@pytest.mark.parametrize("encoding", ["lvq4", "lvq8"])
+def test_v2_pyarrow_fixtures_are_queryable_by_the_native_reader(
+    tmp_path: Path,
+    encoding: str,
+) -> None:
+    directory = V2_VALID / encoding
+    session = relify.connect(tmp_path / "relify-data")
+    source, metadata = localize_v2_fixture(session.root, directory)
+    documents = register_source(session, source, "documents")
+    session.indexes.register(encoding, metadata.as_uri())
+    case = json.loads((directory / "queries.json").read_text(encoding="utf-8"))[0]
+
+    hits = session.to_arrow(
+        documents.search(case["query-vector"], index=encoding)
+        .nprobes(case["nprobe"])
+        .select(case["projection"])
+        .limit(case["k"])
+    )
+
+    assert hits["document_id"].to_pylist() == [
+        row["document_id"] for row in case["expected"]
+    ]
+    assert hits["_distance"].to_pylist() == pytest.approx(
+        [row["_distance"] for row in case["expected"]]
+    )
 
 
 @pytest.mark.parametrize(

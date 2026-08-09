@@ -73,12 +73,14 @@ impl DistanceInput {
         scale_index: usize,
         dimension: usize,
     ) -> Option<Self> {
-        let code_size = i32::try_from(bits.code_size(dimension)).ok()?;
+        if dimension == 0 {
+            return None;
+        }
         let code = schema.fields().get(code_index)?;
         let offset = schema.fields().get(offset_index)?;
         let scale = schema.fields().get(scale_index)?;
         if code.is_nullable()
-            || code.data_type() != &DataType::FixedSizeBinary(code_size)
+            || !matches!(code.data_type(), DataType::Binary | DataType::BinaryView)
             || offset.is_nullable()
             || offset.data_type() != &DataType::Float32
             || scale.is_nullable()

@@ -8,8 +8,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrow::array::{
-    Array, ArrayRef, FixedSizeBinaryArray, Float32Array, Float32Builder, Int32Array, ListBuilder,
-    StructArray,
+    Array, ArrayRef, BinaryViewArray, BinaryViewBuilder, Float32Array, Float32Builder, Int32Array,
+    ListBuilder, StructArray,
 };
 use arrow::buffer::Buffer;
 #[cfg(test)]
@@ -48,7 +48,7 @@ use relify_kmeans::{assign_to_centroids, fit_lloyd_kmeans, sample_training_rows}
 const COARSE_MAX_POINTS_PER_CENTROID: usize = 256;
 const DEFAULT_KMEANS_ITERATIONS: usize = 20;
 const DEFAULT_SEED: u64 = 42;
-const MIN_AUTO_ROW_GROUP_ROWS: usize = 4_096;
+const MIN_AUTO_ROW_GROUP_ROWS: usize = 8_192;
 const MAX_AUTO_ROW_GROUP_ROWS: usize = 131_072;
 
 #[cfg(test)]
@@ -318,8 +318,7 @@ impl ScalarUDFImpl for EncodeLvq {
         let encoded = encode_lvq_rows(vectors, self.dimension, self.bits)
             .map_err(|error| DataFusionError::Execution(error.to_string()))?;
         let (codes, offsets, scales) = encoded.into_parts();
-        let code_size = i32::try_from(self.bits.code_size(self.dimension))
-            .expect("vector dimension is bounded by int32");
+        let code_size = self.bits.code_size(self.dimension);
         let fields = match &self.output_type {
             DataType::Struct(fields) => fields.clone(),
             _ => unreachable!("LVQ encoder output is a struct"),
@@ -327,16 +326,47 @@ impl ScalarUDFImpl for EncodeLvq {
         let columns: Vec<ArrayRef> = vec![
             Arc::new(Float32Array::from(offsets)),
             Arc::new(Float32Array::from(scales)),
-            Arc::new(FixedSizeBinaryArray::try_new(
-                code_size,
-                Buffer::from(codes),
-                None,
-            )?),
+            Arc::new(binary_view_codes(codes, code_size)?),
         ];
         Ok(ColumnarValue::Array(Arc::new(StructArray::new(
             fields, columns, None,
         ))))
     }
+}
+
+fn binary_view_codes(
+    codes: Vec<u8>,
+    code_size: usize,
+) -> datafusion::common::Result<BinaryViewArray> {
+    debug_assert!(code_size > 0);
+    debug_assert!(codes.len().is_multiple_of(code_size));
+    let row_count = codes.len() / code_size;
+    if code_size >= u32::MAX as usize {
+        return Err(DataFusionError::Execution(
+            "LVQ code rows exceed the Arrow BinaryView limit".into(),
+        ));
+    }
+    let code_size_u32 = u32::try_from(code_size).map_err(|_| {
+        DataFusionError::Execution("LVQ code rows exceed the Arrow BinaryView limit".into())
+    })?;
+    let rows_per_block = (u32::MAX as usize - 1) / code_size;
+    let values = Buffer::from(codes);
+    let mut builder = BinaryViewBuilder::with_capacity(row_count);
+
+    for first_row in (0..row_count).step_by(rows_per_block) {
+        let block_rows = rows_per_block.min(row_count - first_row);
+        let block_start = first_row * code_size;
+        let block =
+            builder.append_block(values.slice_with_length(block_start, block_rows * code_size));
+        for row in 0..block_rows {
+            builder.try_append_view(
+                block,
+                u32::try_from(row * code_size).expect("BinaryView block is bounded by u32"),
+                code_size_u32,
+            )?;
+        }
+    }
+    Ok(builder.finish())
 }
 
 pub(crate) async fn build_ivf_datafusion(
@@ -687,17 +717,11 @@ fn require_non_null_udf(data_type: DataType, vector: bool) -> ScalarUDF {
 
 fn encode_lvq_udf(vector_type: DataType, dimension: usize, bits: LvqBits) -> ScalarUDF {
     static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-    let code_size =
-        i32::try_from(bits.code_size(dimension)).expect("vector dimension is bounded by int32");
     let output_type = DataType::Struct(
         vec![
             Arc::new(Field::new("offset", DataType::Float32, false)),
             Arc::new(Field::new("scale", DataType::Float32, false)),
-            Arc::new(Field::new(
-                "code",
-                DataType::FixedSizeBinary(code_size),
-                false,
-            )),
+            Arc::new(Field::new("code", DataType::BinaryView, false)),
         ]
         .into(),
     );

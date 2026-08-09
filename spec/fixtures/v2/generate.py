@@ -135,14 +135,13 @@ def write_fixture(encoding: str) -> None:
     )
     bits = 4 if encoding == "lvq4" else 8
     encoded = [encode(vector, bits) for vector in vectors]
-    code_size = 2 if bits == 4 else 3
     postings = pa.Table.from_arrays(
         [
             pa.array([0, 0, 1], type=pa.int32()),
             pa.array(["a", "b", "c"], type=pa.string()),
             pa.array([row[0] for row in encoded], type=pa.float32()),
             pa.array([row[1] for row in encoded], type=pa.float32()),
-            pa.array([row[2] for row in encoded], type=pa.binary(code_size)),
+            pa.array([row[2] for row in encoded], type=pa.binary()),
         ],
         schema=pa.schema(
             [
@@ -150,7 +149,7 @@ def write_fixture(encoding: str) -> None:
                 pa.field("key_1", pa.string(), nullable=False),
                 pa.field("offset", pa.float32(), nullable=False),
                 pa.field("scale", pa.float32(), nullable=False),
-                pa.field("code", pa.binary(code_size), nullable=False),
+                pa.field("code", pa.binary(), nullable=False),
             ]
         ),
     )

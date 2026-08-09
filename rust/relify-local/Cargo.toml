@@ -17,6 +17,7 @@ workspace = true
 
 [dependencies]
 arrow.workspace = true
+arrow-data.workspace = true
 arrow-ipc.workspace = true
 async-trait.workspace = true
 base64.workspace = true

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 #[cfg(test)]
 use arrow::array::UInt64Array;
-use arrow::array::{Array, FixedSizeBinaryArray, Float32Array};
+use arrow::array::{Array, Float32Array};
 #[cfg(test)]
 use arrow::compute::take;
 use arrow::datatypes::{DataType, Field, FieldRef};
@@ -31,6 +31,9 @@ use crate::{ClusterSelection, Error, ResolvedSearch, Result};
 use relify_kernels::{LvqBatchView, LvqBits, detect};
 
 mod fused_topk;
+mod lvq_codes;
+
+pub(crate) use lvq_codes::lvq_code_rows;
 
 pub(crate) use fused_topk::relify_session_context;
 
@@ -225,21 +228,16 @@ impl ScalarUDFImpl for LvqSquaredL2 {
         &self,
         argument_types: &[DataType],
     ) -> datafusion::common::Result<Vec<DataType>> {
-        let [
-            DataType::FixedSizeBinary(code_size),
-            DataType::Float32,
-            DataType::Float32,
-            query,
-        ] = argument_types
-        else {
+        let [codes, DataType::Float32, DataType::Float32, query] = argument_types else {
             return Err(DataFusionError::Plan(format!(
-                "{} requires fixed_size_binary, float, float, and list<float> arguments",
+                "{} requires binary, float, float, and list<float> arguments",
                 self.name()
             )));
         };
-        if *code_size <= 0 || !is_float_vector_type(query) {
+        if !matches!(codes, DataType::Binary | DataType::BinaryView) || !is_float_vector_type(query)
+        {
             return Err(DataFusionError::Plan(format!(
-                "{} requires fixed_size_binary, float, float, and list<float> arguments",
+                "{} requires binary, float, float, and list<float> arguments",
                 self.name()
             )));
         }
@@ -264,10 +262,6 @@ impl ScalarUDFImpl for LvqSquaredL2 {
         let codes = codes.to_array_of_size(arguments.number_rows)?;
         let offsets = offsets.to_array_of_size(arguments.number_rows)?;
         let scales = scales.to_array_of_size(arguments.number_rows)?;
-        let codes = codes
-            .as_any()
-            .downcast_ref::<FixedSizeBinaryArray>()
-            .ok_or_else(|| DataFusionError::Execution("invalid LVQ code column".into()))?;
         let offsets = offsets
             .as_any()
             .downcast_ref::<Float32Array>()
@@ -276,7 +270,7 @@ impl ScalarUDFImpl for LvqSquaredL2 {
             .as_any()
             .downcast_ref::<Float32Array>()
             .ok_or_else(|| DataFusionError::Execution("invalid LVQ scale column".into()))?;
-        if codes.null_count() != 0 || offsets.null_count() != 0 || scales.null_count() != 0 {
+        if offsets.null_count() != 0 || scales.null_count() != 0 {
             return Err(DataFusionError::Execution(
                 "LVQ posting columns must not contain nulls".into(),
             ));
@@ -291,33 +285,23 @@ impl ScalarUDFImpl for LvqSquaredL2 {
         };
         let (query, dimension) = crate::ivf::borrow_vectors_allow_nullable_elements(&query)
             .map_err(|error| DataFusionError::Execution(error.to_string()))?;
-        let view = LvqBatchView::try_new(
+        let codes = lvq_code_rows(codes.as_ref(), self.bits.code_size(dimension))?;
+        let view = LvqBatchView::try_new_rows(
             self.bits,
             dimension,
-            lvq_code_values(codes)?,
+            codes,
             offsets.values(),
             scales.values(),
         )
         .map_err(|error| DataFusionError::Execution(error.to_string()))?;
         let mut distances = vec![0.0; arguments.number_rows];
         detect()
-            .lvq_squared_l2_rows(view, query, &mut distances)
+            .lvq_squared_l2_rows(&view, query, &mut distances)
             .map_err(|error| DataFusionError::Execution(error.to_string()))?;
         Ok(ColumnarValue::Array(Arc::new(Float32Array::from(
             distances,
         ))))
     }
-}
-
-fn lvq_code_values(codes: &FixedSizeBinaryArray) -> datafusion::common::Result<&[u8]> {
-    let start = usize::try_from(codes.value_offset(0))
-        .map_err(|_| DataFusionError::Execution("invalid LVQ code offset".into()))?;
-    let end = usize::try_from(codes.value_offset(codes.len()))
-        .map_err(|_| DataFusionError::Execution("invalid LVQ code offset".into()))?;
-    codes
-        .value_data()
-        .get(start..end)
-        .ok_or_else(|| DataFusionError::Execution("invalid LVQ code buffer".into()))
 }
 
 fn is_float_vector_type(data_type: &DataType) -> bool {

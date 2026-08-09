@@ -301,11 +301,11 @@ fn postings_row_groups_follow_cluster_cardinality_with_safe_bounds() {
     let automatic = ParquetWriterOptions::default();
     assert_eq!(
         resolved_postings_writer_options(&automatic, 1_000_000, 256).max_row_group_rows,
-        Some(4_096)
+        Some(8_192)
     );
     assert_eq!(
         resolved_postings_writer_options(&automatic, 2_000_000, 256).max_row_group_rows,
-        Some(7_813)
+        Some(8_192)
     );
     assert_eq!(
         resolved_postings_writer_options(&automatic, 100, 100).max_row_group_rows,

@@ -4564,6 +4564,7 @@ name = "relify-local"
 version = "0.1.0-rc.2"
 dependencies = [
  "arrow",
+ "arrow-data",
  "arrow-ipc",
  "async-trait",
  "base64",

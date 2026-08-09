@@ -114,7 +114,7 @@ def test_postings_row_groups_default_to_bounded_average_cluster_size(
     ]
     assert sum(row_group.num_rows for row_group in row_groups) == row_count
     assert len(row_groups) >= 2
-    assert max(row_group.num_rows for row_group in row_groups) <= 4_097
+    assert max(row_group.num_rows for row_group in row_groups) <= 8_192
 
 
 def test_postings_use_one_hive_partitioned_file_per_cluster(tmp_path: Path) -> None:

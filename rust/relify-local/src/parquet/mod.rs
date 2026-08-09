@@ -27,7 +27,7 @@ use futures::{StreamExt, TryStreamExt};
 use object_store::{ObjectStore, PutMode};
 use parquet::arrow::async_writer::ParquetObjectWriter;
 use parquet::arrow::{ArrowWriter, AsyncArrowWriter};
-use parquet::basic::Compression;
+use parquet::basic::{Compression, Encoding};
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use parquet::schema::types::ColumnPath;
 use relify_storage::StorageRegistry;
@@ -88,7 +88,7 @@ impl ParquetWriterOptions {
 
     fn writer_properties_for(
         &self,
-        dictionary_disabled_column: Option<ColumnPath>,
+        plain_encoded_column: Option<ColumnPath>,
     ) -> Result<WriterProperties> {
         self.validate()?;
         let compression = Compression::from_str(&self.compression).map_err(|error| {
@@ -101,8 +101,10 @@ impl ParquetWriterOptions {
         if let Some(max_rows) = self.max_row_group_rows {
             properties = properties.set_max_row_group_row_count(Some(max_rows));
         }
-        if let Some(column) = dictionary_disabled_column {
-            properties = properties.set_column_dictionary_enabled(column, false);
+        if let Some(column) = plain_encoded_column {
+            properties = properties
+                .set_column_dictionary_enabled(column.clone(), false)
+                .set_column_encoding(column, Encoding::PLAIN);
         }
         Ok(properties.build())
     }
@@ -329,7 +331,7 @@ async fn write_hive_cid_stream(
         .filter(|index| *index != cid_index)
         .collect::<Vec<_>>();
     let output_schema = Arc::new(schema.project(&projection)?);
-    let dictionary_disabled_column = match output_schema.field_with_name("vector") {
+    let plain_encoded_column = match output_schema.field_with_name("vector") {
         Ok(vector_field) => {
             let vector_path = match vector_field.data_type() {
                 DataType::List(element)
@@ -350,7 +352,7 @@ async fn write_hive_cid_stream(
         }
         Err(_) => None,
     };
-    let properties = match dictionary_disabled_column {
+    let properties = match plain_encoded_column {
         Some(column) => options.postings_writer_properties(column)?,
         None => options.writer_properties()?,
     };
