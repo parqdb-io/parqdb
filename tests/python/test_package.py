@@ -23,7 +23,9 @@ def test_distribution_declares_all_included_licenses() -> None:
     assert set(distribution.get_all("License-File", [])) == {
         "LICENSE",
         "THIRD_PARTY_NOTICES.md",
+        "vendor/arrow-rs/parquet/LICENSE.txt",
         "vendor/datafusion-python/LICENSE.txt",
+        "vendor/datafusion/datasource-parquet/LICENSE.txt",
     }
 
 
