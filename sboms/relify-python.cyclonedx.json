@@ -3182,12 +3182,6 @@
           "url": "https://github.com/apache/datafusion"
         }
       ],
-      "hashes": [
-        {
-          "alg": "SHA-256",
-          "content": "ffd2499c1bee0eeccf6a57156105700eeeb17bc701899ac719183c4e74231450"
-        }
-      ],
       "licenses": [
         {
           "expression": "Apache-2.0"
@@ -8324,12 +8318,6 @@
         {
           "type": "vcs",
           "url": "https://github.com/apache/arrow-rs"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-256",
-          "content": "d298093b2dec60289dce0684c986d0f7679e9dd15771c2c65406e1aaf604a704"
         }
       ],
       "licenses": [
@@ -16895,7 +16883,7 @@
     {
       "dependsOn": [
         "pkg:cargo/libc@0.2.189",
-        "pkg:cargo/windows-sys@0.52.0"
+        "pkg:cargo/windows-sys@0.60.2"
       ],
       "ref": "pkg:cargo/errno@0.3.14"
     },
@@ -18282,7 +18270,7 @@
     {
       "dependsOn": [
         "pkg:cargo/heck@0.5.0",
-        "pkg:cargo/itertools@0.14.0",
+        "pkg:cargo/itertools@0.13.0",
         "pkg:cargo/log@0.4.33",
         "pkg:cargo/multimap@0.10.1",
         "pkg:cargo/petgraph@0.8.3",
@@ -18298,7 +18286,7 @@
     {
       "dependsOn": [
         "pkg:cargo/anyhow@1.0.104",
-        "pkg:cargo/itertools@0.14.0",
+        "pkg:cargo/itertools@0.13.0",
         "pkg:cargo/proc-macro2@1.0.107",
         "pkg:cargo/quote@1.0.47",
         "pkg:cargo/syn@2.0.119"
@@ -18445,7 +18433,7 @@
         "pkg:cargo/once_cell@1.21.4",
         "pkg:cargo/socket2@0.6.5",
         "pkg:cargo/tracing@0.1.44",
-        "pkg:cargo/windows-sys@0.52.0"
+        "pkg:cargo/windows-sys@0.60.2"
       ],
       "ref": "pkg:cargo/quinn-udp@0.5.15"
     },
@@ -18684,8 +18672,10 @@
         "pkg:cargo/async-trait@0.1.91",
         "pkg:cargo/base64@0.22.1",
         "pkg:cargo/bytes@1.12.1",
+        "pkg:cargo/datafusion-datasource-parquet@54.0.0",
         "pkg:cargo/datafusion@54.0.0",
         "pkg:cargo/futures@0.3.33",
+        "pkg:cargo/hashlink@0.11.1",
         "pkg:cargo/object_store@0.13.2",
         "pkg:cargo/parallite@0.1.0-rc.2",
         "pkg:cargo/parquet@58.4.0",
@@ -18931,7 +18921,7 @@
         "pkg:cargo/errno@0.3.14",
         "pkg:cargo/libc@0.2.189",
         "pkg:cargo/linux-raw-sys@0.12.1",
-        "pkg:cargo/windows-sys@0.52.0"
+        "pkg:cargo/windows-sys@0.60.2"
       ],
       "ref": "pkg:cargo/rustix@1.1.4"
     },
@@ -18969,7 +18959,7 @@
         "pkg:cargo/security-framework-sys@2.17.0",
         "pkg:cargo/security-framework@3.7.0",
         "pkg:cargo/webpki-root-certs@1.0.9",
-        "pkg:cargo/windows-sys@0.52.0"
+        "pkg:cargo/windows-sys@0.60.2"
       ],
       "ref": "pkg:cargo/rustls-platform-verifier@0.7.0"
     },
@@ -19259,7 +19249,7 @@
     {
       "dependsOn": [
         "pkg:cargo/libc@0.2.189",
-        "pkg:cargo/windows-sys@0.61.2"
+        "pkg:cargo/windows-sys@0.60.2"
       ],
       "ref": "pkg:cargo/socket2@0.6.5"
     },
@@ -19323,7 +19313,7 @@
         "pkg:cargo/cfg-if@1.0.4",
         "pkg:cargo/libc@0.2.189",
         "pkg:cargo/psm@0.1.31",
-        "pkg:cargo/windows-sys@0.61.2"
+        "pkg:cargo/windows-sys@0.60.2"
       ],
       "ref": "pkg:cargo/stacker@0.1.24"
     },
@@ -19427,7 +19417,7 @@
         "pkg:cargo/getrandom@0.4.3",
         "pkg:cargo/once_cell@1.21.4",
         "pkg:cargo/rustix@1.1.4",
-        "pkg:cargo/windows-sys@0.52.0"
+        "pkg:cargo/windows-sys@0.60.2"
       ],
       "ref": "pkg:cargo/tempfile@3.27.0"
     },
@@ -19629,7 +19619,7 @@
     },
     {
       "dependsOn": [
-        "pkg:cargo/rand@0.9.5"
+        "pkg:cargo/rand@0.10.2"
       ],
       "ref": "pkg:cargo/twox-hash@2.1.3"
     },
@@ -19886,7 +19876,7 @@
     },
     {
       "dependsOn": [
-        "pkg:cargo/windows-sys@0.52.0"
+        "pkg:cargo/windows-sys@0.60.2"
       ],
       "ref": "pkg:cargo/winapi-util@0.1.11"
     },
@@ -20180,7 +20170,7 @@
     "properties": [
       {
         "name": "relify:cargo-lock-sha256",
-        "value": "5935406a89bbbf929411eb2f4d46fa06405102a18c89535e0f15b6762925fdf1"
+        "value": "4072dd8a0a3c067a5af3b7490819169f6e3a38bc8bbd5e854c41fb6b76164986"
       }
     ]
   },

@@ -46,6 +46,22 @@ class IndexCacheInfo:
     resident_bytes: int
 
 
+@dataclass(frozen=True)
+class ParquetPageCacheStats:
+    """Allocation and lookup counters for the session's Parquet Page cache."""
+
+    capacity: int
+    resident_bytes: int
+    retired_bytes: int
+    page_count: int
+    hits: int
+    misses: int
+    admissions: int
+    evictions: int
+    capacity_bypasses: int
+    oversized_bypasses: int
+
+
 class Session(SessionContext):
     def __init__(
         self,
@@ -221,6 +237,14 @@ class Session(SessionContext):
         """Release a materialized index snapshot from this session."""
         _validate_index_name(index)
         return self._native.uncache_index(index)
+
+    def parquet_page_cache_stats(self) -> ParquetPageCacheStats:
+        """Return allocation and lookup counters for the Parquet Page cache."""
+        return ParquetPageCacheStats(*self._native.parquet_page_cache_stats())
+
+    def clear_parquet_page_cache(self) -> None:
+        """Remove resident Parquet Pages from future cache lookups."""
+        self._native.clear_parquet_page_cache()
 
     def to_dataframe(self, query: VectorQuery) -> DataFrame:
         """Compile a vector query into this session's lazy DataFrame."""

@@ -29,6 +29,7 @@ type PyIndexInfo = (
     i64,
 );
 type PyIndexCacheInfo = (String, i64, usize, usize);
+type PyParquetPageCacheStats = (usize, usize, usize, usize, u64, u64, u64, u64, u64, u64);
 static SHARED_RUNTIME: OnceLock<std::result::Result<Arc<Runtime>, String>> = OnceLock::new();
 
 fn parse_posting_encoding(value: &str) -> PyResult<PostingEncoding> {
@@ -408,6 +409,26 @@ impl PyNativeSession {
         self.session
             .uncache_index(name)
             .map_err(|error| core_error(&error))
+    }
+
+    fn parquet_page_cache_stats(&self) -> PyParquetPageCacheStats {
+        let stats = self.session.parquet_page_cache_stats();
+        (
+            stats.capacity,
+            stats.resident_bytes,
+            stats.retired_bytes,
+            stats.page_count,
+            stats.hits,
+            stats.misses,
+            stats.admissions,
+            stats.evictions,
+            stats.capacity_bypasses,
+            stats.oversized_bypasses,
+        )
+    }
+
+    fn clear_parquet_page_cache(&self) {
+        self.session.clear_parquet_page_cache();
     }
 
     fn remove_orphans(

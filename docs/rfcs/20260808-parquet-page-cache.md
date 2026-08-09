@@ -23,7 +23,7 @@ not depend on which data is resident.
 | What is the cache granularity? | One physical page from one leaf column in one Parquet row group. |
 | Where is the cache integrated? | At the Page-provider boundary: lookup before Page-body I/O, admission after validation and decompression, and output before definition-level and value decoding. |
 | How is pruning preserved? | File, row-group, and column pruning determine which column chunks are opened before page lookup. |
-| How are correctness and concurrency handled? | StarRocks-compatible file identity, per-page single-flight loading, atomic admission, and reference-counted page buffers. |
+| How are correctness and concurrency handled? | StarRocks-compatible file identity, canonical admission under concurrent misses, and reference-counted page buffers. |
 | How is memory controlled? | A session-owned budget that defaults to 20% of the machine memory limit, allocation-lifetime accounting, oversized-page bypass, and byte-weighted LRU eviction. |
 
 `DecompressedParquetPageCache` is a Parquet reader cache, not an Arrow column
@@ -34,9 +34,9 @@ entries.
 ## Scope
 
 The cache abstraction is independent of vector indexes. The first
-implementation enables it only for Parquet index relations in the local
-DataFusion backend. It does not initially admit source-table Pages, query
-results, or arbitrary DataFusion plans.
+implementation installs it on Parquet scans in the local DataFusion backend,
+including index and source relations. It does not cache query results or
+arbitrary DataFusion plans.
 
 It also does not add:
 
@@ -69,25 +69,19 @@ sequenceDiagram
 
     loop Each sequential Page in a selected column chunk
         Reader->>Reader: Build key from filename, mtime or size, and Page offset
-        Reader->>Cache: get_or_load(key, loader)
+        Reader->>Cache: get(key)
         alt Resident Page
             Cache-->>Reader: Decompressed Page and PageHandle
         else Cache miss
-            Cache->>Cache: Create or join single-flight load
-            alt This request owns the load
-                Cache->>Reader: Invoke loader
-                Reader->>Storage: Read Page header and compressed body
-                Storage-->>Reader: Page bytes
-                Reader->>Reader: Parse, validate, and decompress complete Page
-                Reader->>Cache: Complete load
-                alt Page fits the available cache budget
-                    Cache->>Cache: Evict unpinned LRU entries and admit Page
-                    Cache-->>Reader: Cached Page and PageHandle
-                else Admission would exceed the budget
-                    Cache-->>Reader: Query-owned Page without admission
-                end
-            else Another request owns the load
-                Cache-->>Reader: Await and reuse the same load result
+            Reader->>Storage: Read Page header and compressed body
+            Storage-->>Reader: Page bytes
+            Reader->>Reader: Parse, validate, and decompress complete Page
+            Reader->>Cache: insert(Page)
+            alt Page fits the available cache budget
+                Cache->>Cache: Evict unpinned LRU entries and admit Page
+                Cache-->>Reader: Canonical Page and PageHandle
+            else Admission would exceed the budget
+                Cache-->>Reader: Query-owned Page without admission
             end
         end
 
@@ -193,9 +187,10 @@ struct ParquetPageKey {
 ```
 
 `page_offset` is the physical offset of the Page header. `file_cache_key`
-follows StarRocks: it hashes the filename and cache type, then includes the
-file's modification time when available or its file size otherwise. The file
-metadata used by the scan supplies these values.
+contains the object-store URL, object path, file size, and modification time
+when available. The store URL prevents equal paths in different buckets or
+stores from colliding. The file metadata used by the scan supplies these
+values.
 
 Row-group and leaf-column identity may be retained as entry metadata for
 validation and diagnostics. They are not part of the key because the file
@@ -314,11 +309,12 @@ chunk.
 
 ## 5. Consistency and Concurrency
 
-File identity and invalidation follow StarRocks. The cache key uses the filename
-and modification time when the storage exposes one. If modification time is
-unavailable, it uses file size; this is intended for sources whose files are not
-overwritten. A modified file therefore receives a different cache key when its
-reported modification time or fallback size changes.
+File identity and invalidation follow the same immutable-file assumption as
+StarRocks. The cache key uses the object-store URL, object path, file size, and
+modification time when the storage exposes one. A replacement therefore gets a
+different key when its reported size or modification time changes. Stores that
+do not expose modification time must not overwrite a file in place with the
+same size.
 
 Deleting a file or removing a table does not synchronously invalidate its cache
 entries. Once metadata no longer selects the file, new scans cannot reach those
@@ -335,9 +331,12 @@ Parquet CRC handling remains the responsibility of the standard reader when a
 file provides it. CRC is not a cache key, descriptor field, or
 `DecompressedParquetPageCache` requirement.
 
-Concurrent misses for the same key use single-flight loading. One task reads
-and prepares the Page; other tasks await the same result. Requests for different
-Pages proceed independently.
+Concurrent cold misses may read and decode the same Page more than once. Cache
+insertion is canonical: the first admitted allocation remains resident and
+later inserters consume that allocation. A future async range-level
+single-flight mechanism may remove duplicate cold I/O; a blocking PageReader
+wait would only deduplicate decoding after DataFusion has already requested the
+compressed range.
 
 Eviction and explicit clearing remove an entry from future lookup but do not
 invalidate references held by running decoders or Arrow arrays.
@@ -369,23 +368,27 @@ scans evict useful hot Pages.
 
 ## 7. Interfaces and Metrics
 
-Capacity is a session variable. It accepts either a percentage of the machine
-memory limit or an absolute byte size:
+Capacity is a DataFusion session option expressed as an absolute byte count:
 
 ```python
-session.set("relify.parquet_page_cache_capacity", "20%")
-session.set("relify.parquet_page_cache_capacity", "4GiB")
+config = relify.SessionConfig().set(
+    "relify.parquet.page_cache.capacity",
+    str(4 * 1024**3),
+)
+session = relify.connect("./relify-data", config=config)
 ```
 
 The same variable is available through SQL:
 
 ```sql
-SET relify.parquet_page_cache_capacity = '4GiB';
+SET relify.parquet.page_cache.capacity = 4294967296;
 ```
 
-The default is `20%`. The percentage is resolved from the machine memory limit
-when the session creates its cache. `0` disables admission and retires resident
-entries. Operational methods are:
+When unset, the capacity is 20% of DataFusion's finite memory-pool limit. If
+the pool is unbounded, Relify uses 20% of the effective Linux cgroup or physical
+memory limit; platforms without a detectable limit use 256 MiB. `0` disables
+admission and retires resident entries. A SQL `SET` applies before the next
+physical Parquet plan is created. Operational methods are:
 
 ```python
 stats = session.parquet_page_cache_stats()
@@ -393,25 +396,23 @@ session.clear_parquet_page_cache()
 ```
 
 The existing `cache_index()`, `is_index_cached()`, and `uncache_index()` APIs
-are removed because bounded partial residency cannot be represented by a
-whole-index boolean.
+remain available during migration. They describe the separate whole-index
+Arrow cache and do not report Page-cache state.
 
-The private cache operation is conceptually:
+The generic arrow-rs hook is:
 
 ```rust
-async fn get_or_load_page(
-    key: ParquetPageKey,
-    load: LoadPage,
-) -> Result<Arc<CachedParquetPage>>;
+trait PageCache {
+    fn get(&self, page_offset: u64) -> Option<Arc<CachedPage>>;
+    fn insert(&self, page: CachedPage) -> Arc<CachedPage>;
+}
 ```
 
-Session and `EXPLAIN ANALYZE` metrics must report:
+The public session statistics report:
 
 - capacity, resident bytes, retired bytes, and Page count;
-- Page hits, misses, single-flight waits, admissions, and evictions;
-- hit, miss, compressed-read, and decompressed bytes;
-- oversized and capacity bypasses; and
-- storage-read, decompression, and value-decoder time.
+- Page hits, misses, admissions, and evictions; and
+- oversized and capacity bypasses.
 
 A warm Page hit must perform no storage read or decompression. Value decoding
 still occurs; the PLAIN `BYTE_ARRAY` fast path should show View construction
@@ -423,11 +424,12 @@ without payload copying.
    compressed Page body while preserving the standard arrow-rs decoder.
 2. Benchmark `FIXED_LEN_BYTE_ARRAY` materialization against PLAIN `BYTE_ARRAY`
    with `BinaryView` for complete Parquet scan, LVQ distance, and Top-K.
-3. Implement identity, single-flight loading, accounting, eviction, and
-   metrics.
+3. Implement identity, canonical concurrent admission, accounting, eviction,
+   and metrics.
 4. Test cold, partial-hit, and warm scans under pruning, concurrent loads,
    cancellation, file replacement, file deletion, and memory pressure.
-5. Run GIST and Wikipedia benchmarks, then remove the whole-index cache path.
+5. Run GIST and Wikipedia benchmarks, then decide whether the whole-index cache
+   remains a separate low-latency tier.
 
 The old path is removed only after the new path demonstrates:
 
@@ -457,7 +459,7 @@ second decoded representation for LVQ codes.
 Relevant implementations:
 
 - [DataFusion 54 Parquet source](https://github.com/apache/datafusion/blob/54.0.0/datafusion/datasource-parquet/src/source.rs)
-- [arrow-rs 58 PageReader](https://github.com/apache/arrow-rs/blob/58.3.0/parquet/src/column/page.rs)
+- [arrow-rs 58 PageReader](https://github.com/apache/arrow-rs/blob/58.4.0/parquet/src/column/page.rs)
 - [Databend Fuse block reader](https://github.com/databendlabs/databend/blob/3c73a7f73585d8ace3ffcd568c4bdc7dd30f71c0/src/query/storages/fuse/src/io/read/block/block_reader_merge_io_async.rs)
 - [StarRocks 4.1 Parquet PageReader](https://github.com/StarRocks/starrocks/blob/4.1.0/be/src/formats/parquet/page_reader.cpp)
 - [StarRocks file cache key](https://github.com/StarRocks/starrocks/blob/4.1.0/be/src/formats/parquet/utils.cpp)
@@ -482,19 +484,21 @@ Relevant implementations:
 
 ## Unresolved Questions
 
-1. Can the Page-provider boundary be implemented as a narrow maintained adapter
-   without copying the arrow-rs decoder?
-2. What Page size best balances I/O granularity, decompression, View metadata,
+1. What Page size best balances I/O granularity, decompression, View metadata,
    and cache admission for LVQ codes?
-3. Is byte-weighted LRU sufficient for IVF access patterns, or is admission
+2. Is byte-weighted LRU sufficient for IVF access patterns, or is admission
    control required initially?
-4. Should Iceberg enter the first implementation or follow the local Parquet
+3. Should Iceberg enter the first implementation or follow the local Parquet
    prototype?
+4. Can DataFusion expose an async Page or range reservation that deduplicates
+   concurrent cold reads without blocking execution threads?
 
 ## Future Work
 
 - Add a compressed memory or local-disk byte-range cache below
   `DecompressedParquetPageCache`.
+- Add async range-level single-flight loading when the reader boundary can
+  represent ownership, waiting, cancellation, and failure.
 - Coordinate `DecompressedParquetPageCache` and DataFusion query memory under
   shared pressure.
 - Share Page entries across compatible sessions.

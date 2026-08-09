@@ -1,5 +1,9 @@
 [workspace]
-exclude = ["vendor/datafusion-python"]
+exclude = [
+  "vendor/arrow-rs/parquet",
+  "vendor/datafusion/datasource-parquet",
+  "vendor/datafusion-python",
+]
 members = [
     "rust/parallite",
     "rust/relify-catalog",
@@ -34,12 +38,14 @@ datafusion = { version = "=54.0.0", default-features = false, features = [
   "parquet",
   "sql",
 ] }
+datafusion-datasource-parquet = "=54.0.0"
 datafusion-python = { path = "vendor/datafusion-python", version = "=54.0.0", default-features = false, features = [
   "abi3",
   "protoc",
   "substrait",
 ] }
 futures = "0.3.31"
+hashlink = "0.11.1"
 hdfs-native-object-store = "0.16.0"
 iceberg = { version = "=0.10.0", git = "https://github.com/apache/iceberg-rust.git", rev = "875fdb7463f0a2d685fa3c61c70527469bcd4407" }
 iceberg-datafusion = { version = "=0.10.0", git = "https://github.com/apache/iceberg-rust.git", rev = "875fdb7463f0a2d685fa3c61c70527469bcd4407" }
@@ -71,3 +77,7 @@ all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 missing_errors_doc = "allow"
 module_name_repetitions = "allow"
+
+[patch.crates-io]
+datafusion-datasource-parquet = { path = "vendor/datafusion/datasource-parquet" }
+parquet = { path = "vendor/arrow-rs/parquet" }

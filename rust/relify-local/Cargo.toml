@@ -23,7 +23,9 @@ async-trait.workspace = true
 base64.workspace = true
 bytes.workspace = true
 datafusion.workspace = true
+datafusion-datasource-parquet.workspace = true
 futures.workspace = true
+hashlink.workspace = true
 object_store.workspace = true
 parquet.workspace = true
 parallite = { version = "0.1.0-rc.2", path = "../parallite" }

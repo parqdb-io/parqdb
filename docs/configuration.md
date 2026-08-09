@@ -61,6 +61,25 @@ limit to `0` to disable the cache. The byte budget is based on serialized
 metadata size; parsed objects have additional allocator overhead, so this is a
 bounded cache policy rather than a hard process-memory limit.
 
+Parquet scans use a bounded cache of complete decompressed Pages. Its byte
+capacity defaults to 20% of the DataFusion memory-pool limit, or the effective
+machine limit when the pool is unbounded:
+
+```python
+config = relify.SessionConfig().set(
+    "relify.parquet.page_cache.capacity",
+    str(4 * 1024**3),
+)
+session = relify.connect("./relify-data", config=config)
+
+stats = session.parquet_page_cache_stats()
+session.clear_parquet_page_cache()
+```
+
+`SET relify.parquet.page_cache.capacity = 0` disables admission and retires
+resident entries before the next Parquet plan. Active queries retain their Page
+buffers until those references are released.
+
 ### Explicit catalog and warehouse
 
 ```python

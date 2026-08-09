@@ -17,7 +17,7 @@ mod session;
 pub use config::{LocalSessionOptions, RelifyConfig, relify_session_config};
 pub use error::{Error, Result};
 pub use maintenance::{MaintenanceKind, MaintenanceObject};
-pub use parquet::ParquetWriterOptions;
+pub use parquet::{ParquetPageCacheStats, ParquetWriterOptions};
 pub use progress::{LocalBuildProgress, LocalBuildProgressSnapshot};
 pub use query::{
     compile_datafusion_sql, datafusion_centroid_relation_required,

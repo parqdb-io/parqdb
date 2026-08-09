@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use datafusion::prelude::SessionContext;
+use datafusion_datasource_parquet::{ParquetPageCacheFactory, ParquetPageCacheFactoryConfig};
 #[cfg(test)]
 use relify_catalog::{CatalogEntry, Error as CatalogError, IndexIdentifier};
 use relify_catalog::{IndexCatalog, SqliteCatalog, TableCatalog};
@@ -35,7 +36,10 @@ use crate::durability::{create_dir_all, sync_directory};
 use crate::local_uri::directory_to_file_uri;
 #[cfg(test)]
 use crate::local_uri::file_uri_to_path;
-use crate::parquet::ParquetStore;
+use crate::parquet::{
+    DecompressedParquetPageCache, ParquetPageCacheStats, ParquetStore,
+    RelifyParquetPageCacheFactory, automatic_page_cache_capacity,
+};
 use crate::{Error, Result};
 
 /// One top-level source-table field returned by [`LocalSession::describe`].
@@ -98,6 +102,7 @@ pub struct LocalSession {
     warehouse: Warehouse,
     indexes: IndexRepository,
     parquet: ParquetStore,
+    parquet_page_cache: Arc<DecompressedParquetPageCache>,
     context: SessionContext,
     source_bindings: Arc<RwLock<HashMap<String, source::SourceBinding>>>,
     relation_providers: Arc<RwLock<HashMap<String, Arc<dyn datafusion::catalog::TableProvider>>>>,
@@ -285,7 +290,18 @@ impl LocalSession {
         let registry = StorageRegistry::new(storage_options);
         let warehouse = Warehouse::open(warehouse_root, registry.clone())?;
         let (session_config, runtime) = options.into_parts();
-        let context = crate::query::relify_session_context(session_config, runtime)?;
+        let runtime = Arc::new(runtime.build()?);
+        let automatic_capacity = automatic_page_cache_capacity(runtime.memory_pool.as_ref());
+        let initial_capacity = crate::config::parquet_page_cache_capacity(&session_config)
+            .unwrap_or(automatic_capacity);
+        let parquet_page_cache = Arc::new(DecompressedParquetPageCache::new(initial_capacity));
+        let page_cache_factory: Arc<dyn ParquetPageCacheFactory> = Arc::new(
+            RelifyParquetPageCacheFactory::new(Arc::clone(&parquet_page_cache), automatic_capacity),
+        );
+        let session_config = session_config.with_extension(Arc::new(
+            ParquetPageCacheFactoryConfig::new(page_cache_factory),
+        ));
+        let context = crate::query::relify_session_context(session_config, runtime);
         let catalog_list = Arc::new(RelifyCatalogList::new(
             context.state().catalog_list().clone(),
             catalog,
@@ -304,6 +320,7 @@ impl LocalSession {
             coordination: SessionCoordination::open(coordination_root)?,
             indexes: IndexRepository::new(index_catalog, metadata),
             parquet: ParquetStore::with_context(registry, context.clone()),
+            parquet_page_cache,
             context,
             source_bindings: Arc::new(RwLock::new(HashMap::new())),
             relation_providers: Arc::new(RwLock::new(HashMap::new())),
@@ -336,6 +353,20 @@ impl LocalSession {
     #[must_use]
     pub fn metadata_cache_config(&self) -> MetadataCacheConfig {
         self.indexes.metadata_store().cache_config()
+    }
+
+    /// Returns allocation and lookup counters for the Parquet Page cache.
+    #[must_use]
+    pub fn parquet_page_cache_stats(&self) -> ParquetPageCacheStats {
+        self.parquet_page_cache.stats()
+    }
+
+    /// Removes all resident Parquet Pages from future cache lookups.
+    ///
+    /// Pages referenced by active queries remain alive until those queries
+    /// release their Arrow buffers.
+    pub fn clear_parquet_page_cache(&self) {
+        self.parquet_page_cache.clear();
     }
 
     /// Returns the session's shared `DataFusion` execution context.

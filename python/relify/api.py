@@ -7,7 +7,13 @@ from .config import IVF, Local, SessionConfig, WriteOptions
 from .identifier import TableIdentifier
 from .maintenance import Maintenance, MaintenanceObject
 from .query import VectorQuery
-from .session import IndexCacheInfo, Session, SourceTable, connect
+from .session import (
+    IndexCacheInfo,
+    ParquetPageCacheStats,
+    Session,
+    SourceTable,
+    connect,
+)
 from .table import Table
 
 __all__ = [
@@ -21,6 +27,7 @@ __all__ = [
     "Local",
     "Maintenance",
     "MaintenanceObject",
+    "ParquetPageCacheStats",
     "Session",
     "SessionConfig",
     "SourceTable",
