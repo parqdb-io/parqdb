@@ -663,15 +663,15 @@ async fn large_nprobe_pushes_a_static_filter_into_uncached_postings() {
 
 #[tokio::test]
 async fn lvq_indexes_build_and_query_through_uncached_and_cached_paths() {
-    for (encoding, name, code_size) in [
-        (PostingEncoding::Lvq4, "lvq4_index", 1),
-        (PostingEncoding::Lvq8, "lvq8_index", 2),
+    for (encoding, name) in [
+        (PostingEncoding::Lvq4, "lvq4_index"),
+        (PostingEncoding::Lvq8, "lvq8_index"),
     ] {
-        assert_lvq_index(encoding, name, code_size).await;
+        assert_lvq_index(encoding, name).await;
     }
 }
 
-async fn assert_lvq_index(encoding: PostingEncoding, name: &str, code_size: i32) {
+async fn assert_lvq_index(encoding: PostingEncoding, name: &str) {
     let temporary = TempDir::new().unwrap();
     let session = LocalSession::open(temporary.path().join("relify")).unwrap();
     let source_path = temporary.path().join("source");
@@ -698,7 +698,7 @@ async fn assert_lvq_index(encoding: PostingEncoding, name: &str, code_size: i32)
         .partitioned_dataframe(uri, vec![("cid".into(), DataType::Int32)])
         .await
         .unwrap();
-    assert_lvq_postings_schema(postings.schema().inner(), code_size);
+    assert_lvq_postings_schema(postings.schema().inner());
 
     let request = SearchRequest {
         source: RelationReference::Parquet {
@@ -736,7 +736,7 @@ async fn assert_lvq_index(encoding: PostingEncoding, name: &str, code_size: i32)
     assert_nearest_pid(&cached);
 }
 
-fn assert_lvq_postings_schema(schema: &Schema, code_size: i32) {
+fn assert_lvq_postings_schema(schema: &Schema) {
     assert_eq!(
         schema.field_with_name("offset").unwrap().data_type(),
         &DataType::Float32
@@ -747,7 +747,7 @@ fn assert_lvq_postings_schema(schema: &Schema, code_size: i32) {
     );
     assert_eq!(
         schema.field_with_name("code").unwrap().data_type(),
-        &DataType::FixedSizeBinary(code_size)
+        &DataType::BinaryView
     );
 }
 

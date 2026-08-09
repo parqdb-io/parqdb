@@ -21,7 +21,9 @@ from relify.backends.v1 import QueryProfile
 from relify.testing import BackendQueryCase, check_query_backend
 
 
-def document_table() -> pa.Table:
+def document_table(dimension: int = 2) -> pa.Table:
+    if dimension < 1:
+        raise ValueError("dimension must be positive")
     required_vector = vector_type()
     schema = pa.schema(
         [
@@ -35,7 +37,10 @@ def document_table() -> pa.Table:
             pa.array(["a", "b", "c", "d"], type=pa.string()),
             pa.array(["zero", "one", "ten", "eleven"], type=pa.string()),
             pa.array(
-                [[0.0, 0.0], [1.0, 0.0], [10.0, 0.0], [11.0, 0.0]],
+                [
+                    [value, *([0.0] * (dimension - 1))]
+                    for value in [0.0, 1.0, 10.0, 11.0]
+                ],
                 type=required_vector,
             ),
         ],
@@ -43,8 +48,8 @@ def document_table() -> pa.Table:
     )
 
 
-def write_documents(path: Path) -> None:
-    pq.write_table(document_table(), path)
+def write_documents(path: Path, dimension: int = 2) -> None:
+    pq.write_table(document_table(dimension), path)
 
 
 def write_partitioned_documents(root: Path) -> None:
@@ -200,12 +205,14 @@ def test_local_build_publish_and_search(tmp_path: Path) -> None:
 
 
 def test_local_lvq_build_and_search(tmp_path: Path) -> None:
+    dimension = 32
+    query_vector = [10.0, *([0.0] * (dimension - 1))]
     source = tmp_path / "documents.parquet"
-    write_documents(source)
+    write_documents(source, dimension)
     session = relify.connect(tmp_path / "relify-data")
     documents = register_source(session, source, "documents")
 
-    for encoding, code_size in [("lvq4", 1), ("lvq8", 2)]:
+    for encoding in ["lvq4", "lvq8"]:
         name = f"documents_{encoding}"
         documents.create_index(
             name,
@@ -217,19 +224,40 @@ def test_local_lvq_build_and_search(tmp_path: Path) -> None:
         snapshot = session.indexes.load(name).metadata["snapshots"][0]
         assert snapshot["index-schema-version"] == 2
         assert snapshot["parameters"]["posting_encoding"] == encoding
-        assert pq.read_schema(
-            relation_path(snapshot["index-relations"]["ivf_postings"])
-        ) == pa.schema(
+        assert snapshot["parameters"]["dimension"] == str(dimension)
+        postings = snapshot["index-relations"]["ivf_postings"]
+        posting_files = relation_files(postings)
+        assert posting_files
+        assert pq.read_schema(posting_files[0]) == pa.schema(
             [
                 pa.field("key_1", pa.string(), nullable=False),
                 pa.field("offset", pa.float32(), nullable=False),
                 pa.field("scale", pa.float32(), nullable=False),
-                pa.field("code", pa.binary(code_size), nullable=False),
+                pa.field("code", pa.binary_view(), nullable=False),
             ]
         )
+        for file in posting_files:
+            parquet_file = pq.ParquetFile(file)
+            code_index = parquet_file.schema_arrow.get_field_index("code")
+            for row_group in range(parquet_file.metadata.num_row_groups):
+                code_chunk = parquet_file.metadata.row_group(row_group).column(
+                    code_index
+                )
+                assert code_chunk.physical_type == "BYTE_ARRAY"
+                assert "PLAIN" in code_chunk.encodings
+                assert "RLE_DICTIONARY" not in code_chunk.encodings
+        expected_code_size = dimension if encoding == "lvq8" else dimension // 2
+        codes = [
+            code
+            for file in posting_files
+            for code in pq.read_table(file)["code"].to_pylist()
+        ]
+        assert codes
+        assert expected_code_size > 12
+        assert all(len(code) == expected_code_size for code in codes)
 
         query = (
-            documents.search([10.0, 0.0], index=name)
+            documents.search(query_vector, index=name)
             .nprobes(2)
             .select(["document_id"])
             .limit(1)
@@ -241,7 +269,7 @@ def test_local_lvq_build_and_search(tmp_path: Path) -> None:
         assert "HashJoinExec" not in plan
 
         payload_query = (
-            documents.search([10.0, 0.0], index=name)
+            documents.search(query_vector, index=name)
             .nprobes(2)
             .select(["document_id", "title"])
             .limit(1)

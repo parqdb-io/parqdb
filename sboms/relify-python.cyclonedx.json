@@ -18678,6 +18678,7 @@
     },
     {
       "dependsOn": [
+        "pkg:cargo/arrow-data@58.4.0",
         "pkg:cargo/arrow-ipc@58.4.0",
         "pkg:cargo/arrow@58.4.0",
         "pkg:cargo/async-trait@0.1.91",
@@ -20179,7 +20180,7 @@
     "properties": [
       {
         "name": "relify:cargo-lock-sha256",
-        "value": "c974d1d28f5497043e632a690437f0ff04d04cd3352725bbb598122b983d653c"
+        "value": "5935406a89bbbf929411eb2f4d46fa06405102a18c89535e0f15b6762925fdf1"
       }
     ]
   },

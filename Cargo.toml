@@ -24,6 +24,7 @@ repository = "https://github.com/petrizhang/relify"
 
 [workspace.dependencies]
 arrow = "58.3.0"
+arrow-data = "58.3.0"
 arrow-ipc = "58.3.0"
 async-trait = "0.1.89"
 base64 = "0.22.1"

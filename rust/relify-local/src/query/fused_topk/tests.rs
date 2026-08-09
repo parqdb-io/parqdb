@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, FixedSizeBinaryArray, Float32Array, Float32Builder, Int64Array, ListBuilder,
+    Array, ArrayRef, BinaryArray, BinaryViewArray, Float32Array, Float32Builder, Int64Array,
+    ListBuilder,
 };
 use arrow::buffer::Buffer;
 use arrow::datatypes::{DataType, Field, Schema};
@@ -11,6 +12,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion::catalog::MemTable;
 use datafusion::physical_plan::{ExecutionPlan, collect, displayable};
 
+use arrow_data::ByteView;
 use relify_kernels::{LvqBits, detect};
 
 use super::exec::DistanceInput;
@@ -63,22 +65,81 @@ fn metric_sum(plan: &Arc<dyn ExecutionPlan>, name: &str) -> usize {
 
 #[test]
 fn lvq_distance_uses_only_the_sliced_code_buffer() {
-    let codes =
-        FixedSizeBinaryArray::try_new(2, Buffer::from(vec![99_u8, 99, 3, 4, 5, 6]), None).unwrap();
+    let values = [&[99_u8, 99][..], &[3_u8, 4][..], &[5_u8, 6][..]];
+    let arrays: [ArrayRef; 2] = [
+        Arc::new(BinaryArray::from_iter_values(values)),
+        Arc::new(BinaryViewArray::from_iter_values(values)),
+    ];
+
+    for codes in arrays {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("code", codes.data_type().clone(), false),
+                Field::new("offset", DataType::Float32, false),
+                Field::new("scale", DataType::Float32, false),
+            ])),
+            vec![
+                codes,
+                Arc::new(Float32Array::from(vec![0.0, 0.0, 0.0])),
+                Arc::new(Float32Array::from(vec![1.0, 1.0, 1.0])),
+            ],
+        )
+        .unwrap()
+        .slice(1, 2);
+        let mut distances = Vec::new();
+
+        compute_batch_distances(
+            &mut distances,
+            &batch,
+            DistanceInput::Lvq {
+                bits: LvqBits::Eight,
+                code_index: 0,
+                offset_index: 1,
+                scale_index: 2,
+            },
+            &[0.0, 0.0],
+            *detect(),
+        )
+        .unwrap();
+
+        assert_eq!(distances, [25.0, 61.0]);
+    }
+}
+
+#[test]
+fn lvq_distance_scans_plain_byte_array_strides() {
+    let code_size = 16;
+    let stride = code_size + 4;
+    let mut values = vec![0_u8; 2 * stride];
+    values[4..4 + code_size].fill(1);
+    values[stride + 4..stride + 4 + code_size].fill(2);
+    let views = [0, stride]
+        .into_iter()
+        .map(|offset| {
+            ByteView::new(
+                u32::try_from(code_size).unwrap(),
+                &values[offset + 4..offset + 8],
+            )
+            .with_buffer_index(0)
+            .with_offset(u32::try_from(offset + 4).unwrap())
+            .as_u128()
+        })
+        .collect::<Vec<_>>()
+        .into();
+    let codes = BinaryViewArray::new(views, vec![Buffer::from(values)], None);
     let batch = RecordBatch::try_new(
         Arc::new(Schema::new(vec![
-            Field::new("code", DataType::FixedSizeBinary(2), false),
+            Field::new("code", DataType::BinaryView, false),
             Field::new("offset", DataType::Float32, false),
             Field::new("scale", DataType::Float32, false),
         ])),
         vec![
             Arc::new(codes),
-            Arc::new(Float32Array::from(vec![0.0, 0.0, 0.0])),
-            Arc::new(Float32Array::from(vec![1.0, 1.0, 1.0])),
+            Arc::new(Float32Array::from(vec![0.0, 0.0])),
+            Arc::new(Float32Array::from(vec![1.0, 1.0])),
         ],
     )
-    .unwrap()
-    .slice(1, 2);
+    .unwrap();
     let mut distances = Vec::new();
 
     compute_batch_distances(
@@ -90,12 +151,12 @@ fn lvq_distance_uses_only_the_sliced_code_buffer() {
             offset_index: 1,
             scale_index: 2,
         },
-        &[0.0, 0.0],
+        &[0.0; 16],
         *detect(),
     )
     .unwrap();
 
-    assert_eq!(distances, [25.0, 61.0]);
+    assert_eq!(distances, [16.0, 64.0]);
 }
 
 #[tokio::test]
