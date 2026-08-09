@@ -48,11 +48,18 @@ runtime = relify.datafusion.RuntimeEnvBuilder().with_greedy_memory_pool(
 session = relify.connect("./relify-data", config=config, runtime=runtime)
 ```
 
-Relify options are static and must be set before creating the session. Set
-either metadata-cache limit to `0` to disable the cache. The byte budget is
-based on serialized metadata size; parsed objects have additional allocator
-overhead, so this is a bounded cache policy rather than a hard process-memory
-limit.
+Metadata cache limits can also be changed on a running session with DataFusion
+SQL:
+
+```python
+session.sql("SET relify.metadata.cache.max_entries = 256")
+session.sql("SET relify.metadata.cache.max_bytes = 33554432")
+```
+
+The new bounds are enforced before the next metadata cache access. Set either
+limit to `0` to disable the cache. The byte budget is based on serialized
+metadata size; parsed objects have additional allocator overhead, so this is a
+bounded cache policy rather than a hard process-memory limit.
 
 ### Explicit catalog and warehouse
 

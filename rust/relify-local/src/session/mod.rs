@@ -29,7 +29,7 @@ use self::catalog::validate_index_name;
 use self::catalog_list::RelifyCatalogList;
 #[cfg(test)]
 use crate::SearchRequest;
-use crate::config::LocalSessionOptions;
+use crate::config::{LocalSessionOptions, metadata_cache_config};
 use crate::coordination::SessionCoordination;
 use crate::durability::{create_dir_all, sync_directory};
 use crate::local_uri::directory_to_file_uri;
@@ -284,7 +284,7 @@ impl LocalSession {
         sync_directory(&state_root)?;
         let registry = StorageRegistry::new(storage_options);
         let warehouse = Warehouse::open(warehouse_root, registry.clone())?;
-        let (session_config, runtime, metadata_cache_config) = options.into_parts();
+        let (session_config, runtime) = options.into_parts();
         let context = crate::query::relify_session_context(session_config, runtime)?;
         let catalog_list = Arc::new(RelifyCatalogList::new(
             context.state().catalog_list().clone(),
@@ -293,14 +293,16 @@ impl LocalSession {
         ));
         context.register_catalog_list(Arc::clone(&catalog_list) as _);
         let index_catalog = Arc::clone(&catalog_list) as Arc<dyn IndexCatalog>;
+        let config_context = context.clone();
+        let metadata =
+            MetadataStore::open_with_cache_config_resolver(warehouse.clone(), move || {
+                metadata_cache_config(&config_context.copied_config())
+            });
         Ok(Self {
             catalog: Arc::clone(&index_catalog),
             table_catalog: catalog_list as Arc<dyn TableCatalog>,
             coordination: SessionCoordination::open(coordination_root)?,
-            indexes: IndexRepository::new(
-                index_catalog,
-                MetadataStore::open_with_cache_config(warehouse.clone(), metadata_cache_config),
-            ),
+            indexes: IndexRepository::new(index_catalog, metadata),
             parquet: ParquetStore::with_context(registry, context.clone()),
             context,
             source_bindings: Arc::new(RwLock::new(HashMap::new())),

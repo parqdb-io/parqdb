@@ -55,8 +55,10 @@ def test_session_uses_datafusion_config_and_runtime(tmp_path: Path) -> None:
     assert session.sql("SHOW datafusion.execution.target_partitions").to_pydict()[
         "value"
     ] == ["3"]
-    with pytest.raises(Exception, match="must be set before creating"):
-        session.sql("SET relify.metadata.cache.max_entries = 8")
+    session.sql("SET relify.metadata.cache.max_entries = 8")
+    assert session.sql("SHOW relify.metadata.cache.max_entries").to_pydict()[
+        "value"
+    ] == ["8"]
 
 
 @pytest.mark.parametrize(

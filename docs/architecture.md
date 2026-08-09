@@ -217,16 +217,17 @@ Index caching is a session execution capability, not catalog state. The local
 session materializes every relation in one current index snapshot as decoded
 Arrow memory and transparently substitutes those relations while the snapshot
 remains current. Cached IVF postings are coalesced up to the DataFusion batch
-size and keep an immutable `cid`-to-range directory. Each query creates a
-lightweight provider containing only the selected range descriptors; the scan
-slices the shared Arrow batches lazily across the configured execution
-partitions. It does not scan the complete cached relation, construct a filtered
-`MemTable`, or copy vector buffers. The scan accepts DataFusion runtime filters
-only for `cid` and `key_i` columns. Cached index-only searches use an optimized
-DataFrame compiler beside the general SQL compiler; both consume the same
-resolved search and shared source-to-index column mapping. Refresh, registration,
-or removal invalidates the corresponding session cache; dropping the cache never
-changes catalog metadata or durable index data.
+size and keep an immutable `cid`-to-range directory behind one stable
+`TableProvider`. Each scan derives selected ranges from ordinary `cid`
+predicates and slices the shared Arrow batches lazily across the session's
+current execution partitions. Query planning does not construct another
+provider, scan the complete cached relation, build a filtered `MemTable`, or
+copy vector buffers. The scan accepts DataFusion runtime filters only for `cid`
+and `key_i` columns. Cached index-only searches use an optimized DataFrame
+compiler beside the general SQL compiler; both consume the same resolved search
+and shared source-to-index column mapping. Refresh, registration, or removal
+invalidates the corresponding session cache; dropping the cache never changes
+catalog metadata or durable index data.
 
 ## Current Scope
 

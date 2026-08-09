@@ -49,6 +49,38 @@ fn metadata_cache_config_is_shared_with_repository_handles() {
     assert_eq!(repository.metadata_store().cache_config(), config);
 }
 
+#[tokio::test]
+async fn metadata_cache_config_tracks_datafusion_session_set() {
+    let temporary = TempDir::new().unwrap();
+    let session = LocalSession::open(temporary.path()).unwrap();
+
+    session
+        .context()
+        .sql("SET relify.metadata.cache.max_entries = 7")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    session
+        .context()
+        .sql("SET relify.metadata.cache.max_bytes = 4096")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        session.metadata_cache_config(),
+        MetadataCacheConfig::new(7, 4096)
+    );
+    assert_eq!(
+        session.index_repository().metadata_store().cache_config(),
+        MetadataCacheConfig::new(7, 4096)
+    );
+}
+
 #[test]
 fn session_preserves_datafusion_config_and_runtime() {
     let temporary = TempDir::new().unwrap();
@@ -510,6 +542,53 @@ async fn backend_cache_materializes_and_releases_complete_index_snapshots() {
         uncached_sql_plan.matches("file_type=parquet").count() > cached_parquet_scans,
         "{uncached_sql_plan}"
     );
+}
+
+#[tokio::test]
+async fn cached_source_join_uses_runtime_filter_and_matches_uncached_results() {
+    let (_temporary, session, source_path) = direct_pid_fixture().await;
+    let request = SearchRequest {
+        source: RelationReference::Parquet {
+            uri: directory_to_file_uri(&source_path).unwrap(),
+        },
+        index: Some("direct_index".into()),
+        column: None,
+        query: vec![0.0, 0.0],
+        nprobe: Some(1),
+        limit: 2,
+        projection: Some(vec!["source_pid".into(), "label".into()]),
+        filter: None,
+        bypass_index: false,
+    };
+    let (uncached, uncached_schema) = session.search(&request).await.unwrap();
+    let sql = session.search_sql(&request).await.unwrap();
+
+    session.cache_index("direct_index").await.unwrap();
+    let plan = session.explain_search(&request, false).await.unwrap();
+    assert!(plan.contains("CachedIvfScanExec"), "{plan}");
+    assert!(plan.contains("runtime_filters=1"), "{plan}");
+    let (cached, cached_schema) = session.search(&request).await.unwrap();
+    assert_eq!(cached_schema, uncached_schema);
+    assert_eq!(cached, uncached);
+    let cached_sql = session
+        .context()
+        .sql(&sql)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    assert!(session.uncache_index("direct_index").unwrap());
+    let uncached_sql = session
+        .context()
+        .sql(&sql)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(cached_sql, uncached_sql);
 }
 
 #[tokio::test]

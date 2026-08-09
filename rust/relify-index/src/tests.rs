@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use relify_catalog::{IndexIdentifier, SqliteCatalog};
 use relify_core::{IndexArtifacts, IndexFormat};
@@ -23,12 +23,22 @@ fn repository(temporary: &TempDir) -> IndexRepository {
 }
 
 fn metadata_store(temporary: &TempDir, cache_capacity: usize) -> MetadataStore {
+    metadata_store_with_config(
+        temporary,
+        MetadataCacheConfig::new(cache_capacity, usize::MAX),
+    )
+}
+
+fn metadata_store_with_config(
+    temporary: &TempDir,
+    cache_config: MetadataCacheConfig,
+) -> MetadataStore {
     let root = url::Url::from_directory_path(temporary.path().join("warehouse"))
         .unwrap()
         .to_string();
     MetadataStore::open_with_cache_config(
         Warehouse::open(&root, StorageRegistry::default()).unwrap(),
-        MetadataCacheConfig::new(cache_capacity, usize::MAX),
+        cache_config,
     )
 }
 
@@ -169,32 +179,74 @@ async fn metadata_store_evicts_the_least_recently_used_document() {
 #[tokio::test]
 async fn metadata_store_rejects_documents_larger_than_its_byte_budget() {
     let temporary = TempDir::new().unwrap();
-    let store = metadata_store(&temporary, 1);
-    let metadata = metadata_document(&store);
-    let location = store.write_initial(&metadata).await.unwrap();
+    let writer = metadata_store(&temporary, 1);
+    let metadata = metadata_document(&writer);
+    let location = writer.write_initial(&metadata).await.unwrap();
     let document_size = usize::try_from(
         std::fs::metadata(url::Url::parse(&location).unwrap().to_file_path().unwrap())
             .unwrap()
             .len(),
     )
     .unwrap();
-    store.set_cache_config(MetadataCacheConfig::new(1, document_size - 1));
+    let reader =
+        metadata_store_with_config(&temporary, MetadataCacheConfig::new(1, document_size - 1));
+
+    assert_eq!(reader.load(&location).await.unwrap(), metadata);
     std::fs::remove_file(url::Url::parse(&location).unwrap().to_file_path().unwrap()).unwrap();
 
-    assert!(store.load(&location).await.is_err());
+    assert!(reader.load(&location).await.is_err());
 }
 
 #[tokio::test]
-async fn metadata_store_applies_reconfigured_entry_limit_across_clones() {
+async fn metadata_store_evicts_entries_to_enforce_its_byte_budget() {
     let temporary = TempDir::new().unwrap();
-    let store = metadata_store(&temporary, 2);
+    let writer = metadata_store(&temporary, 2);
+    let first = metadata_document(&writer);
+    let first_location = writer.write_initial(&first).await.unwrap();
+    let second = metadata_document(&writer);
+    let second_location = writer.write_initial(&second).await.unwrap();
+    let document_size = [&first_location, &second_location]
+        .into_iter()
+        .map(|location| {
+            usize::try_from(
+                std::fs::metadata(url::Url::parse(location).unwrap().to_file_path().unwrap())
+                    .unwrap()
+                    .len(),
+            )
+            .unwrap()
+        })
+        .max()
+        .unwrap();
+    let reader = metadata_store_with_config(&temporary, MetadataCacheConfig::new(2, document_size));
+
+    assert_eq!(reader.load(&first_location).await.unwrap(), first);
+    assert_eq!(reader.load(&second_location).await.unwrap(), second);
+    for location in [&first_location, &second_location] {
+        std::fs::remove_file(url::Url::parse(location).unwrap().to_file_path().unwrap()).unwrap();
+    }
+
+    assert!(reader.load(&first_location).await.is_err());
+    assert_eq!(reader.load(&second_location).await.unwrap(), second);
+}
+
+#[tokio::test]
+async fn metadata_store_applies_resolved_bounds_before_cache_access() {
+    let temporary = TempDir::new().unwrap();
+    let root = url::Url::from_directory_path(temporary.path().join("warehouse"))
+        .unwrap()
+        .to_string();
+    let config = Arc::new(Mutex::new(MetadataCacheConfig::new(2, usize::MAX)));
+    let resolved_config = Arc::clone(&config);
+    let store = MetadataStore::open_with_cache_config_resolver(
+        Warehouse::open(&root, StorageRegistry::default()).unwrap(),
+        move || *resolved_config.lock().unwrap(),
+    );
     let first = metadata_document(&store);
     let first_location = store.write_initial(&first).await.unwrap();
     let second = metadata_document(&store);
     let second_location = store.write_initial(&second).await.unwrap();
-    let clone = store.clone();
 
-    clone.set_cache_config(MetadataCacheConfig::new(1, usize::MAX));
+    *config.lock().unwrap() = MetadataCacheConfig::new(1, usize::MAX);
     assert_eq!(
         store.cache_config(),
         MetadataCacheConfig::new(1, usize::MAX)

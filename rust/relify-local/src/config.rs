@@ -12,7 +12,7 @@ use relify_index::{
 };
 
 config_namespace! {
-    /// Options for immutable index metadata caching.
+    /// Options for index metadata caching.
     pub struct MetadataCacheOptions {
         /// Maximum number of cached metadata documents.
         pub max_entries: usize, default = DEFAULT_METADATA_CACHE_ENTRIES
@@ -25,7 +25,7 @@ config_namespace! {
 config_namespace! {
     /// Options for index metadata.
     pub struct MetadataOptions {
-        /// Immutable metadata cache options.
+        /// Metadata cache options.
         pub cache: MetadataCacheOptions, default = MetadataCacheOptions::default()
     }
 }
@@ -35,7 +35,6 @@ config_namespace! {
 pub struct RelifyConfig {
     /// Index metadata options.
     pub metadata: MetadataOptions,
-    frozen: bool,
 }
 
 impl ConfigExtension for RelifyConfig {
@@ -56,12 +55,6 @@ impl ExtensionOptions for RelifyConfig {
     }
 
     fn set(&mut self, key: &str, value: &str) -> DataFusionResult<()> {
-        if self.frozen {
-            return Err(DataFusionError::Configuration(
-                "Relify session options are static and must be set before creating the session"
-                    .into(),
-            ));
-        }
         ConfigField::set(self, key, value)
     }
 
@@ -126,27 +119,8 @@ impl LocalSessionOptions {
         Self { config, runtime }
     }
 
-    pub(crate) fn into_parts(self) -> (SessionConfig, RuntimeEnvBuilder, MetadataCacheConfig) {
-        let mut config = ensure_relify_config(self.config);
-        let cache = config
-            .options()
-            .extensions
-            .get::<RelifyConfig>()
-            .expect("Relify config extension must be installed")
-            .metadata
-            .cache
-            .clone();
-        config
-            .options_mut()
-            .extensions
-            .get_mut::<RelifyConfig>()
-            .expect("Relify config extension must be installed")
-            .frozen = true;
-        (
-            config,
-            self.runtime,
-            MetadataCacheConfig::new(cache.max_entries, cache.max_bytes),
-        )
+    pub(crate) fn into_parts(self) -> (SessionConfig, RuntimeEnvBuilder) {
+        (ensure_relify_config(self.config), self.runtime)
     }
 }
 
@@ -172,6 +146,17 @@ fn ensure_relify_config(mut config: SessionConfig) -> SessionConfig {
     config
 }
 
+pub(crate) fn metadata_cache_config(config: &SessionConfig) -> MetadataCacheConfig {
+    let cache = &config
+        .options()
+        .extensions
+        .get::<RelifyConfig>()
+        .expect("Relify config extension must be installed")
+        .metadata
+        .cache;
+    MetadataCacheConfig::new(cache.max_entries, cache.max_bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,20 +166,23 @@ mod tests {
         let config = relify_session_config()
             .set_str("relify.metadata.cache.max_entries", "7")
             .set_str("relify.metadata.cache.max_bytes", "4096");
-        let (_, _, cache) =
+        let (config, _) =
             LocalSessionOptions::new(config, RuntimeEnvBuilder::default()).into_parts();
 
-        assert_eq!(cache, MetadataCacheConfig::new(7, 4096));
+        assert_eq!(
+            metadata_cache_config(&config),
+            MetadataCacheConfig::new(7, 4096)
+        );
     }
 
     #[test]
-    fn prepared_relify_config_rejects_runtime_mutation() {
-        let (mut config, _, _) = LocalSessionOptions::default().into_parts();
-        let error = config
+    fn prepared_relify_config_accepts_runtime_mutation() {
+        let (mut config, _) = LocalSessionOptions::default().into_parts();
+        config
             .options_mut()
             .set("relify.metadata.cache.max_entries", "7")
-            .unwrap_err();
+            .unwrap();
 
-        assert!(error.to_string().contains("must be set before creating"));
+        assert_eq!(metadata_cache_config(&config).max_entries, 7);
     }
 }

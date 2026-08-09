@@ -8,6 +8,8 @@ use uuid::Uuid;
 
 use crate::{Error, Result};
 
+type MetadataCacheConfigResolver = dyn Fn() -> MetadataCacheConfig + Send + Sync;
+
 /// Default maximum number of immutable metadata documents retained in memory.
 pub const DEFAULT_METADATA_CACHE_ENTRIES: usize = 128;
 
@@ -45,10 +47,21 @@ impl Default for MetadataCacheConfig {
 }
 
 /// Immutable index metadata storage under one managed warehouse.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MetadataStore {
     warehouse: Warehouse,
     cache: Arc<Mutex<MetadataCache>>,
+    resolve_cache_config: Arc<MetadataCacheConfigResolver>,
+}
+
+impl std::fmt::Debug for MetadataStore {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MetadataStore")
+            .field("warehouse", &self.warehouse)
+            .field("cache", &self.cache)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug)]
@@ -75,9 +88,25 @@ impl MetadataStore {
     /// Creates a metadata store with explicit in-memory cache bounds.
     #[must_use]
     pub fn open_with_cache_config(warehouse: Warehouse, cache_config: MetadataCacheConfig) -> Self {
+        Self::open_with_cache_config_resolver(warehouse, move || cache_config)
+    }
+
+    /// Creates a metadata store whose cache bounds are resolved before each
+    /// cache access.
+    ///
+    /// This keeps a host session's configuration authoritative while allowing
+    /// standalone stores to use fixed bounds through
+    /// [`Self::open_with_cache_config`].
+    #[must_use]
+    pub fn open_with_cache_config_resolver(
+        warehouse: Warehouse,
+        resolve_cache_config: impl Fn() -> MetadataCacheConfig + Send + Sync + 'static,
+    ) -> Self {
+        let cache_config = resolve_cache_config();
         Self {
             warehouse,
             cache: Arc::new(Mutex::new(MetadataCache::new(cache_config))),
+            resolve_cache_config: Arc::new(resolve_cache_config),
         }
     }
 
@@ -85,12 +114,6 @@ impl MetadataStore {
     #[must_use]
     pub fn cache_config(&self) -> MetadataCacheConfig {
         self.cache().config
-    }
-
-    /// Reconfigures the shared metadata cache and immediately enforces the new
-    /// bounds.
-    pub fn set_cache_config(&self, cache_config: MetadataCacheConfig) {
-        self.cache().set_config(cache_config);
     }
 
     /// Returns the stable root recorded in metadata for an index UUID.
@@ -159,9 +182,15 @@ impl MetadataStore {
     }
 
     fn cache(&self) -> std::sync::MutexGuard<'_, MetadataCache> {
-        self.cache
+        let mut cache = self
+            .cache
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let config = (self.resolve_cache_config)();
+        if cache.config != config {
+            cache.set_config(config);
+        }
+        cache
     }
 }
 
