@@ -10,6 +10,7 @@ use arrow::buffer::Buffer;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion::catalog::MemTable;
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::physical_plan::{ExecutionPlan, collect, displayable};
 
 use arrow_data::ByteView;
@@ -18,6 +19,7 @@ use relify_kernels::{LvqBits, detect};
 use super::exec::DistanceInput;
 use super::selector::compute_batch_distances;
 use super::{IvfTopKExec, relify_session_context};
+use crate::config::relify_session_config;
 
 fn batch(ids: impl IntoIterator<Item = i64>) -> RecordBatch {
     let ids = ids.into_iter().collect::<Vec<_>>();
@@ -161,7 +163,8 @@ fn lvq_distance_scans_plain_byte_array_strides() {
 
 #[tokio::test]
 async fn fuses_distance_projection_topk_and_updates_its_dynamic_filter() {
-    let context = relify_session_context();
+    let context =
+        relify_session_context(relify_session_config(), RuntimeEnvBuilder::default()).unwrap();
     let first = batch(0..8);
     let second = batch(100..108);
     let schema = first.schema();
@@ -240,7 +243,8 @@ async fn fuses_distance_projection_topk_and_updates_its_dynamic_filter() {
 
 #[tokio::test]
 async fn large_top_k_uses_batch_selection_and_retains_only_projected_columns() {
-    let context = relify_session_context();
+    let context =
+        relify_session_context(relify_session_config(), RuntimeEnvBuilder::default()).unwrap();
     let first = batch(0..2_000);
     let second = batch(2_000..3_000);
     let schema = first.schema();

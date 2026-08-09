@@ -3,12 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ._native import _ParquetWriterOptions
+from ._native import _new_session_config, _ParquetWriterOptions
 from .builders.v1 import (
     BuilderCapabilities,
     BuilderInfo,
     BuildProfile,
 )
+from .datafusion import SessionConfig as DataFusionSessionConfig
 
 if TYPE_CHECKING:
     from .build import _PublishedBuild, _RefreshRequest
@@ -19,6 +20,15 @@ LOCAL_BUILDER_INFO = BuilderInfo("local", "Local Rust", "relify")
 LOCAL_BUILDER_CAPABILITIES = BuilderCapabilities(
     frozenset({BuildProfile("ivf", "parquet", "parquet")})
 )
+
+
+class SessionConfig(DataFusionSessionConfig):
+    """DataFusion session configuration with Relify options installed."""
+
+    def __init__(self, config_options: dict[str, str] | None = None) -> None:
+        self.config_internal = _new_session_config()
+        for key, value in (config_options or {}).items():
+            self.config_internal = self.config_internal.set(key, value)
 
 
 @dataclass(frozen=True)

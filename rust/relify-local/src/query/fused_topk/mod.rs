@@ -8,6 +8,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion::common::Result as DataFusionResult;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::session_state::{SessionState, SessionStateBuilder};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, lit};
@@ -34,8 +35,11 @@ const LVQ8_DISTANCE_UDF: &str = "relify_lvq8_l2";
 mod tests;
 
 /// Builds the single `DataFusion` context used by local Relify sessions.
-pub(crate) fn relify_session_context() -> SessionContext {
-    let base = SessionContext::new_with_config(SessionConfig::new());
+pub(crate) fn relify_session_context(
+    config: SessionConfig,
+    runtime: RuntimeEnvBuilder,
+) -> DataFusionResult<SessionContext> {
+    let base = SessionContext::new_with_config_rt(config, Arc::new(runtime.build()?));
     let mut rules = PhysicalOptimizer::new().rules;
     // The distance Projection must still be explicit when this rule runs.
     // EnforceSorting has already attached `fetch`, while the first
@@ -52,7 +56,7 @@ pub(crate) fn relify_session_context() -> SessionContext {
     context.register_udf(squared_l2_udf());
     context.register_udf(lvq_squared_l2_udf(LvqBits::Four));
     context.register_udf(lvq_squared_l2_udf(LvqBits::Eight));
-    context
+    Ok(context)
 }
 
 /// Replaces `Sort(Projection(relify_squared_l2(...)))` with one vector-native

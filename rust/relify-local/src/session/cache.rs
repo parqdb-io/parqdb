@@ -34,7 +34,6 @@ struct CachedRelation {
 enum CachedRelationKind {
     Generic,
     IvfCentroids(Arc<[f32]>),
-    IvfPostings(Arc<CachedIvfPostings>),
 }
 
 struct CacheAwareRelation {
@@ -62,7 +61,7 @@ impl LocalSession {
             if role == "ivf_postings" {
                 let dataframe = self.relation_dataframe(reference, role).await?;
                 let batch_size = self.context.state().config().batch_size();
-                let (postings, provider, postings_bytes) =
+                let (provider, postings_bytes) =
                     CachedIvfPostings::load(dataframe, batch_size).await?;
                 resident_bytes = resident_bytes.saturating_add(postings_bytes);
                 relations.insert(
@@ -70,7 +69,7 @@ impl LocalSession {
                     CachedRelation {
                         key,
                         provider,
-                        kind: CachedRelationKind::IvfPostings(postings),
+                        kind: CachedRelationKind::Generic,
                     },
                 );
                 continue;
@@ -190,31 +189,8 @@ impl LocalSession {
             .find(|relation| relation.key == key)
             .and_then(|relation| match &relation.kind {
                 CachedRelationKind::IvfCentroids(values) => Some(Arc::clone(values)),
-                CachedRelationKind::Generic | CachedRelationKind::IvfPostings(_) => None,
+                CachedRelationKind::Generic => None,
             }))
-    }
-
-    pub(super) fn cached_cluster_dataframe(
-        &self,
-        key: &str,
-        cids: &[i32],
-    ) -> Result<Option<DataFrame>> {
-        let cache = self.index_cache.read().map_err(|_| cache_lock_error())?;
-        let provider = cache
-            .values()
-            .flat_map(|index| index.relations.values())
-            .find(|relation| relation.key == key)
-            .and_then(|relation| match &relation.kind {
-                CachedRelationKind::IvfPostings(postings) => Some(postings),
-                CachedRelationKind::Generic | CachedRelationKind::IvfCentroids(_) => None,
-            })
-            .map(|postings| {
-                postings.provider(cids, self.context.state().config().target_partitions())
-            })
-            .transpose()?;
-        provider
-            .map(|provider| self.context.read_table(provider).map_err(Error::from))
-            .transpose()
     }
 
     pub(super) fn cache_aware_relation(
@@ -297,8 +273,8 @@ impl TableProvider for CacheAwareRelation {
         &self,
         filters: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        // The in-memory provider does not apply pushed filters itself. Preserve
-        // any filter accepted by Parquet above the scan for both provider paths.
+        // The provider can change between planning and execution. Keep filters
+        // above the scan so either the cached or Parquet path remains correct.
         Ok(self
             .fallback
             .supports_filters_pushdown(filters)?

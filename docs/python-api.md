@@ -69,6 +69,33 @@ operator; the UDF remains available to ordinary DataFusion SQL and as the
 fallback for unsupported plan shapes. A session does not require a context
 manager or explicit close operation.
 
+`Session` remains the DataFusion `SessionContext`; callers may provide the same
+DataFusion configuration and runtime builders when opening Relify. Relify adds
+its own namespace to that configuration:
+
+```python
+config = (
+    relify.SessionConfig()
+    .set("datafusion.execution.target_partitions", "8")
+    .set("relify.metadata.cache.max_entries", "64")
+    .set("relify.metadata.cache.max_bytes", str(8 * 1024 * 1024))
+)
+runtime = relify.datafusion.RuntimeEnvBuilder().with_greedy_memory_pool(
+    4 * 1024 * 1024 * 1024
+)
+session = relify.connect(
+    "./relify-data",
+    config=config,
+    runtime=runtime,
+)
+```
+
+Immutable index metadata defaults to a session-wide LRU of at most 128
+documents and 16 MiB of serialized metadata. Relify options are static and
+must be set before session creation. Either cache limit may be `0` to disable
+metadata caching. The byte budget does not include parsed-object and allocator
+overhead.
+
 The full embedded DataFusion Python API is available from
 `relify.datafusion`:
 

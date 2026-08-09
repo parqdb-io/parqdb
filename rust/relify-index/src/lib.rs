@@ -15,7 +15,10 @@ pub use publication::{
     InitialIndex, RefreshedIndex, new_snapshot_id, publish_initial, publish_refresh,
 };
 pub use repository::{IndexRepository, LoadedIndex};
-pub use store::MetadataStore;
+pub use store::{
+    DEFAULT_METADATA_CACHE_BYTES, DEFAULT_METADATA_CACHE_ENTRIES, MetadataCacheConfig,
+    MetadataStore,
+};
 
 #[cfg(test)]
 mod tests;

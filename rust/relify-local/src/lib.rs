@@ -1,6 +1,7 @@
 //! Embedded `DataFusion` and Parquet implementation of Relify.
 
 mod builder;
+mod config;
 mod coordination;
 mod durability;
 mod error;
@@ -13,6 +14,7 @@ mod query;
 mod search;
 mod session;
 
+pub use config::{LocalSessionOptions, RelifyConfig, relify_session_config};
 pub use error::{Error, Result};
 pub use maintenance::{MaintenanceKind, MaintenanceObject};
 pub use parquet::ParquetWriterOptions;
@@ -25,6 +27,7 @@ pub use relify_catalog::IndexIdentifier;
 pub use relify_core::{
     IndexArtifacts, IndexFormat, IvfConfig, PostingEncoding, PublishedIndex, SearchRequest,
 };
+pub use relify_index::MetadataCacheConfig;
 pub use relify_meta::{IndexMetadata, IndexSnapshot, RelationReference};
 pub use search::{ClusterSelection, ResolvedSearch};
 pub use session::{

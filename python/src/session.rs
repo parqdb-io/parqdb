@@ -5,16 +5,19 @@ use std::sync::{Arc, OnceLock};
 use arrow::datatypes::{DataType, Schema};
 use arrow::pyarrow::PyArrowType;
 use datafusion_python::context::PySessionContext;
+use datafusion_python::context::{PyRuntimeEnvBuilder, PySessionConfig};
 use datafusion_python::dataframe::PyDataFrame;
 use pyo3::prelude::*;
 use relify_local::{
-    IvfConfig, LocalBuildOptions, LocalBuildProgress, LocalSession, ParquetWriterOptions,
-    PersistentParquetOptions, PostingEncoding, SearchRequest,
+    IvfConfig, LocalBuildOptions, LocalBuildProgress, LocalSession, LocalSessionOptions,
+    ParquetWriterOptions, PersistentParquetOptions, PostingEncoding, SearchRequest,
+    relify_session_config,
 };
 use relify_meta::RelationReference;
 use tokio::runtime::Runtime;
 
 use crate::errors::{InvalidArgumentError, core_error, runtime_error};
+use crate::index::PyNativeIndexRepository;
 
 type PySourceField = (String, String, bool);
 type PyIndexInfo = (
@@ -114,7 +117,9 @@ impl PyNativeSession {
         state_root,
         warehouse=None,
         storage_options=None,
-        catalog_path=None
+        catalog_path=None,
+        config=None,
+        runtime=None
     ))]
     fn new(
         py: Python<'_>,
@@ -122,25 +127,33 @@ impl PyNativeSession {
         warehouse: Option<String>,
         storage_options: Option<HashMap<String, String>>,
         catalog_path: Option<PathBuf>,
+        config: Option<PySessionConfig>,
+        runtime: Option<PyRuntimeEnvBuilder>,
     ) -> PyResult<Self> {
+        let options = LocalSessionOptions::new(
+            config.map_or_else(relify_session_config, |config| config.config),
+            runtime.map_or_else(Default::default, |runtime| runtime.builder),
+        );
         let session = match (catalog_path, warehouse) {
-            (Some(catalog_path), Some(warehouse)) => LocalSession::open_sqlite(
+            (Some(catalog_path), Some(warehouse)) => LocalSession::open_sqlite_with_options(
                 catalog_path,
                 &warehouse,
                 storage_options.unwrap_or_default(),
+                options,
             ),
             (Some(_), None) => {
                 return Err(InvalidArgumentError::new_err(
                     "an explicit catalog requires a warehouse",
                 ));
             }
-            (None, Some(warehouse)) => LocalSession::open_with_warehouse(
+            (None, Some(warehouse)) => LocalSession::open_with_warehouse_options(
                 state_root,
                 &warehouse,
                 storage_options.unwrap_or_default(),
+                options,
             ),
             (None, None) if storage_options.as_ref().is_none_or(HashMap::is_empty) => {
-                LocalSession::open(state_root)
+                LocalSession::open_with_options(state_root, options)
             }
             (None, None) => {
                 return Err(InvalidArgumentError::new_err(
@@ -160,6 +173,13 @@ impl PyNativeSession {
 
     fn warehouse_root(&self) -> String {
         self.session.warehouse_root().to_owned()
+    }
+
+    fn index_repository(&self) -> PyNativeIndexRepository {
+        PyNativeIndexRepository::from_repository(
+            self.session.index_repository(),
+            Arc::clone(&self.runtime),
+        )
     }
 
     fn context(&self) -> PySessionContext {
@@ -638,6 +658,11 @@ impl PyNativeSession {
     }
 }
 
+#[pyfunction(name = "_new_session_config")]
+fn new_session_config() -> PySessionConfig {
+    relify_session_config().into()
+}
+
 fn parse_relation_reference(value: &str) -> PyResult<RelationReference> {
     let reference: RelationReference = serde_json::from_str(value)
         .map_err(|error| InvalidArgumentError::new_err(error.to_string()))?;
@@ -648,6 +673,7 @@ fn parse_relation_reference(value: &str) -> PyResult<RelationReference> {
 }
 
 pub(crate) fn add_session_bindings(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_function(wrap_pyfunction!(new_session_config, module)?)?;
     module.add_class::<PyParquetWriterOptions>()?;
     module.add_class::<PyNativeBuildProgress>()?;
     module.add_class::<PyNativeSession>()?;

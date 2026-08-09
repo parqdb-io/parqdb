@@ -9,8 +9,8 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 use crate::{
-    IndexRepository, InitialIndex, MetadataStore, RefreshedIndex, new_snapshot_id, publish_initial,
-    publish_refresh,
+    IndexRepository, InitialIndex, MetadataCacheConfig, MetadataStore, RefreshedIndex,
+    new_snapshot_id, publish_initial, publish_refresh,
 };
 
 fn repository(temporary: &TempDir) -> IndexRepository {
@@ -20,6 +20,16 @@ fn repository(temporary: &TempDir) -> IndexRepository {
         .to_string();
     let metadata = MetadataStore::open(Warehouse::open(&root, StorageRegistry::default()).unwrap());
     IndexRepository::new(catalog, metadata)
+}
+
+fn metadata_store(temporary: &TempDir, cache_capacity: usize) -> MetadataStore {
+    let root = url::Url::from_directory_path(temporary.path().join("warehouse"))
+        .unwrap()
+        .to_string();
+    MetadataStore::open_with_cache_config(
+        Warehouse::open(&root, StorageRegistry::default()).unwrap(),
+        MetadataCacheConfig::new(cache_capacity, usize::MAX),
+    )
 }
 
 fn source(uri: &str) -> RelationReference {
@@ -118,6 +128,83 @@ async fn metadata_store_rejects_foreign_locations() {
     metadata.location = "file:///tmp/other/metadata/".into();
 
     assert!(store.write_initial(&metadata).await.is_err());
+}
+
+#[tokio::test]
+async fn metadata_store_reuses_cached_immutable_documents_across_clones() {
+    let temporary = TempDir::new().unwrap();
+    let writer = metadata_store(&temporary, 1);
+    let metadata = metadata_document(&writer);
+    let location = writer.write_initial(&metadata).await.unwrap();
+    let reader = metadata_store(&temporary, 1);
+    assert_eq!(reader.load(&location).await.unwrap(), metadata);
+    let cached_reader = reader.clone();
+    std::fs::remove_file(url::Url::parse(&location).unwrap().to_file_path().unwrap()).unwrap();
+
+    assert_eq!(cached_reader.load(&location).await.unwrap(), metadata);
+}
+
+#[tokio::test]
+async fn metadata_store_evicts_the_least_recently_used_document() {
+    let temporary = TempDir::new().unwrap();
+    let store = metadata_store(&temporary, 2);
+    let first = metadata_document(&store);
+    let first_location = store.write_initial(&first).await.unwrap();
+    let second = metadata_document(&store);
+    let second_location = store.write_initial(&second).await.unwrap();
+
+    assert_eq!(store.load(&first_location).await.unwrap(), first);
+
+    let third = metadata_document(&store);
+    let third_location = store.write_initial(&third).await.unwrap();
+    for location in [&first_location, &second_location, &third_location] {
+        std::fs::remove_file(url::Url::parse(location).unwrap().to_file_path().unwrap()).unwrap();
+    }
+
+    assert_eq!(store.load(&first_location).await.unwrap(), first);
+    assert_eq!(store.load(&third_location).await.unwrap(), third);
+    assert!(store.load(&second_location).await.is_err());
+}
+
+#[tokio::test]
+async fn metadata_store_rejects_documents_larger_than_its_byte_budget() {
+    let temporary = TempDir::new().unwrap();
+    let store = metadata_store(&temporary, 1);
+    let metadata = metadata_document(&store);
+    let location = store.write_initial(&metadata).await.unwrap();
+    let document_size = usize::try_from(
+        std::fs::metadata(url::Url::parse(&location).unwrap().to_file_path().unwrap())
+            .unwrap()
+            .len(),
+    )
+    .unwrap();
+    store.set_cache_config(MetadataCacheConfig::new(1, document_size - 1));
+    std::fs::remove_file(url::Url::parse(&location).unwrap().to_file_path().unwrap()).unwrap();
+
+    assert!(store.load(&location).await.is_err());
+}
+
+#[tokio::test]
+async fn metadata_store_applies_reconfigured_entry_limit_across_clones() {
+    let temporary = TempDir::new().unwrap();
+    let store = metadata_store(&temporary, 2);
+    let first = metadata_document(&store);
+    let first_location = store.write_initial(&first).await.unwrap();
+    let second = metadata_document(&store);
+    let second_location = store.write_initial(&second).await.unwrap();
+    let clone = store.clone();
+
+    clone.set_cache_config(MetadataCacheConfig::new(1, usize::MAX));
+    assert_eq!(
+        store.cache_config(),
+        MetadataCacheConfig::new(1, usize::MAX)
+    );
+    for location in [&first_location, &second_location] {
+        std::fs::remove_file(url::Url::parse(location).unwrap().to_file_path().unwrap()).unwrap();
+    }
+
+    assert!(store.load(&first_location).await.is_err());
+    assert_eq!(store.load(&second_location).await.unwrap(), second);
 }
 
 #[tokio::test]

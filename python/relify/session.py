@@ -20,7 +20,14 @@ from .build import BuildCoordinator, _LocalBuildContext, _LocalBuildProgress
 from .builders.v1 import BuildContext, IndexBuilder
 from .catalog import IndexCatalog, IndexInfo
 from .config import IVF, Local, WriteOptions
-from .datafusion import DataFrame, SessionContext
+from .datafusion import (
+    DataFrame,
+    RuntimeEnvBuilder,
+    SessionContext,
+)
+from .datafusion import (
+    SessionConfig as DataFusionSessionConfig,
+)
 from .datafusion.expr import SortKey
 from .iceberg import load_table_state, table_provider_inputs
 from .identifier import TableIdentifier
@@ -48,6 +55,8 @@ class Session(SessionContext):
         storage_options: Mapping[str, str] | None = None,
         catalog_path: str | os.PathLike[str] | None = None,
         iceberg: object | None = None,
+        config: DataFusionSessionConfig | None = None,
+        runtime: RuntimeEnvBuilder | None = None,
     ) -> None:
         self._root = Path(root).expanduser().resolve()
         options = dict(storage_options or {})
@@ -61,18 +70,20 @@ class Session(SessionContext):
             if catalog_path is not None
             else self._root / "catalog.sqlite"
         )
+        if config is not None and not isinstance(config, DataFusionSessionConfig):
+            raise TypeError("config must be relify.datafusion.SessionConfig")
+        if runtime is not None and not isinstance(runtime, RuntimeEnvBuilder):
+            raise TypeError("runtime must be relify.datafusion.RuntimeEnvBuilder")
         self._native = _NativeSession(
             self._root,
             index_root,
             options or None,
             resolved_catalog_path if catalog_path is not None else None,
+            config.config_internal if config is not None else None,
+            runtime.config_internal if runtime is not None else None,
         )
         self._index_root = self._native.warehouse_root()
-        self._repository = _NativeIndexRepository(
-            resolved_catalog_path,
-            self._index_root,
-            options or None,
-        )
+        self._repository = self._native.index_repository()
         self._indexes = IndexCatalog(self._repository)
         self._builds = BuildCoordinator(self, default_builder=Local())
         self.ctx = self._native.context()
@@ -461,6 +472,8 @@ def connect(
     index_root: str | None = None,
     storage_options: Mapping[str, str] | None = None,
     iceberg: object | None = None,
+    config: DataFusionSessionConfig | None = None,
+    runtime: RuntimeEnvBuilder | None = None,
 ) -> Session:
     if root is not None and catalog is not None:
         raise ValueError("root and catalog are mutually exclusive")
@@ -473,6 +486,8 @@ def connect(
             index_root=index_root,
             storage_options=storage_options,
             iceberg=iceberg,
+            config=config,
+            runtime=runtime,
         )
     if not isinstance(catalog, str):
         raise TypeError("catalog must be a catalog URI")
@@ -497,6 +512,8 @@ def connect(
         storage_options=storage_options,
         catalog_path=catalog_path,
         iceberg=iceberg,
+        config=config,
+        runtime=runtime,
     )
 
 
