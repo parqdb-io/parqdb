@@ -10,6 +10,10 @@ use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
 use datafusion::execution::memory_pool::{GreedyMemoryPool, MemoryPool};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+use datafusion::prelude::ParquetReadOptions;
+use parquet::arrow::ArrowWriter;
+use parquet::basic::Compression;
+use parquet::file::properties::WriterProperties;
 use relify_meta::{IndexMetadata, PostingEncoding, SnapshotLogEntry};
 use rusqlite::Connection;
 use tempfile::TempDir;
@@ -81,6 +85,101 @@ async fn metadata_cache_config_tracks_datafusion_session_set() {
     );
 }
 
+#[tokio::test]
+async fn parquet_page_cache_is_used_by_datafusion_scans_and_tracks_session_set() {
+    let temporary = TempDir::new().unwrap();
+    let parquet_path = temporary.path().join("page-cache-source.parquet");
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Int32,
+        false,
+    )]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int32Array::from_iter_values(0..4_096))],
+    )
+    .unwrap();
+    let properties = WriterProperties::builder()
+        .set_compression(Compression::SNAPPY)
+        .set_data_page_row_count_limit(128)
+        .build();
+    let file = std::fs::File::create(&parquet_path).unwrap();
+    let mut writer = ArrowWriter::try_new(file, schema, Some(properties)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+
+    let config = relify_session_config().set_str("relify.parquet.page_cache.capacity", "1048576");
+    let session = LocalSession::open_with_options(
+        temporary.path(),
+        LocalSessionOptions::new(config, RuntimeEnvBuilder::default()),
+    )
+    .unwrap();
+    session
+        .context()
+        .register_parquet(
+            "page_cache_source",
+            parquet_path.to_str().unwrap(),
+            ParquetReadOptions::default(),
+        )
+        .await
+        .unwrap();
+
+    let first = session
+        .context()
+        .sql("SELECT value FROM page_cache_source")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(
+        first.iter().map(RecordBatch::num_rows).sum::<usize>(),
+        4_096
+    );
+    drop(first);
+    let cold = session.parquet_page_cache_stats();
+    assert!(cold.admissions > 1, "{cold:?}");
+
+    let second = session
+        .context()
+        .sql("SELECT value FROM page_cache_source")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(
+        second.iter().map(RecordBatch::num_rows).sum::<usize>(),
+        4_096
+    );
+    drop(second);
+    let warm = session.parquet_page_cache_stats();
+    assert!(warm.hits > cold.hits, "cold={cold:?}, warm={warm:?}");
+
+    session.clear_parquet_page_cache();
+    assert_eq!(session.parquet_page_cache_stats().resident_bytes, 0);
+    session
+        .context()
+        .sql("SET relify.parquet.page_cache.capacity = 0")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let admissions = session.parquet_page_cache_stats().admissions;
+    session
+        .context()
+        .sql("SELECT value FROM page_cache_source")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let disabled = session.parquet_page_cache_stats();
+    assert_eq!(disabled.capacity, 0);
+    assert_eq!(disabled.admissions, admissions);
+}
+
 #[test]
 fn session_preserves_datafusion_config_and_runtime() {
     let temporary = TempDir::new().unwrap();
@@ -99,6 +198,7 @@ fn session_preserves_datafusion_config_and_runtime() {
         &context.runtime_env().memory_pool,
         &memory_pool
     ));
+    assert_eq!(session.parquet_page_cache_stats().capacity, 4096 / 5);
 }
 
 #[derive(Default)]

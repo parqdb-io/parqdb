@@ -12,6 +12,8 @@ license = "MIT AND Apache-2.0"
 license-files = [
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
+    "vendor/arrow-rs/parquet/LICENSE.txt",
+    "vendor/datafusion/datasource-parquet/LICENSE.txt",
     "vendor/datafusion-python/LICENSE.txt",
 ]
 keywords = ["vector-search", "lakehouse", "iceberg", "parquet"]

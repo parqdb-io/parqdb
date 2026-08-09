@@ -1,5 +1,12 @@
 //! Managed Parquet relation I/O for the embedded backend.
 
+mod page_cache;
+
+pub use page_cache::ParquetPageCacheStats;
+pub(crate) use page_cache::{
+    DecompressedParquetPageCache, RelifyParquetPageCacheFactory, automatic_page_cache_capacity,
+};
+
 use std::io::Cursor;
 use std::str::FromStr;
 use std::sync::Arc;

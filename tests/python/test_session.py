@@ -61,6 +61,30 @@ def test_session_uses_datafusion_config_and_runtime(tmp_path: Path) -> None:
     ] == ["8"]
 
 
+def test_session_exposes_bounded_parquet_page_cache(tmp_path: Path) -> None:
+    source = tmp_path / "vectors.parquet"
+    write_vectors(source, list(range(1_024)), [[float(i), 0.0] for i in range(1_024)])
+    config = relify.SessionConfig().set("relify.parquet.page_cache.capacity", "1048576")
+    session = relify.connect(tmp_path / "page-cache", config=config)
+    session.register_parquet("vectors", source)
+
+    assert session.table("vectors").select("id").to_pydict()["id"] == list(range(1_024))
+    cold = session.parquet_page_cache_stats()
+    assert isinstance(cold, relify.ParquetPageCacheStats)
+    assert cold.capacity == 1_048_576
+    assert cold.admissions > 0
+
+    session.table("vectors").select("id").to_pydict()
+    warm = session.parquet_page_cache_stats()
+    assert warm.hits > cold.hits
+
+    session.clear_parquet_page_cache()
+    assert session.parquet_page_cache_stats().resident_bytes == 0
+    session.sql("SET relify.parquet.page_cache.capacity = 0")
+    session.table("vectors").select("id").to_pydict()
+    assert session.parquet_page_cache_stats().capacity == 0
+
+
 @pytest.mark.parametrize(
     ("name", "value", "expected"),
     [

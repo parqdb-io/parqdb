@@ -23,6 +23,22 @@ config_namespace! {
 }
 
 config_namespace! {
+    /// Options for the decompressed Parquet Page cache.
+    pub struct ParquetPageCacheOptions {
+        /// Cache capacity in bytes. `None` uses 20% of the effective memory limit; zero disables the cache.
+        pub capacity: Option<usize>, default = None
+    }
+}
+
+config_namespace! {
+    /// Options for Parquet reads.
+    pub struct ParquetOptions {
+        /// Decompressed Page-cache options.
+        pub page_cache: ParquetPageCacheOptions, default = ParquetPageCacheOptions::default()
+    }
+}
+
+config_namespace! {
     /// Options for index metadata.
     pub struct MetadataOptions {
         /// Metadata cache options.
@@ -35,6 +51,8 @@ config_namespace! {
 pub struct RelifyConfig {
     /// Index metadata options.
     pub metadata: MetadataOptions,
+    /// Parquet reader options.
+    pub parquet: ParquetOptions,
 }
 
 impl ConfigExtension for RelifyConfig {
@@ -92,12 +110,18 @@ impl ConfigField for RelifyConfig {
             &format!("{key_prefix}.metadata"),
             "Index metadata options.",
         );
+        self.parquet.visit(
+            visitor,
+            &format!("{key_prefix}.parquet"),
+            "Parquet reader options.",
+        );
     }
 
     fn set(&mut self, key: &str, value: &str) -> DataFusionResult<()> {
         let (section, remainder) = key.split_once('.').unwrap_or((key, ""));
         match section {
             "metadata" => self.metadata.set(remainder, value),
+            "parquet" => self.parquet.set(remainder, value),
             _ => Err(DataFusionError::Configuration(format!(
                 "Config value \"{section}\" not found on RelifyConfig"
             ))),
@@ -157,6 +181,17 @@ pub(crate) fn metadata_cache_config(config: &SessionConfig) -> MetadataCacheConf
     MetadataCacheConfig::new(cache.max_entries, cache.max_bytes)
 }
 
+pub(crate) fn parquet_page_cache_capacity(config: &SessionConfig) -> Option<usize> {
+    config
+        .options()
+        .extensions
+        .get::<RelifyConfig>()
+        .expect("Relify config extension must be installed")
+        .parquet
+        .page_cache
+        .capacity
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,7 +200,8 @@ mod tests {
     fn relify_config_uses_hierarchical_datafusion_keys() {
         let config = relify_session_config()
             .set_str("relify.metadata.cache.max_entries", "7")
-            .set_str("relify.metadata.cache.max_bytes", "4096");
+            .set_str("relify.metadata.cache.max_bytes", "4096")
+            .set_str("relify.parquet.page_cache.capacity", "8192");
         let (config, _) =
             LocalSessionOptions::new(config, RuntimeEnvBuilder::default()).into_parts();
 
@@ -173,6 +209,7 @@ mod tests {
             metadata_cache_config(&config),
             MetadataCacheConfig::new(7, 4096)
         );
+        assert_eq!(parquet_page_cache_capacity(&config), Some(8192));
     }
 
     #[test]

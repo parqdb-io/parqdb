@@ -163,8 +163,10 @@ fn lvq_distance_scans_plain_byte_array_strides() {
 
 #[tokio::test]
 async fn fuses_distance_projection_topk_and_updates_its_dynamic_filter() {
-    let context =
-        relify_session_context(relify_session_config(), RuntimeEnvBuilder::default()).unwrap();
+    let context = relify_session_context(
+        relify_session_config(),
+        Arc::new(RuntimeEnvBuilder::default().build().unwrap()),
+    );
     let first = batch(0..8);
     let second = batch(100..108);
     let schema = first.schema();
@@ -243,8 +245,10 @@ async fn fuses_distance_projection_topk_and_updates_its_dynamic_filter() {
 
 #[tokio::test]
 async fn large_top_k_uses_batch_selection_and_retains_only_projected_columns() {
-    let context =
-        relify_session_context(relify_session_config(), RuntimeEnvBuilder::default()).unwrap();
+    let context = relify_session_context(
+        relify_session_config(),
+        Arc::new(RuntimeEnvBuilder::default().build().unwrap()),
+    );
     let first = batch(0..2_000);
     let second = batch(2_000..3_000);
     let schema = first.schema();
