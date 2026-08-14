@@ -5,7 +5,7 @@
     <a href="https://github.com/petrizhang/relify/blob/main/README.zh-CN.md">中文</a>
   </p>
   <p>
-    <strong>面向 SQL 引擎的开放向量索引。</strong>
+    <strong>面向开放湖仓的向量索引与 SQL 原生检索。</strong>
   </p>
   <p>
     <a href="https://pypi.org/project/relify/"><img alt="PyPI" src="https://img.shields.io/pypi/v/relify.svg"></a>
