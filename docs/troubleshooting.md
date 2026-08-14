@@ -143,16 +143,17 @@ exceed the index's `nlist`.
 
 ### A repeated query spends time scanning or decoding the index
 
-For memory-resident workloads, cache the published snapshot:
+Inspect whether the bounded Parquet Page cache is serving the workload:
 
 ```python
-info = session.cache_index("documents_embedding")
-print(info.resident_bytes)
+before = session.parquet_page_cache_stats()
+session.collect(query)
+after = session.parquet_page_cache_stats()
+print(after.hits - before.hits, after.misses - before.misses)
 ```
 
-The cache does not include the source table. Ensure the process has enough
-memory for decoded Arrow relations and uncache the index when that tradeoff is
-not appropriate.
+If misses remain high, check `relify.parquet.page_cache.capacity`, index pruning,
+and whether the workload reuses the same index partitions.
 
 ### Determine where time is spent
 

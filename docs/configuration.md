@@ -61,6 +61,20 @@ limit to `0` to disable the cache. The byte budget is based on serialized
 metadata size; parsed objects have additional allocator overhead, so this is a
 bounded cache policy rather than a hard process-memory limit.
 
+Query planning uses two session-scoped caches configured when the session is
+created:
+
+| Setting | Default | Cached value |
+| --- | ---: | --- |
+| `relify.query.manifest.cache.max_entries` | `128` | Immutable index-relation manifests |
+| `relify.query.manifest.cache.max_bytes` | `67108864` | Estimated manifest bytes |
+| `relify.query.centroid.cache.max_entries` | `128` | Native-routing centroid matrices |
+| `relify.query.centroid.cache.max_bytes` | `268435456` | Centroid value bytes |
+
+Set either limit for one cache to `0` to disable that cache. These bounds must
+be supplied on the `SessionConfig` passed to `connect`; changing them with
+`SET` after session creation does not resize an existing cache.
+
 Parquet scans use a bounded cache of complete decompressed Pages. Its byte
 capacity defaults to 20% of the DataFusion memory-pool limit, or the effective
 machine limit when the pool is unbounded:

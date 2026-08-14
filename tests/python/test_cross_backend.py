@@ -166,9 +166,6 @@ def test_datafusion_queries_spark_style_iceberg_index(tmp_path: Path) -> None:
         index_root=metadata_root,
         iceberg=iceberg,
     )
-    cached = session.cache_index("documents_embedding")
-    assert cached.relation_count == 2
-    assert cached.resident_bytes > 0
     assert _search_documents(session) == {
         "document_id": [1, 2],
         "title": ["a", "b"],

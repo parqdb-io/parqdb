@@ -13,7 +13,7 @@ import sys
 import tempfile
 import time
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -332,6 +332,7 @@ def benchmark_relify(
     rebuild: bool,
     build_missing: bool,
     show_progress: bool,
+    page_cache_capacity_bytes: int | None,
 ) -> dict[str, Any]:
     import relify
 
@@ -399,15 +400,17 @@ def benchmark_relify(
         if measure_search:
             if queries is None or expected is None:
                 raise ValueError("queries and ground truth are required for search")
-            query_session = relify.connect(root / "relify-data")
+            query_config = relify.SessionConfig()
+            if page_cache_capacity_bytes is not None:
+                query_config.set(
+                    "relify.parquet.page_cache.capacity",
+                    str(page_cache_capacity_bytes),
+                )
+            query_session = relify.connect(root / "relify-data", config=query_config)
             configure_relify_session(query_session, threads)
             query_table = query_session.table("benchmark")
             assert isinstance(query_table, relify.SourceTable)
-            load_started = time.perf_counter()
-            cached = query_session.cache_index("benchmark_embedding")
-            result["index_load_seconds"] = time.perf_counter() - load_started
-            result["index_resident_bytes"] = cached.resident_bytes
-            result["cache_kind"] = "decoded Arrow buffers"
+            result["cache_kind"] = "bounded decompressed Parquet page cache"
             result["search_curve"] = measure_search_curve(
                 relify_search(
                     query_session,
@@ -423,6 +426,7 @@ def benchmark_relify(
                 warmup_queries=warmup_queries,
                 progress=CounterProgressBar("Relify query", enabled=show_progress),
             )
+            result["page_cache"] = asdict(query_session.parquet_page_cache_stats())
         return result
 
 
@@ -709,14 +713,16 @@ def validate_args(
         raise ValueError("nlist must be in 1..=rows")
     if args.operation == "build":
         return
-    if (
-        args.num_queries <= 0
-        or args.search_repetitions <= 0
-        or args.warmup_queries <= 0
-    ):
+    if args.num_queries <= 0 or args.search_repetitions <= 0 or args.warmup_queries < 0:
         raise ValueError(
-            "num-queries, search-repetitions, and warmup-queries must be positive"
+            "num-queries and search-repetitions must be positive; warmup-queries "
+            "must be non-negative"
         )
+    if (
+        args.page_cache_capacity_bytes is not None
+        and args.page_cache_capacity_bytes < 0
+    ):
+        raise ValueError("page-cache-capacity-bytes must be non-negative")
     if args.query_source_start is not None and args.query_source_start < 0:
         raise ValueError("query-source-start must be non-negative")
     if max(nprobe_values) > args.nlist:
@@ -877,6 +883,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
                     rebuild=args.rebuild,
                     build_missing=args.operation == "build",
                     show_progress=not args.no_progress,
+                    page_cache_capacity_bytes=args.page_cache_capacity_bytes,
                 )
                 for trial in range(args.repetitions)
             ]
@@ -1004,6 +1011,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
                     "curve_k_values": list(k_values),
                     "search_repetitions": args.search_repetitions,
                     "warmup_queries": args.warmup_queries,
+                    "page_cache_capacity_bytes": args.page_cache_capacity_bytes,
                     "query_mode": "one-query-at-a-time with intra-query parallelism",
                     "point_order_seed": KMEANS_SEED,
                 }
@@ -1067,6 +1075,7 @@ def build_parser(implementation: str = "relify") -> argparse.ArgumentParser:
         curve_k_values="1",
         search_repetitions=1,
         warmup_queries=1,
+        page_cache_capacity_bytes=None,
     )
     return command
 
@@ -1096,6 +1105,10 @@ def query_parser(implementation: str = "relify") -> argparse.ArgumentParser:
     command.add_argument("--curve-k-values", default="100,1000,10000")
     command.add_argument("--search-repetitions", type=int, default=3)
     command.add_argument("--warmup-queries", type=int, default=5)
+    if implementation == "relify":
+        command.add_argument("--page-cache-capacity-bytes", type=int)
+    else:
+        command.set_defaults(page_cache_capacity_bytes=None)
     add_common_arguments(command, implementation=implementation)
     command.set_defaults(
         implementation=implementation,

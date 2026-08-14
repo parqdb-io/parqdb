@@ -70,6 +70,11 @@ fn relation(temporary: &TempDir, name: &str) -> (ParquetStore, String) {
 }
 
 async fn put_part(store: &ParquetStore, relation: &str, name: &str, batch: &RecordBatch) {
+    let location = child_location(relation, name, false).unwrap();
+    put_parquet_file(store, &location, batch).await;
+}
+
+async fn put_parquet_file(store: &ParquetStore, location: &str, batch: &RecordBatch) {
     let mut bytes = Vec::new();
     {
         let mut writer = ArrowWriter::try_new(
@@ -81,8 +86,7 @@ async fn put_part(store: &ParquetStore, relation: &str, name: &str, batch: &Reco
         writer.write(batch).unwrap();
         writer.close().unwrap();
     }
-    let location = child_location(relation, name, false).unwrap();
-    let resolved = store.registry().resolve(&location).unwrap();
+    let resolved = store.registry().resolve(location).unwrap();
     resolved
         .store()
         .put_opts(
@@ -191,6 +195,80 @@ async fn hive_writer_allows_postings_without_vectors() {
     assert_eq!(
         actual.schema().field_with_name("cid").unwrap().data_type(),
         &DataType::Int32
+    );
+}
+
+#[tokio::test]
+async fn uniform_provider_ignores_non_parquet_sidecars() {
+    let temporary = TempDir::new().unwrap();
+    let (store, location) = relation(&temporary, "uniform");
+    let expected = batch(&[1, 2]);
+    put_part(&store, &location, "a.parquet", &expected).await;
+
+    let sidecar_location = child_location(&location, "README.txt", false).unwrap();
+    let resolved = store.registry().resolve(&sidecar_location).unwrap();
+    resolved
+        .store()
+        .put_opts(
+            resolved.path(),
+            Bytes::from_static(b"not parquet").into(),
+            PutMode::Create.into(),
+        )
+        .await
+        .unwrap();
+
+    let provider = store
+        .uniform_dataset_provider(&location, Vec::new())
+        .await
+        .unwrap();
+
+    assert_eq!(provider.schema(), expected.schema());
+}
+
+#[tokio::test]
+async fn uniform_provider_accepts_a_single_file_location() {
+    let temporary = TempDir::new().unwrap();
+    let store = ParquetStore::new(StorageRegistry::default());
+    let root = Url::from_directory_path(temporary.path()).unwrap();
+    let location = child_location(root.as_str(), "single.parquet", false).unwrap();
+    let expected = batch(&[1, 2]);
+    put_parquet_file(&store, &location, &expected).await;
+
+    let provider = store
+        .uniform_dataset_provider(&location, Vec::new())
+        .await
+        .unwrap();
+
+    assert_eq!(provider.schema(), expected.schema());
+}
+
+#[tokio::test]
+async fn uniform_provider_rejects_a_directory_without_parquet_data() {
+    let temporary = TempDir::new().unwrap();
+    let (store, location) = relation(&temporary, "empty");
+    for (name, bytes) in [
+        ("README.txt", Bytes::from_static(b"not parquet")),
+        ("empty.parquet", Bytes::new()),
+    ] {
+        let file = child_location(&location, name, false).unwrap();
+        let resolved = store.registry().resolve(&file).unwrap();
+        resolved
+            .store()
+            .put_opts(resolved.path(), bytes.into(), PutMode::Create.into())
+            .await
+            .unwrap();
+    }
+
+    let error = store
+        .uniform_dataset_provider(&location, Vec::new())
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, Error::InvalidArgument(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("Parquet table contains no data files")
     );
 }
 

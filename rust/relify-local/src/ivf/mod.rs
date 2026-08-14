@@ -1,10 +1,5 @@
 //! Arrow-level IVF relation validation and access.
 
-mod cache;
-mod cached_scan;
-
-pub(crate) use cache::CachedIvfPostings;
-
 #[cfg(test)]
 use std::collections::{HashMap, HashSet};
 #[cfg(test)]

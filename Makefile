@@ -5,12 +5,15 @@ PACKAGE_TARGET_DIR := $(CURDIR)/target/package
 PYTHON_SOURCES := python tests benchmarks examples/python tools spec/fixtures/*/generate.py
 SEARCH_BENCHMARK_RESULT := benchmarks/results/macos-arm64-2026-07-29/1m.json
 
-.PHONY: sync develop format lint test test-python test-rust test-interop test-capabilities test-s3 test-hdfs test-spark-iceberg test-starrocks test-remote-storage audit verify-datafusion-vendor fixtures datasets benchmark-smoke benchmark-chart sbom package verify-package check
+.PHONY: sync develop develop-debug format lint test test-python test-rust test-interop test-capabilities test-s3 test-hdfs test-spark-iceberg test-starrocks test-remote-storage audit verify-datafusion-vendor fixtures datasets benchmark-smoke benchmark-chart sbom package verify-package check
 
 sync:
 	UV_CACHE_DIR=$(UV_CACHE_DIR) uv sync --no-install-project
 
 develop:
+	$(UV_RUN) maturin develop --release
+
+develop-debug:
 	$(UV_RUN) maturin develop
 
 format:

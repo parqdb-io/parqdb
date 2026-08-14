@@ -74,7 +74,7 @@ dev = [
     "markdown-it-py>=4,<5",
     "maturin>=1.9,<2",
     "pip-audit>=2.10,<3",
-    "pyright>=1.1.400,<2",
+    "pyright[nodejs]>=1.1.400,<2",
     "ruff>=0.12,<1",
 ]
 

@@ -51,7 +51,6 @@ impl LocalSession {
         self.indexes
             .register(&local_index_identifier(name)?, metadata_location)
             .await?;
-        self.invalidate_index_cache(name)?;
         Ok(())
     }
 
@@ -59,7 +58,6 @@ impl LocalSession {
     pub fn drop_index(&self, name: &str) -> Result<()> {
         let _guard = self.coordination.write()?;
         self.indexes.drop(&local_index_identifier(name)?)?;
-        self.invalidate_index_cache(name)?;
         Ok(())
     }
 
@@ -122,7 +120,6 @@ impl LocalSession {
         }
         let _guard = self.coordination.write()?;
         self.indexes.drop(&identifier)?;
-        self.invalidate_index_cache(name)?;
         Ok(())
     }
 

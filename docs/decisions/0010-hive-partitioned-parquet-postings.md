@@ -5,7 +5,7 @@
 
 ## Context
 
-An uncached IVF query selects clusters before scanning postings. Keeping many
+An IVF query selects clusters before scanning Parquet postings. Keeping many
 clusters in each Parquet file made this selection depend on row-group pruning,
 which still caused near-full physical reads under a 2 GiB memory limit.
 
@@ -21,12 +21,20 @@ The local builder hash-partitions rows by `cid` across a bounded number of
 execution tasks and sorts each task by `cid`. A streaming writer keeps only the
 current cluster file open for each task and closes it before advancing to the
 next cluster. Hash collisions may share a build task but cannot share an output
-file. The local reader declares the partition column when registering the
-relation, allowing selected CIDs to prune files during physical planning.
+file. The local reader lists an immutable postings relation once to build a
+`cid`-to-files manifest and reads the uniform schema from the first listed file.
+Static `cid` predicates select files directly from that manifest before
+DataFusion constructs the Parquet scan. Manifests use a bounded planning cache
+and stable SQL registrations resolve them lazily instead of retaining them. The
+scan still uses DataFusion's standard Parquet reader, projection, page cache,
+and runtime-filter path; Relify does not cache decoded postings.
 
 ## Consequences
 
 The number of postings files equals the number of non-empty clusters. A single
 large cluster is not split according to the general target-file-size option.
+Opening a relation lists object metadata and reads one footer for schema
+discovery. Footers for selected files are read by DataFusion during execution;
+lazy provider creation charges manifest construction to the first query.
 Parquet readers must understand the defined Hive partition layout. This decision
 does not change the Iceberg representation of IVF postings.

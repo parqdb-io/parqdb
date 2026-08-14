@@ -545,153 +545,6 @@ async fn registered_source_binding_reuses_the_datafusion_table_provider() {
 }
 
 #[tokio::test]
-async fn backend_cache_materializes_and_releases_complete_index_snapshots() {
-    let (_temporary, session, source_path) = direct_pid_fixture().await;
-
-    let cached = session.cache_index("direct_index").await.unwrap();
-
-    assert_eq!(
-        cached,
-        IndexCacheInfo {
-            name: "direct_index".into(),
-            snapshot_id: 701,
-            relation_count: 2,
-            resident_bytes: cached.resident_bytes,
-        }
-    );
-    assert!(cached.resident_bytes > 0);
-    assert!(session.is_index_cached("direct_index").unwrap());
-    assert_eq!(session.cache_index("direct_index").await.unwrap(), cached);
-    let loaded = session
-        .select_index(
-            &RelationReference::Parquet {
-                uri: directory_to_file_uri(&source_path).unwrap(),
-            },
-            Some("direct_index"),
-            None,
-        )
-        .await
-        .unwrap();
-    let centroid_key = source::relation_key(
-        loaded
-            .metadata
-            .current_snapshot()
-            .unwrap()
-            .index_relations
-            .get("ivf_centroids")
-            .unwrap(),
-    );
-    assert_eq!(
-        session
-            .cached_centroid_values(&centroid_key)
-            .unwrap()
-            .unwrap()
-            .as_ref(),
-        [0.0, 0.0, 10.0, 0.0]
-    );
-    let request = SearchRequest {
-        source: RelationReference::Parquet {
-            uri: directory_to_file_uri(&source_path).unwrap(),
-        },
-        index: Some("direct_index".into()),
-        column: None,
-        query: vec![0.0, 0.0],
-        nprobe: Some(1),
-        limit: 2,
-        projection: Some(vec!["source_pid".into()]),
-        filter: None,
-        bypass_index: false,
-    };
-    let plan = session.explain_search(&request, false).await.unwrap();
-    assert!(plan.contains("IvfTopKExec"), "{plan}");
-    assert!(plan.contains("CachedIvfScanExec"), "{plan}");
-    assert!(!plan.contains("FilterExec"), "{plan}");
-    assert!(!plan.contains("cid IN"), "{plan}");
-    let sql = session.search_sql(&request).await.unwrap();
-    let cached_sql_plan = session
-        .context()
-        .sql(&sql)
-        .await
-        .unwrap()
-        .create_physical_plan()
-        .await
-        .unwrap();
-    let cached_sql_plan = datafusion::physical_plan::displayable(cached_sql_plan.as_ref())
-        .indent(false)
-        .to_string();
-    assert!(
-        cached_sql_plan.contains("CachedIvfScanExec"),
-        "{cached_sql_plan}"
-    );
-    let cached_parquet_scans = cached_sql_plan.matches("file_type=parquet").count();
-    assert!(session.uncache_index("direct_index").unwrap());
-    assert!(!session.uncache_index("direct_index").unwrap());
-    assert!(!session.is_index_cached("direct_index").unwrap());
-    let uncached_sql_plan = session
-        .context()
-        .sql(&sql)
-        .await
-        .unwrap()
-        .create_physical_plan()
-        .await
-        .unwrap();
-    let uncached_sql_plan = datafusion::physical_plan::displayable(uncached_sql_plan.as_ref())
-        .indent(false)
-        .to_string();
-    assert!(
-        uncached_sql_plan.matches("file_type=parquet").count() > cached_parquet_scans,
-        "{uncached_sql_plan}"
-    );
-}
-
-#[tokio::test]
-async fn cached_source_join_uses_runtime_filter_and_matches_uncached_results() {
-    let (_temporary, session, source_path) = direct_pid_fixture().await;
-    let request = SearchRequest {
-        source: RelationReference::Parquet {
-            uri: directory_to_file_uri(&source_path).unwrap(),
-        },
-        index: Some("direct_index".into()),
-        column: None,
-        query: vec![0.0, 0.0],
-        nprobe: Some(1),
-        limit: 2,
-        projection: Some(vec!["source_pid".into(), "label".into()]),
-        filter: None,
-        bypass_index: false,
-    };
-    let (uncached, uncached_schema) = session.search(&request).await.unwrap();
-    let sql = session.search_sql(&request).await.unwrap();
-
-    session.cache_index("direct_index").await.unwrap();
-    let plan = session.explain_search(&request, false).await.unwrap();
-    assert!(plan.contains("CachedIvfScanExec"), "{plan}");
-    assert!(plan.contains("runtime_filters=1"), "{plan}");
-    let (cached, cached_schema) = session.search(&request).await.unwrap();
-    assert_eq!(cached_schema, uncached_schema);
-    assert_eq!(cached, uncached);
-    let cached_sql = session
-        .context()
-        .sql(&sql)
-        .await
-        .unwrap()
-        .collect()
-        .await
-        .unwrap();
-
-    assert!(session.uncache_index("direct_index").unwrap());
-    let uncached_sql = session
-        .context()
-        .sql(&sql)
-        .await
-        .unwrap()
-        .collect()
-        .await
-        .unwrap();
-    assert_eq!(cached_sql, uncached_sql);
-}
-
-#[tokio::test]
 async fn accepts_a_caller_supplied_index_catalog() {
     let temporary = TempDir::new().unwrap();
     let root = temporary.path().join("relify");
@@ -806,7 +659,7 @@ async fn searches_an_index_by_its_persisted_source_key() {
 }
 
 #[tokio::test]
-async fn large_nprobe_pushes_a_static_filter_into_uncached_postings() {
+async fn large_nprobe_pushes_a_static_filter_into_parquet_postings() {
     let temporary = TempDir::new().unwrap();
     let session = LocalSession::open(temporary.path().join("relify")).unwrap();
     let source_path = temporary.path().join("source");
@@ -886,7 +739,7 @@ async fn large_nprobe_pushes_a_static_filter_into_uncached_postings() {
 }
 
 #[tokio::test]
-async fn lvq_indexes_build_and_query_through_uncached_and_cached_paths() {
+async fn lvq_indexes_build_and_query_through_parquet() {
     for (encoding, name) in [
         (PostingEncoding::Lvq4, "lvq4_index"),
         (PostingEncoding::Lvq8, "lvq8_index"),
@@ -937,8 +790,8 @@ async fn assert_lvq_index(encoding: PostingEncoding, name: &str) {
         filter: None,
         bypass_index: false,
     };
-    let (uncached, _) = session.search(&request).await.unwrap();
-    assert_nearest_pid(&uncached);
+    let (result, _) = session.search(&request).await.unwrap();
+    assert_nearest_pid(&result);
     let plan = session.explain_search(&request, false).await.unwrap();
     assert!(plan.contains("IvfTopKExec"), "{plan}");
     assert!(
@@ -954,10 +807,6 @@ async fn assert_lvq_index(encoding: PostingEncoding, name: &str) {
         arrow::util::display::array_value_to_string(joined[0].column(1), 0).unwrap(),
         "thirty"
     );
-
-    session.cache_index(name).await.unwrap();
-    let (cached, _) = session.search(&request).await.unwrap();
-    assert_nearest_pid(&cached);
 }
 
 fn assert_lvq_postings_schema(schema: &Schema) {

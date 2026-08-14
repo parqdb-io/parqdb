@@ -28,7 +28,6 @@ type PyIndexInfo = (
     BTreeMap<String, String>,
     i64,
 );
-type PyIndexCacheInfo = (String, i64, usize, usize);
 type PyParquetPageCacheStats = (usize, usize, usize, usize, u64, u64, u64, u64, u64, u64);
 static SHARED_RUNTIME: OnceLock<std::result::Result<Arc<Runtime>, String>> = OnceLock::new();
 
@@ -381,33 +380,6 @@ impl PyNativeSession {
     fn drop_index(&self, name: &str) -> PyResult<()> {
         self.session
             .drop_index(name)
-            .map_err(|error| core_error(&error))
-    }
-
-    fn cache_index(&self, py: Python<'_>, name: String) -> PyResult<PyIndexCacheInfo> {
-        let session = Arc::clone(&self.session);
-        let runtime = Arc::clone(&self.runtime);
-        py.detach(move || runtime.block_on(session.cache_index(&name)))
-            .map(|info| {
-                (
-                    info.name,
-                    info.snapshot_id,
-                    info.relation_count,
-                    info.resident_bytes,
-                )
-            })
-            .map_err(|error| core_error(&error))
-    }
-
-    fn is_index_cached(&self, name: &str) -> PyResult<bool> {
-        self.session
-            .is_index_cached(name)
-            .map_err(|error| core_error(&error))
-    }
-
-    fn uncache_index(&self, name: &str) -> PyResult<bool> {
-        self.session
-            .uncache_index(name)
             .map_err(|error| core_error(&error))
     }
 

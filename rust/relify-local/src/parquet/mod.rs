@@ -14,12 +14,17 @@ use std::sync::Arc;
 use arrow::array::{Array, Int32Array};
 #[cfg(test)]
 use arrow::compute::concat_batches;
-use arrow::datatypes::DataType;
-#[cfg(test)]
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
+use datafusion::catalog::Session;
+#[cfg(test)]
+use datafusion::catalog::TableProvider;
 use datafusion::dataframe::DataFrame;
+use datafusion::datasource::file_format::FileFormat;
+use datafusion::datasource::file_format::options::ReadOptions;
+use datafusion::datasource::file_format::parquet::ParquetFormat;
+use datafusion::datasource::listing::{ListingTable, ListingTableConfig, ListingTableUrl};
 use datafusion::physical_expr::LexOrdering;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr_common::sort_expr::PhysicalSortExpr;
@@ -31,7 +36,7 @@ use datafusion::prelude::{ParquetReadOptions, SessionContext};
 #[cfg(test)]
 use datafusion::prelude::{col, lit};
 use futures::{StreamExt, TryStreamExt};
-use object_store::{ObjectStore, PutMode};
+use object_store::{ObjectStore, ObjectStoreExt, PutMode};
 use parquet::arrow::async_writer::ParquetObjectWriter;
 use parquet::arrow::{ArrowWriter, AsyncArrowWriter};
 use parquet::basic::{Compression, Encoding};
@@ -285,6 +290,7 @@ impl ParquetStore {
             .await?)
     }
 
+    #[cfg(test)]
     pub(crate) async fn partitioned_dataframe(
         &self,
         location: &str,
@@ -300,11 +306,40 @@ impl ParquetStore {
             .await?)
     }
 
+    /// Creates a provider for a dataset whose Parquet files share one schema.
+    ///
+    /// Relify index publication guarantees a uniform schema, so the first data
+    /// file is sufficient and avoids `DataFusion`'s default all-file schema
+    /// merge.
+    #[cfg(test)]
+    pub(crate) async fn uniform_dataset_provider(
+        &self,
+        location: &str,
+        partition_columns: Vec<(String, DataType)>,
+    ) -> Result<Arc<dyn TableProvider>> {
+        let (provider, _) = self
+            .uniform_dataset_listing_table(location, partition_columns)
+            .await?;
+        Ok(provider)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn uniform_dataset_listing_table(
+        &self,
+        location: &str,
+        partition_columns: Vec<(String, DataType)>,
+    ) -> Result<(Arc<ListingTable>, SchemaRef)> {
+        uniform_dataset_listing_table(
+            &self.registry,
+            &self.context.state(),
+            location,
+            partition_columns,
+        )
+        .await
+    }
+
     pub(crate) fn register(&self, location: &str) -> Result<()> {
-        let resolved = self.registry.resolve(location)?;
-        self.context
-            .register_object_store(resolved.base_url(), resolved.store());
-        Ok(())
+        register_object_store(&self.registry, &self.context.state(), location)
     }
 
     async fn require_empty(&self, location: &str) -> Result<()> {
@@ -322,6 +357,87 @@ impl ParquetStore {
         }
         Ok(())
     }
+}
+
+pub(crate) async fn uniform_dataset_listing_table(
+    registry: &StorageRegistry,
+    state: &dyn Session,
+    location: &str,
+    partition_columns: Vec<(String, DataType)>,
+) -> Result<(Arc<ListingTable>, SchemaRef)> {
+    register_object_store(registry, state, location)?;
+    let schema = infer_uniform_dataset_schema(registry, state, location).await?;
+    let options = ParquetReadOptions::default()
+        .schema(schema.as_ref())
+        .table_partition_cols(partition_columns)
+        .to_listing_options(state.config(), state.default_table_options());
+    let table_path = ListingTableUrl::parse(location)?;
+    let provider = ListingTable::try_new(
+        ListingTableConfig::new(table_path)
+            .with_listing_options(options)
+            .with_schema(Arc::clone(&schema)),
+    )?
+    .with_cache(state.runtime_env().cache_manager.get_file_statistic_cache());
+    Ok((Arc::new(provider), schema))
+}
+
+async fn infer_uniform_dataset_schema(
+    registry: &StorageRegistry,
+    state: &dyn Session,
+    location: &str,
+) -> Result<SchemaRef> {
+    let resolved = registry.resolve(location)?;
+    let store = resolved.store();
+    let first = if resolved.uri().path().ends_with('/') {
+        first_parquet_object(store.as_ref(), resolved.path()).await?
+    } else {
+        let object = store
+            .head(resolved.path())
+            .await
+            .map_err(relify_storage::Error::from)?;
+        valid_parquet_object(object)
+    };
+    let first = first.ok_or_else(|| {
+        Error::InvalidArgument(format!("Parquet table contains no data files: {location}"))
+    })?;
+    let options = state.default_table_options().parquet;
+    Ok(ParquetFormat::new()
+        .with_options(options)
+        .infer_schema(state, &store, &[first])
+        .await?)
+}
+
+fn register_object_store(
+    registry: &StorageRegistry,
+    state: &dyn Session,
+    location: &str,
+) -> Result<()> {
+    let resolved = registry.resolve(location)?;
+    state
+        .runtime_env()
+        .register_object_store(resolved.base_url(), resolved.store());
+    Ok(())
+}
+
+async fn first_parquet_object(
+    store: &dyn ObjectStore,
+    prefix: &object_store::path::Path,
+) -> Result<Option<object_store::ObjectMeta>> {
+    let mut objects = store.list(Some(prefix));
+    while let Some(object) = objects
+        .try_next()
+        .await
+        .map_err(relify_storage::Error::from)?
+    {
+        if let Some(object) = valid_parquet_object(object) {
+            return Ok(Some(object));
+        }
+    }
+    Ok(None)
+}
+
+fn valid_parquet_object(object: object_store::ObjectMeta) -> Option<object_store::ObjectMeta> {
+    (object.size > 0 && object.location.as_ref().ends_with(".parquet")).then_some(object)
 }
 
 async fn write_hive_cid_stream(

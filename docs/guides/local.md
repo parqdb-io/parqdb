@@ -147,21 +147,18 @@ The vector search and aggregation remain in one DataFusion plan. Use
 SQL is executable in the originating session because it refers to registered
 source and index relations.
 
-## Cache Repeated Queries
+## Page Cache
 
-Materialize one immutable index snapshot as decoded Arrow data before a
-repeated-query workload:
+Repeated queries use the session's bounded decompressed Parquet Page cache:
 
 ```python
-cached = session.cache_index("documents_embedding")
-print(cached.snapshot_id, cached.resident_bytes)
-
-assert session.is_index_cached("documents_embedding")
-session.uncache_index("documents_embedding")
+stats = session.parquet_page_cache_stats()
+print(stats.resident_bytes, stats.hits, stats.misses)
+session.clear_parquet_page_cache()
 ```
 
-The cache includes index relations, not the source table. A refresh, catalog
-replacement, or drop invalidates the cached snapshot.
+The cache is capacity-bounded and shared by Parquet index and source scans in
+the session. Configure it with `relify.parquet.page_cache.capacity`.
 
 ## Refresh and Remove
 

@@ -369,13 +369,7 @@ impl LocalSession {
     ) -> Result<datafusion::dataframe::DataFrame> {
         reference.validate()?;
         let key = relation_key(&reference);
-        if let Some(provider) = self
-            .relation_providers
-            .read()
-            .map_err(|_| relation_provider_lock_error())?
-            .get(&key)
-            .cloned()
-        {
+        if let Some(provider) = self.index_relation_providers.registered(&key)? {
             return Ok(self.context.read_table(provider)?);
         }
         let provider = relify_iceberg::exact_snapshot_provider(
@@ -384,13 +378,7 @@ impl LocalSession {
             file_io_properties,
         )
         .await?;
-        {
-            let mut providers = self
-                .relation_providers
-                .write()
-                .map_err(|_| relation_provider_lock_error())?;
-            providers.insert(key, Arc::clone(&provider));
-        }
+        let provider = self.index_relation_providers.register(key, provider)?;
         self.bind_provider_reference(reference, Arc::clone(&provider), None)?;
         Ok(self.context.read_table(provider)?)
     }
@@ -410,36 +398,6 @@ impl LocalSession {
                         relation_key(reference)
                     ))
                 }),
-        }
-    }
-
-    pub(super) async fn relation_dataframe(
-        &self,
-        reference: &RelationReference,
-        role: &str,
-    ) -> Result<datafusion::dataframe::DataFrame> {
-        match reference {
-            RelationReference::Parquet { uri } if role == "ivf_postings" => {
-                self.parquet
-                    .partitioned_dataframe(uri, vec![("cid".into(), DataType::Int32)])
-                    .await
-            }
-            RelationReference::Parquet { uri } => self.parquet.dataframe(uri).await,
-            RelationReference::Iceberg { .. } => {
-                let key = relation_key(reference);
-                let provider = self
-                    .relation_providers
-                    .read()
-                    .map_err(|_| relation_provider_lock_error())?
-                    .get(&key)
-                    .cloned()
-                    .ok_or_else(|| {
-                        Error::InvalidArgument(format!(
-                            "Iceberg relation is not registered in this session: {key}"
-                        ))
-                    })?;
-                Ok(self.context.read_table(provider)?)
-            }
         }
     }
 
@@ -673,10 +631,6 @@ fn invalid_table_definition(message: String) -> Error {
 
 fn source_binding_lock_error() -> Error {
     Error::InvalidArgument("source binding lock is poisoned".into())
-}
-
-fn relation_provider_lock_error() -> Error {
-    Error::InvalidArgument("relation provider lock is poisoned".into())
 }
 
 pub(super) fn canonical_source(registry: &StorageRegistry, source: &str) -> Result<String> {

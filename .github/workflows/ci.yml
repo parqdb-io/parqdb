@@ -76,7 +76,7 @@ jobs:
 
       - name: Build native extension
         if: steps.scope.outputs.docs_only != 'true'
-        run: make develop
+        run: make develop-debug
 
       - name: Run quality gates
         if: steps.scope.outputs.docs_only != 'true'

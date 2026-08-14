@@ -22,7 +22,6 @@ from ._native import (
 from .api import (
     IVF,
     CatalogEntry,
-    IndexCacheInfo,
     IndexCatalog,
     IndexInfo,
     IndexStatus,
@@ -51,7 +50,6 @@ __all__ = [
     "BuildAlreadyRunningError",
     "CatalogEntry",
     "CatalogError",
-    "IndexCacheInfo",
     "IndexCatalog",
     "IndexInfo",
     "IndexNotFoundError",

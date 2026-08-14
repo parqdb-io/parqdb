@@ -199,35 +199,37 @@ candidate decisions and retained-batch memory.
 
 Relify routes centroid matrices up to a bounded in-process size with its native
 SIMD kernel; larger matrices remain in the relational plan as a centroid
-distance projection, Top-K, and postings semi-join. For uncached Parquet
-indexes, native routing attaches the selected CIDs as a static scan predicate.
+distance projection, Top-K, and postings semi-join. Native routing attaches the
+selected CIDs as a static predicate on the Parquet scan. A session caches
+validated native centroid matrices by immutable metadata location, with both
+entry and byte limits.
 The local writer stores postings in Hive-style `cid=<value>` partitions with
 one Parquet file per non-empty cluster. It hash-partitions construction work by
 `cid` first, so one cluster reaches exactly one Hive writer. The local reader
-binds `cid` as a partition column, allowing DataFusion to remove unselected
-files while planning the scan. A full probe needs neither centroid routing nor
-a cluster predicate. IVF postings store exact vectors by default,
+lists each immutable postings relation once to build a `cid`-to-files manifest
+and reads the uniform schema from the first listed file. Selected CIDs map
+directly to DataFusion file groups, avoiding per-query object listing and
+whole-relation partition pruning while retaining the standard Parquet reader
+and page cache.
+The session retains manifests in a configurable entry- and byte-bounded
+planning cache;
+oversized manifests are used for the current plan but not admitted. Stable
+internal table names keep only a lightweight deferred provider and therefore do
+not pin an evicted manifest. Decoded postings are not cached. A full probe needs
+neither centroid routing nor a cluster predicate. IVF postings store exact
+vectors by default,
 so key/vector-only projections without a source filter can compute and rank
 results from index tables alone. Other projections and filters resolve source
 rows by key. Callers can continue from the resulting lazy DataFrame directly or
 compile complete SQL over the session's registered source and index relations.
 Observable index metadata and query semantics remain in Rust.
 
-Index caching is a session execution capability, not catalog state. The local
-session materializes every relation in one current index snapshot as decoded
-Arrow memory and transparently substitutes those relations while the snapshot
-remains current. Cached IVF postings are coalesced up to the DataFusion batch
-size and keep an immutable `cid`-to-range directory behind one stable
-`TableProvider`. Each scan derives selected ranges from ordinary `cid`
-predicates and slices the shared Arrow batches lazily across the session's
-current execution partitions. Query planning does not construct another
-provider, scan the complete cached relation, build a filtered `MemTable`, or
-copy vector buffers. The scan accepts DataFusion runtime filters only for `cid`
-and `key_i` columns. Cached index-only searches use an optimized DataFrame
-compiler beside the general SQL compiler; both consume the same resolved search
-and shared source-to-index column mapping. Refresh, registration, or removal
-invalidates the corresponding session cache; dropping the cache never changes
-catalog metadata or durable index data.
+The local session uses one storage-backed query path for cold and warm data.
+File, row-group, and column pruning select Parquet input before the reader checks
+the bounded decompressed Page cache. A hit avoids storage I/O and decompression
+while retaining the normal Parquet decoder and query plan. Cache entries are
+identified by immutable file state, so catalog publication and snapshot changes
+require no separate index-cache invalidation path.
 
 ## Current Scope
 

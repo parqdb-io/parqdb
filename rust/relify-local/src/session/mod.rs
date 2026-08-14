@@ -1,9 +1,9 @@
 //! Embedded Relify session composition.
 
 mod build;
-mod cache;
 mod catalog;
 mod catalog_list;
+mod index_relation;
 mod query;
 mod source;
 
@@ -30,7 +30,7 @@ use self::catalog::validate_index_name;
 use self::catalog_list::RelifyCatalogList;
 #[cfg(test)]
 use crate::SearchRequest;
-use crate::config::{LocalSessionOptions, metadata_cache_config};
+use crate::config::{LocalSessionOptions, index_relation_cache_config, metadata_cache_config};
 use crate::coordination::SessionCoordination;
 use crate::durability::{create_dir_all, sync_directory};
 use crate::local_uri::directory_to_file_uri;
@@ -79,19 +79,6 @@ pub struct IndexInfo {
     pub current_snapshot_id: i64,
 }
 
-/// One fully materialized index snapshot owned by the current backend.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IndexCacheInfo {
-    /// Root-namespace index name.
-    pub name: String,
-    /// Cached Relify index snapshot ID.
-    pub snapshot_id: i64,
-    /// Number of cached index relations.
-    pub relation_count: usize,
-    /// Approximate decoded Arrow memory retained by the cache.
-    pub resident_bytes: usize,
-}
-
 /// Single-node Parquet session with an independent catalog and warehouse.
 #[derive(Clone)]
 pub struct LocalSession {
@@ -105,9 +92,8 @@ pub struct LocalSession {
     parquet_page_cache: Arc<DecompressedParquetPageCache>,
     context: SessionContext,
     source_bindings: Arc<RwLock<HashMap<String, source::SourceBinding>>>,
-    relation_providers: Arc<RwLock<HashMap<String, Arc<dyn datafusion::catalog::TableProvider>>>>,
+    index_relation_providers: Arc<index_relation::IndexRelationProviderRegistry>,
     sql_relations: Arc<RwLock<HashMap<String, String>>>,
-    index_cache: Arc<RwLock<HashMap<String, cache::CachedIndex>>>,
 }
 
 impl LocalSession {
@@ -294,6 +280,7 @@ impl LocalSession {
         let automatic_capacity = automatic_page_cache_capacity(runtime.memory_pool.as_ref());
         let initial_capacity = crate::config::parquet_page_cache_capacity(&session_config)
             .unwrap_or(automatic_capacity);
+        let relation_cache_config = index_relation_cache_config(&session_config);
         let parquet_page_cache = Arc::new(DecompressedParquetPageCache::new(initial_capacity));
         let page_cache_factory: Arc<dyn ParquetPageCacheFactory> = Arc::new(
             RelifyParquetPageCacheFactory::new(Arc::clone(&parquet_page_cache), automatic_capacity),
@@ -319,13 +306,15 @@ impl LocalSession {
             table_catalog: catalog_list as Arc<dyn TableCatalog>,
             coordination: SessionCoordination::open(coordination_root)?,
             indexes: IndexRepository::new(index_catalog, metadata),
-            parquet: ParquetStore::with_context(registry, context.clone()),
+            parquet: ParquetStore::with_context(registry.clone(), context.clone()),
             parquet_page_cache,
             context,
             source_bindings: Arc::new(RwLock::new(HashMap::new())),
-            relation_providers: Arc::new(RwLock::new(HashMap::new())),
+            index_relation_providers: Arc::new(index_relation::IndexRelationProviderRegistry::new(
+                registry,
+                relation_cache_config,
+            )),
             sql_relations: Arc::new(RwLock::new(HashMap::new())),
-            index_cache: Arc::new(RwLock::new(HashMap::new())),
             state_root,
             warehouse,
         })
