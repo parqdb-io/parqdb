@@ -8,7 +8,6 @@ from .identifier import TableIdentifier
 from .maintenance import Maintenance, MaintenanceObject
 from .query import VectorQuery
 from .session import (
-    IndexCacheInfo,
     ParquetPageCacheStats,
     Session,
     SourceTable,
@@ -20,7 +19,6 @@ __all__ = [
     "IVF",
     "BuildAlreadyRunningError",
     "CatalogEntry",
-    "IndexCacheInfo",
     "IndexCatalog",
     "IndexInfo",
     "IndexStatus",

@@ -37,16 +37,6 @@ from .table import TableOperations
 
 
 @dataclass(frozen=True)
-class IndexCacheInfo:
-    """Decoded Arrow memory retained for one index snapshot."""
-
-    name: str
-    snapshot_id: int
-    relation_count: int
-    resident_bytes: int
-
-
-@dataclass(frozen=True)
 class ParquetPageCacheStats:
     """Allocation and lookup counters for the session's Parquet Page cache."""
 
@@ -212,31 +202,6 @@ class Session(SessionContext):
         """Remove a registered table and its Relify source binding."""
         self._native.drop_table_definition_if_exists(name)
         super().deregister_table(name)
-
-    def cache_index(self, index: str) -> IndexCacheInfo:
-        """Materialize all relations in the current index snapshot in memory."""
-        _validate_index_name(index)
-        _, metadata = self._native.load_index_entry(index)
-        self._prepare_metadata_relations(json.loads(metadata))
-        name, snapshot_id, relation_count, resident_bytes = self._native.cache_index(
-            index
-        )
-        return IndexCacheInfo(
-            name=name,
-            snapshot_id=snapshot_id,
-            relation_count=relation_count,
-            resident_bytes=resident_bytes,
-        )
-
-    def is_index_cached(self, index: str) -> bool:
-        """Return whether the current index snapshot is materialized."""
-        _validate_index_name(index)
-        return self._native.is_index_cached(index)
-
-    def uncache_index(self, index: str) -> bool:
-        """Release a materialized index snapshot from this session."""
-        _validate_index_name(index)
-        return self._native.uncache_index(index)
 
     def parquet_page_cache_stats(self) -> ParquetPageCacheStats:
         """Return allocation and lookup counters for the Parquet Page cache."""

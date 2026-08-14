@@ -628,28 +628,19 @@ the whole search as a hidden temporary view. The returned SQL is therefore
 executable by the originating session, not portable standalone SQL. Neither a
 lazy DataFrame nor the SQL string creates persistent reader coordination;
 garbage-collection retention is the reader-safety boundary. These operations
-do not change the IVF prefilter or Top-K semantics. When the SQL is planned,
-each internal index relation uses the current session cache if present and
-otherwise reads immutable Parquet; the stable name itself does not pin cached
-Arrow data.
+do not change the IVF prefilter or Top-K semantics. Internal index relations
+read immutable Parquet through the session's bounded decompressed Page cache.
+The stable name itself does not pin cached data.
 
-The session can explicitly materialize a complete current index snapshot before
-a repeated-query workload:
+Inspect or clear the Page cache through the session:
 
 ```python
-cached = session.cache_index("documents_embedding")
-assert session.is_index_cached("documents_embedding")
-
-# Search automatically uses the cached index relations.
-hits = session.collect(documents.search(query_vector, column="embedding"))
-
-session.uncache_index("documents_embedding")
+stats = session.parquet_page_cache_stats()
+session.clear_parquet_page_cache()
 ```
 
-`cache_index` blocks until every index relation is decoded into Arrow memory
-and returns its snapshot ID, relation count, and approximate resident bytes.
-It does not cache the source table. Refreshing, registering, or dropping the
-index invalidates the cached snapshot.
+Capacity is controlled by `relify.parquet.page_cache.capacity`; see
+[Configuration](configuration.md#local-session).
 
 ## Catalog
 

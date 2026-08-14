@@ -1,7 +1,6 @@
 //! Embedded Relify session composition.
 
 mod build;
-mod cache;
 mod catalog;
 mod catalog_list;
 mod query;
@@ -79,19 +78,6 @@ pub struct IndexInfo {
     pub current_snapshot_id: i64,
 }
 
-/// One fully materialized index snapshot owned by the current backend.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IndexCacheInfo {
-    /// Root-namespace index name.
-    pub name: String,
-    /// Cached Relify index snapshot ID.
-    pub snapshot_id: i64,
-    /// Number of cached index relations.
-    pub relation_count: usize,
-    /// Approximate decoded Arrow memory retained by the cache.
-    pub resident_bytes: usize,
-}
-
 /// Single-node Parquet session with an independent catalog and warehouse.
 #[derive(Clone)]
 pub struct LocalSession {
@@ -107,7 +93,6 @@ pub struct LocalSession {
     source_bindings: Arc<RwLock<HashMap<String, source::SourceBinding>>>,
     relation_providers: Arc<RwLock<HashMap<String, Arc<dyn datafusion::catalog::TableProvider>>>>,
     sql_relations: Arc<RwLock<HashMap<String, String>>>,
-    index_cache: Arc<RwLock<HashMap<String, cache::CachedIndex>>>,
 }
 
 impl LocalSession {
@@ -325,7 +310,6 @@ impl LocalSession {
             source_bindings: Arc::new(RwLock::new(HashMap::new())),
             relation_providers: Arc::new(RwLock::new(HashMap::new())),
             sql_relations: Arc::new(RwLock::new(HashMap::new())),
-            index_cache: Arc::new(RwLock::new(HashMap::new())),
             state_root,
             warehouse,
         })

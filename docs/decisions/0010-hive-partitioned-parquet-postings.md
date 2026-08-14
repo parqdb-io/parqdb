@@ -5,7 +5,7 @@
 
 ## Context
 
-An uncached IVF query selects clusters before scanning postings. Keeping many
+An IVF query selects clusters before scanning Parquet postings. Keeping many
 clusters in each Parquet file made this selection depend on row-group pruning,
 which still caused near-full physical reads under a 2 GiB memory limit.
 

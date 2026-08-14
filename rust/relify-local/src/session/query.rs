@@ -17,8 +17,7 @@ use super::source::{
 use crate::query::{
     compile_datafusion_sql, compile_index_only_plan, datafusion_centroid_relation_required,
     datafusion_cluster_relation_required, datafusion_source_relation_required,
-    selected_cluster_ids, selected_cluster_ids_from_values, use_native_cluster_routing,
-    validated_cluster_search,
+    selected_cluster_ids, use_native_cluster_routing, validated_cluster_search,
 };
 use crate::{ClusterSelection, Error, ResolvedSearch, Result, SearchRequest};
 
@@ -187,12 +186,7 @@ impl LocalSession {
         validate_index_source_schema(source_schema.as_ref(), snapshot)?;
         let postings_relation_key = relation_key(index_relation(snapshot, "ivf_postings")?);
         let (cluster_selection, nlist) = self
-            .resolve_cluster_selection(
-                snapshot,
-                &postings_relation_key,
-                &request.query,
-                request.nprobe,
-            )
+            .resolve_cluster_selection(snapshot, &request.query, request.nprobe)
             .await?;
         Ok(ResolvedSearch {
             source_relation_key,
@@ -362,17 +356,6 @@ impl LocalSession {
         key: &str,
         layout: IndexRelationLayout,
     ) -> Result<datafusion::dataframe::DataFrame> {
-        match self.cached_relation_dataframe(key)? {
-            Some(dataframe) => Ok(dataframe),
-            None => self.uncached_relation_dataframe(key, layout).await,
-        }
-    }
-
-    async fn uncached_relation_dataframe(
-        &self,
-        key: &str,
-        layout: IndexRelationLayout,
-    ) -> Result<datafusion::dataframe::DataFrame> {
         let provider = self
             .relation_providers
             .read()
@@ -409,11 +392,10 @@ impl LocalSession {
             return Ok(name);
         }
 
-        let fallback = self
-            .uncached_relation_dataframe(relation_key, layout)
+        let provider = self
+            .index_relation_dataframe(relation_key, layout)
             .await?
             .into_view();
-        let provider = self.cache_aware_relation(relation_key, fallback);
         let identifier = Uuid::new_v5(&Uuid::NAMESPACE_URL, key.as_bytes());
         let name = format!("__relify_{role}_{}", identifier.simple());
         let mut relations = self
@@ -455,7 +437,6 @@ impl LocalSession {
     async fn resolve_cluster_selection(
         &self,
         snapshot: &IndexSnapshot,
-        postings_relation_key: &str,
         query: &[f32],
         requested_nprobe: Option<usize>,
     ) -> Result<(ClusterSelection, usize)> {
@@ -463,18 +444,9 @@ impl LocalSession {
             validated_cluster_search(snapshot, query, requested_nprobe)?;
         let selection = if nprobe == nlist {
             ClusterSelection::All
-        } else if use_native_cluster_routing(
-            self.is_relation_cached(postings_relation_key)?,
-            nlist,
-            dimension,
-        ) {
-            let centroid_key = relation_key(index_relation(snapshot, "ivf_centroids")?);
-            let selected = if let Some(values) = self.cached_centroid_values(&centroid_key)? {
-                selected_cluster_ids_from_values(query, &values, nlist, dimension, nprobe)?
-            } else {
-                let centroids = self.read_index_relation(snapshot, "ivf_centroids").await?;
-                selected_cluster_ids(snapshot, &centroids, query, Some(nprobe))?
-            };
+        } else if use_native_cluster_routing(nlist, dimension) {
+            let centroids = self.read_index_relation(snapshot, "ivf_centroids").await?;
+            let selected = selected_cluster_ids(snapshot, &centroids, query, Some(nprobe))?;
             ClusterSelection::Native(selected)
         } else {
             ClusterSelection::Relational {

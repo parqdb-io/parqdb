@@ -2,7 +2,7 @@
 
 ## Problem
 
-Relify currently exposes two index scan paths:
+Relify previously exposed two index scan paths:
 
 - `cache_index()` materializes a complete index as decoded Arrow data;
 - an uncached query reads Parquet through DataFusion.
@@ -395,9 +395,10 @@ stats = session.parquet_page_cache_stats()
 session.clear_parquet_page_cache()
 ```
 
-The existing `cache_index()`, `is_index_cached()`, and `uncache_index()` APIs
-remain available during migration. They describe the separate whole-index
-Arrow cache and do not report Page-cache state.
+The Page cache is the only Relify-managed index data cache. The former
+whole-index Arrow cache and its `cache_index()`, `is_index_cached()`, and
+`uncache_index()` APIs are removed so cold and warm queries use the same Parquet
+scan path.
 
 The generic arrow-rs hook is:
 
@@ -428,10 +429,11 @@ without payload copying.
    and metrics.
 4. Test cold, partial-hit, and warm scans under pruning, concurrent loads,
    cancellation, file replacement, file deletion, and memory pressure.
-5. Run GIST and Wikipedia benchmarks, then decide whether the whole-index cache
-   remains a separate low-latency tier.
+5. Remove the whole-index cache so all queries use the storage-backed path.
+6. Run GIST and Wikipedia benchmarks and report cold, partial-hit, and warm
+   behavior.
 
-The old path is removed only after the new path demonstrates:
+The storage-backed path must demonstrate:
 
 - identical results for cold, partial-hit, and warm queries;
 - no storage I/O or decompression for resident Pages;

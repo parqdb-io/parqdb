@@ -218,7 +218,7 @@ def test_storage_backed_prepare_and_query_smoke(tmp_path: Path) -> None:
         result = json.loads(output.read_text(encoding="utf-8"))
         assert result["index_input"] == "benchmark-index-root"
         assert result["result"]["runtime"]["storage"] in {
-            "Parquet IVF queried without cache_index",
+            "Parquet IVF with bounded decompressed Page cache",
             "OnDiskInvertedLists",
         }
         assert not result["result"]["index"]["page_cache_evicted_before_query"]

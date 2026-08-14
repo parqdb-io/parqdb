@@ -162,11 +162,11 @@ benchmark revisions, or common workload parameters.
 
 The same persisted indexes may also be queried in an environment limited to **1
 vCPU and 2 GiB** to characterize storage-backed execution. Relify reads its
-Parquet index without `cache_index`; Faiss opens the standard persisted index
-with read-only mmap. Queries run once in source order without actively evicting
-the page cache, so frequently accessed index partitions may remain cached. This
-is a resource profile of the same query workload, not a different dataset or
-index.
+Parquet index through its bounded decompressed Page cache; Faiss opens the
+standard persisted index with read-only mmap. Queries run once in source order
+without actively evicting the cache, so frequently accessed index partitions
+may remain resident. This is a resource profile of the same query workload, not
+a different dataset or index.
 
 Committed results must preserve the raw JSON and identify the declared resource
 limits. Machine-specific CPU affinity and NUMA configuration are execution

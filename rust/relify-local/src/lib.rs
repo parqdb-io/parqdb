@@ -31,6 +31,6 @@ pub use relify_index::MetadataCacheConfig;
 pub use relify_meta::{IndexMetadata, IndexSnapshot, RelationReference};
 pub use search::{ClusterSelection, ResolvedSearch};
 pub use session::{
-    IndexCacheInfo, IndexInfo, LocalBuildOptions, LocalSession, PersistentParquetOptions,
-    SourceDescription, SourceField,
+    IndexInfo, LocalBuildOptions, LocalSession, PersistentParquetOptions, SourceDescription,
+    SourceField,
 };

@@ -203,7 +203,7 @@ def _open_relify(
         vector_column=implementation.get("vector_column", "embedding"),
     ), {
         "version": importlib.metadata.version("relify"),
-        "storage": "Parquet IVF queried without cache_index",
+        "storage": "Parquet IVF with bounded decompressed Page cache",
     }
 
 

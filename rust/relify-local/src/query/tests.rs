@@ -229,12 +229,11 @@ fn datafusion_cluster_filter_builds_relational_centroid_top_k() {
 }
 
 #[test]
-fn cluster_router_prefers_cache_then_centroid_matrix_size() {
-    assert!(use_native_cluster_routing(false, 1024, 1024));
-    assert!(use_native_cluster_routing(false, 8192, 384));
-    assert!(!use_native_cluster_routing(false, 65_536, 384));
-    assert!(!use_native_cluster_routing(false, usize::MAX, 2));
-    assert!(use_native_cluster_routing(true, usize::MAX, 2));
+fn cluster_router_uses_centroid_matrix_size() {
+    assert!(use_native_cluster_routing(1024, 1024));
+    assert!(use_native_cluster_routing(8192, 384));
+    assert!(!use_native_cluster_routing(65_536, 384));
+    assert!(!use_native_cluster_routing(usize::MAX, 2));
 }
 
 #[tokio::test]

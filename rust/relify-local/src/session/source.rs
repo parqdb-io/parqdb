@@ -413,36 +413,6 @@ impl LocalSession {
         }
     }
 
-    pub(super) async fn relation_dataframe(
-        &self,
-        reference: &RelationReference,
-        role: &str,
-    ) -> Result<datafusion::dataframe::DataFrame> {
-        match reference {
-            RelationReference::Parquet { uri } if role == "ivf_postings" => {
-                self.parquet
-                    .partitioned_dataframe(uri, vec![("cid".into(), DataType::Int32)])
-                    .await
-            }
-            RelationReference::Parquet { uri } => self.parquet.dataframe(uri).await,
-            RelationReference::Iceberg { .. } => {
-                let key = relation_key(reference);
-                let provider = self
-                    .relation_providers
-                    .read()
-                    .map_err(|_| relation_provider_lock_error())?
-                    .get(&key)
-                    .cloned()
-                    .ok_or_else(|| {
-                        Error::InvalidArgument(format!(
-                            "Iceberg relation is not registered in this session: {key}"
-                        ))
-                    })?;
-                Ok(self.context.read_table(provider)?)
-            }
-        }
-    }
-
     async fn parquet_provider(
         &self,
         definition: &PersistentParquetDefinition,

@@ -192,7 +192,6 @@ impl LocalSession {
             },
         )
         .await?;
-        self.invalidate_index_cache(index_name)?;
         progress.finish();
         Ok(result)
     }

@@ -789,15 +789,10 @@ fn native_selected_clusters(resolved: &ResolvedSearch) -> Result<&[i32]> {
     Ok(selected_clusters)
 }
 
-pub(crate) fn use_native_cluster_routing(
-    postings_cached: bool,
-    nlist: usize,
-    dimension: usize,
-) -> bool {
-    postings_cached
-        || nlist
-            .checked_mul(dimension)
-            .is_some_and(|values| values <= NATIVE_CLUSTER_ROUTING_MAX_VALUES)
+pub(crate) fn use_native_cluster_routing(nlist: usize, dimension: usize) -> bool {
+    nlist
+        .checked_mul(dimension)
+        .is_some_and(|values| values <= NATIVE_CLUSTER_ROUTING_MAX_VALUES)
 }
 
 fn quote_identifier(identifier: &str) -> String {
