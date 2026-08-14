@@ -18,8 +18,10 @@ make develop
 make check
 ```
 
-`make develop` installs the native extension into the uv environment. Run it
-again after changing Rust code that is exercised by Python.
+`make develop` installs an optimized native extension into the uv environment.
+Use `make develop-debug` only when a faster debug build is more useful than
+representative runtime performance. Run the selected target again after
+changing Rust code that is exercised by Python.
 
 ## Change Scope
 
