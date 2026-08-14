@@ -3,6 +3,7 @@
 mod build;
 mod catalog;
 mod catalog_list;
+mod index_relation;
 mod query;
 mod source;
 
@@ -91,7 +92,7 @@ pub struct LocalSession {
     parquet_page_cache: Arc<DecompressedParquetPageCache>,
     context: SessionContext,
     source_bindings: Arc<RwLock<HashMap<String, source::SourceBinding>>>,
-    relation_providers: Arc<RwLock<HashMap<String, Arc<dyn datafusion::catalog::TableProvider>>>>,
+    index_relation_providers: Arc<index_relation::IndexRelationProviderRegistry>,
     sql_relations: Arc<RwLock<HashMap<String, String>>>,
 }
 
@@ -308,7 +309,9 @@ impl LocalSession {
             parquet_page_cache,
             context,
             source_bindings: Arc::new(RwLock::new(HashMap::new())),
-            relation_providers: Arc::new(RwLock::new(HashMap::new())),
+            index_relation_providers: Arc::new(
+                index_relation::IndexRelationProviderRegistry::default(),
+            ),
             sql_relations: Arc::new(RwLock::new(HashMap::new())),
             state_root,
             warehouse,

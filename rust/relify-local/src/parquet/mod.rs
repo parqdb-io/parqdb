@@ -14,12 +14,13 @@ use std::sync::Arc;
 use arrow::array::{Array, Int32Array};
 #[cfg(test)]
 use arrow::compute::concat_batches;
-use arrow::datatypes::DataType;
-#[cfg(test)]
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
+use datafusion::catalog::TableProvider;
 use datafusion::dataframe::DataFrame;
+use datafusion::datasource::file_format::FileFormat;
+use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::physical_expr::LexOrdering;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr_common::sort_expr::PhysicalSortExpr;
@@ -31,7 +32,7 @@ use datafusion::prelude::{ParquetReadOptions, SessionContext};
 #[cfg(test)]
 use datafusion::prelude::{col, lit};
 use futures::{StreamExt, TryStreamExt};
-use object_store::{ObjectStore, PutMode};
+use object_store::{ObjectStore, ObjectStoreExt, PutMode};
 use parquet::arrow::async_writer::ParquetObjectWriter;
 use parquet::arrow::{ArrowWriter, AsyncArrowWriter};
 use parquet::basic::{Compression, Encoding};
@@ -285,6 +286,7 @@ impl ParquetStore {
             .await?)
     }
 
+    #[cfg(test)]
     pub(crate) async fn partitioned_dataframe(
         &self,
         location: &str,
@@ -297,6 +299,52 @@ impl ParquetStore {
                 location,
                 ParquetReadOptions::default().table_partition_cols(partition_columns),
             )
+            .await?)
+    }
+
+    /// Creates a provider for a dataset whose Parquet files share one schema.
+    ///
+    /// Relify index publication guarantees a uniform schema, so one
+    /// deterministic file is sufficient and avoids `DataFusion`'s default
+    /// all-file schema merge.
+    pub(crate) async fn uniform_dataset_provider(
+        &self,
+        location: &str,
+        partition_columns: Vec<(String, DataType)>,
+    ) -> Result<Arc<dyn TableProvider>> {
+        self.register(location)?;
+        let schema = self.infer_uniform_dataset_schema(location).await?;
+        let dataframe = self
+            .context
+            .read_parquet(
+                location,
+                ParquetReadOptions::default()
+                    .schema(schema.as_ref())
+                    .table_partition_cols(partition_columns),
+            )
+            .await?;
+        Ok(dataframe.into_view())
+    }
+
+    async fn infer_uniform_dataset_schema(&self, location: &str) -> Result<SchemaRef> {
+        let resolved = self.registry.resolve(location)?;
+        let store = resolved.store();
+        let first = if resolved.uri().path().ends_with('/') {
+            first_parquet_object(store.as_ref(), resolved.path()).await?
+        } else {
+            let object = store
+                .head(resolved.path())
+                .await
+                .map_err(relify_storage::Error::from)?;
+            valid_parquet_object(object)
+        };
+        let first = first.ok_or_else(|| {
+            Error::InvalidArgument(format!("Parquet table contains no data files: {location}"))
+        })?;
+        let options = self.context.copied_table_options().parquet;
+        Ok(ParquetFormat::new()
+            .with_options(options)
+            .infer_schema(&self.context.state(), &store, &[first])
             .await?)
     }
 
@@ -322,6 +370,34 @@ impl ParquetStore {
         }
         Ok(())
     }
+}
+
+async fn first_parquet_object(
+    store: &dyn ObjectStore,
+    prefix: &object_store::path::Path,
+) -> Result<Option<object_store::ObjectMeta>> {
+    let mut objects = store.list(Some(prefix));
+    let mut first = None;
+    while let Some(object) = objects
+        .try_next()
+        .await
+        .map_err(relify_storage::Error::from)?
+    {
+        let Some(object) = valid_parquet_object(object) else {
+            continue;
+        };
+        if first
+            .as_ref()
+            .is_none_or(|current: &object_store::ObjectMeta| object.location < current.location)
+        {
+            first = Some(object);
+        }
+    }
+    Ok(first)
+}
+
+fn valid_parquet_object(object: object_store::ObjectMeta) -> Option<object_store::ObjectMeta> {
+    (object.size > 0 && object.location.as_ref().ends_with(".parquet")).then_some(object)
 }
 
 async fn write_hive_cid_stream(

@@ -70,6 +70,11 @@ fn relation(temporary: &TempDir, name: &str) -> (ParquetStore, String) {
 }
 
 async fn put_part(store: &ParquetStore, relation: &str, name: &str, batch: &RecordBatch) {
+    let location = child_location(relation, name, false).unwrap();
+    put_parquet_file(store, &location, batch).await;
+}
+
+async fn put_parquet_file(store: &ParquetStore, location: &str, batch: &RecordBatch) {
     let mut bytes = Vec::new();
     {
         let mut writer = ArrowWriter::try_new(
@@ -81,8 +86,7 @@ async fn put_part(store: &ParquetStore, relation: &str, name: &str, batch: &Reco
         writer.write(batch).unwrap();
         writer.close().unwrap();
     }
-    let location = child_location(relation, name, false).unwrap();
-    let resolved = store.registry().resolve(&location).unwrap();
+    let resolved = store.registry().resolve(location).unwrap();
     resolved
         .store()
         .put_opts(
@@ -192,6 +196,50 @@ async fn hive_writer_allows_postings_without_vectors() {
         actual.schema().field_with_name("cid").unwrap().data_type(),
         &DataType::Int32
     );
+}
+
+#[tokio::test]
+async fn uniform_provider_infers_schema_from_one_file() {
+    let temporary = TempDir::new().unwrap();
+    let (store, location) = relation(&temporary, "uniform");
+    let expected = batch(&[1, 2]);
+    put_part(&store, &location, "a.parquet", &expected).await;
+
+    let corrupt_location = child_location(&location, "z.parquet", false).unwrap();
+    let resolved = store.registry().resolve(&corrupt_location).unwrap();
+    resolved
+        .store()
+        .put_opts(
+            resolved.path(),
+            Bytes::from_static(b"not parquet").into(),
+            PutMode::Create.into(),
+        )
+        .await
+        .unwrap();
+
+    let provider = store
+        .uniform_dataset_provider(&location, Vec::new())
+        .await
+        .unwrap();
+
+    assert_eq!(provider.schema(), expected.schema());
+}
+
+#[tokio::test]
+async fn uniform_provider_accepts_a_single_file_location() {
+    let temporary = TempDir::new().unwrap();
+    let store = ParquetStore::new(StorageRegistry::default());
+    let root = Url::from_directory_path(temporary.path()).unwrap();
+    let location = child_location(root.as_str(), "single.parquet", false).unwrap();
+    let expected = batch(&[1, 2]);
+    put_parquet_file(&store, &location, &expected).await;
+
+    let provider = store
+        .uniform_dataset_provider(&location, Vec::new())
+        .await
+        .unwrap();
+
+    assert_eq!(provider.schema(), expected.schema());
 }
 
 #[tokio::test]

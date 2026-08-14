@@ -4,13 +4,14 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array};
 use arrow::compute::concat_batches;
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion::prelude::{SessionContext, col, lit};
 use relify_meta::{IndexSnapshot, PostingEncoding, RelationReference};
 use uuid::Uuid;
 
 use super::LocalSession;
+use super::index_relation::IndexRelationLayout;
 use super::source::{
     exact_vector_field, relation_key, resolve_search_projection, validate_index_source_schema,
 };
@@ -20,12 +21,6 @@ use crate::query::{
     selected_cluster_ids, use_native_cluster_routing, validated_cluster_search,
 };
 use crate::{ClusterSelection, Error, ResolvedSearch, Result, SearchRequest};
-
-#[derive(Clone, Copy)]
-enum IndexRelationLayout {
-    Plain,
-    HiveCid,
-}
 
 struct RegisteredSearchRelations {
     execution: ResolvedSearch,
@@ -357,22 +352,10 @@ impl LocalSession {
         layout: IndexRelationLayout,
     ) -> Result<datafusion::dataframe::DataFrame> {
         let provider = self
-            .relation_providers
-            .read()
-            .map_err(|_| Error::InvalidArgument("relation provider lock is poisoned".into()))?
-            .get(key)
-            .cloned();
-        match provider {
-            Some(provider) => Ok(self.context.read_table(provider)?),
-            None => match layout {
-                IndexRelationLayout::Plain => self.parquet.dataframe(key).await,
-                IndexRelationLayout::HiveCid => {
-                    self.parquet
-                        .partitioned_dataframe(key, vec![("cid".into(), DataType::Int32)])
-                        .await
-                }
-            },
-        }
+            .index_relation_providers
+            .get_or_create_parquet(key, layout, &self.parquet)
+            .await?;
+        Ok(self.context.read_table(provider)?)
     }
 
     async fn register_sql_relation(
