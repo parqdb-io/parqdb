@@ -1,6 +1,10 @@
 <div align="center">
   <img src="https://raw.githubusercontent.com/petrizhang/relify/main/assets/relify-header.svg" alt="Relify" width="760">
   <p>
+    <a href="https://github.com/petrizhang/relify/blob/main/README.md">English</a> |
+    <a href="https://github.com/petrizhang/relify/blob/main/README.zh-CN.md">中文</a>
+  </p>
+  <p>
     <strong>Open vector indexes for the SQL engines you already use.</strong>
   </p>
   <p>
