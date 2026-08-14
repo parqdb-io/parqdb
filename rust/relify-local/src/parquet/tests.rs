@@ -199,14 +199,14 @@ async fn hive_writer_allows_postings_without_vectors() {
 }
 
 #[tokio::test]
-async fn uniform_provider_infers_schema_from_one_file() {
+async fn uniform_provider_ignores_non_parquet_sidecars() {
     let temporary = TempDir::new().unwrap();
     let (store, location) = relation(&temporary, "uniform");
     let expected = batch(&[1, 2]);
     put_part(&store, &location, "a.parquet", &expected).await;
 
-    let corrupt_location = child_location(&location, "z.parquet", false).unwrap();
-    let resolved = store.registry().resolve(&corrupt_location).unwrap();
+    let sidecar_location = child_location(&location, "README.txt", false).unwrap();
+    let resolved = store.registry().resolve(&sidecar_location).unwrap();
     resolved
         .store()
         .put_opts(
