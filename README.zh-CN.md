@@ -5,7 +5,7 @@
     <a href="https://github.com/petrizhang/relify/blob/main/README.zh-CN.md">中文</a>
   </p>
   <p>
-    <strong>为你已经在使用的 SQL 引擎提供开放向量索引。</strong>
+    <strong>面向 SQL 引擎的开放向量索引。</strong>
   </p>
   <p>
     <a href="https://pypi.org/project/relify/"><img alt="PyPI" src="https://img.shields.io/pypi/v/relify.svg"></a>
@@ -24,26 +24,26 @@
 
 ---
 
-Relify 是一个使用 Python 和 Rust 开发的开源库，可通过你已经在使用的
-计算引擎为湖仓数据构建向量索引并执行检索。它将向量索引存储为开放格式的
-Parquet 数据集或 Iceberg 表，使 DataFusion、StarRocks 和 Spark 能够直接
-通过 SQL 查询同一份索引，而源数据始终保留在原处。
+Relify 是一个用 Python 和 Rust 编写的开源向量索引库。它直接为湖仓数据
+构建向量索引，并以 Parquet 数据集或 Iceberg 表保存。DataFusion、Spark 和
+StarRocks 可以用 SQL 访问同一份索引。源数据留在湖仓中，不必导入独立的
+向量数据库，也不必按引擎重复建索引。
 
 如果 Relify 对你有帮助，欢迎点一个 Star，让更多人发现这个项目。
 
 ## 快速开始
 
-Relify 支持 Linux x86_64 和 macOS arm64 上的标准 CPython 3.11 至 3.14。
-安装默认的内嵌 DataFusion + Parquet 后端：
+PyPI 提供 Linux x86_64 和 macOS arm64 的预编译 Wheel，支持 CPython
+3.11 至 3.14。默认安装包含嵌入式 DataFusion 后端，索引存储使用 Parquet：
 
 ```bash
 python -m pip install relify
 ```
 
-Spark 和 StarRocks 是需要单独配置的可选集成，详见[计算引擎](#计算引擎)。
+Spark 和 StarRocks 需要单独部署和配置，详见[计算引擎](#计算引擎)。
 
-在一个新的工作目录中，使用包内置的数据集构建 IVF-Flat 索引，并执行带
-过滤条件的向量查询：
+下面的示例使用包内置数据集构建 IVF-Flat 索引，并执行带标量过滤的向量
+检索：
 
 ```python
 import relify
@@ -71,9 +71,8 @@ query = (
 print(session.collect(query).to_pylist())
 ```
 
-向量检索的输出在 Relify 中仍然是一个关系，而不是一次执行后便终止的服务
-调用。因此查询可以保持惰性，注册为 DataFusion 视图，再在同一执行上下文
-中继续使用 SQL 分析：
+在 Relify 中，向量检索本身就是关系计划的一部分。检索结果可以直接参与
+后续过滤、Join 和聚合，全程留在同一个 SQL 执行环境中：
 
 ```python
 session.register_parquet(
@@ -96,33 +95,33 @@ summary = session.sql("""
 print(summary.to_pydict())
 ```
 
-包内置的数据集使上述示例可以独立运行。[入门指南](https://github.com/petrizhang/relify/blob/main/docs/getting-started.md)
-介绍了持久化表、已有索引、查询计划检查和源表 Schema 要求。
+上述示例无需额外下载数据。持久化表、已有索引、执行计划检查和源表 Schema
+要求参见[入门指南](https://github.com/petrizhang/relify/blob/main/docs/getting-started.md)。
 
 ## 为什么选择 Relify
 
-- **无需将数据 ETL 到向量数据库。** 源向量保留在已有的湖仓表中，Relify 只
-  写入索引数据和元数据。
-- **一份开放向量索引。** IVF 中心点和倒排列表都是普通关系数据，以
-  Parquet 数据集或 Iceberg 表发布，而不是某个引擎私有的二进制产物。
-- **跨计算引擎使用。** 不同引擎的后端共享同一套索引模型和查询契约，无需
-  为每个运行时维护单独的索引副本。
-- **SQL 原生执行。** 聚类裁剪、源表过滤、Join、距离计算和 Top-K 都保留在
-  宿主引擎的关系执行计划中。
+- **零 ETL。** Relify 直接为湖仓中的源向量构建索引，无需先将数据导入
+  独立的向量数据库；系统中只会新增索引数据和元数据。
+- **开放索引格式。** IVF 中心点和倒排列表以普通关系数据保存，并以 Parquet
+  数据集或 Iceberg 表发布，而非引擎私有的二进制文件。
+- **一份索引，跨引擎使用。** 不同后端遵循同一套索引模型和查询契约，无需
+  为每个计算引擎复制索引。
+- **SQL 原生执行。** 聚类裁剪、源表过滤、Join、距离计算和 Top-K 都在
+  宿主引擎的关系执行计划中完成。
 
 ## 计算引擎
 
-| 引擎 | 模式 | 当前能力 | 状态 |
+| 引擎 | 运行模式 | 当前能力 | 状态 |
 | --- | --- | --- | --- |
-| DataFusion | 内嵌 | 在同一 Python 进程中构建和查询 Parquet 索引 | 已支持 |
+| DataFusion | 嵌入式 | 在同一 Python 进程中构建和查询 Parquet 索引 | 已支持 |
 | Spark Classic | 批处理 | 构建 Iceberg 索引；查询 Parquet 和 Iceberg | 实验性 |
 | StarRocks | OLAP | 通过 Arrow Flight SQL 查询由 Spark 构建的 Iceberg 索引 | 实验性 |
 
-DataFusion 是默认后端。Spark 和 StarRocks 位于 `relify.experimental` 下，
-需要调用方自行管理引擎和 Catalog 配置。三者使用相同的查询模型和开放索引
+DataFusion 是默认后端。Spark 和 StarRocks 位于 `relify.experimental`，由
+调用方负责引擎和 Catalog 配置。三个后端采用相同的查询模型和开放索引
 元数据。
 
-安装和配置方法参见[本地](https://github.com/petrizhang/relify/blob/main/docs/guides/local.md)、
+具体配置参见[本地 DataFusion](https://github.com/petrizhang/relify/blob/main/docs/guides/local.md)、
 [Spark](https://github.com/petrizhang/relify/blob/main/docs/guides/spark.md) 和
 [StarRocks](https://github.com/petrizhang/relify/blob/main/docs/guides/starrocks.md)
 指南。
@@ -143,9 +142,9 @@ DataFusion 是默认后端。Spark 和 StarRocks 位于 `relify.experimental` �
 ## TEngineDB-V 与 Relify
 
 [TEngineDB-V: An OLAP-Native Vector Search System for Large-k Workloads at
-Tencent](https://arxiv.org/abs/2608.00650) 是腾讯面向大 K 向量检索的生产系统。
-在百亿向量部署中，它通过与 TEngineDB 的深度集成，相比旧系统实现了最高
-52 倍加速。
+Tencent](https://arxiv.org/abs/2608.00650) 是腾讯用于大 K 向量检索的生产系统。
+它将查询优化和执行算子深度集成到 TEngineDB 中，在百亿向量部署上相比旧
+系统最高加速 52 倍。
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/petrizhang/relify/main/assets/tenginedb-v-figure-7.png" alt="图 7：不同系统的延迟与召回率权衡" width="760">
@@ -155,9 +154,9 @@ Tencent](https://arxiv.org/abs/2608.00650) 是腾讯面向大 K 向量检索的�
   <img src="https://raw.githubusercontent.com/petrizhang/relify/main/assets/tenginedb-v-figure-13.png" alt="图 13：百亿规模生产环境性能" width="760">
 </p>
 
-Relify 借鉴了 TEngineDB-V 的理念，而非它的实现。Relify 围绕开放索引格式和
-现有 SQL 引擎重新实现表原生向量检索，目标是在不依赖专有引擎的前提下达到
-TEngineDB-V 级别的性能。
+Relify 与 TEngineDB-V 的设计思路相通，但代码和运行时完全独立。Relify 以
+开放索引格式适配现有 SQL 引擎，目标是在不绑定专有引擎的前提下实现
+TEngineDB-V 级别的大 K 检索性能。
 
 如果你在研究中使用 Relify，请引用我们的 VLDB 2026 Industry Track 论文：
 
@@ -173,10 +172,10 @@ TEngineDB-V 级别的性能。
 }
 ```
 
-## 开发
+## 参与开发
 
-Relify 下一阶段的方向正在公开讨论和设计。我们欢迎具体的使用场景、
-Benchmark 结果、设计反馈和实现贡献：
+Relify 下一阶段的方向正在公开讨论。我们欢迎真实使用场景、基准测试
+结果、设计反馈和代码贡献：
 
 - [围绕嵌入式向量湖仓收窄产品定位](https://github.com/petrizhang/relify/issues/9)
 - [改进基于存储的 Parquet 检索](https://github.com/petrizhang/relify/issues/8)并
@@ -185,11 +184,11 @@ Benchmark 结果、设计反馈和实现贡献：
 - [设计存算分离架构](https://github.com/petrizhang/relify/issues/13)并
   [构建完整的 DuckLake 工作流](https://github.com/petrizhang/relify/issues/12)
 
-如果你正在从事 RAG、Agent 轨迹存储、Parquet 性能优化或嵌入式湖仓系统，
-欢迎在相关 Issue 中分享你的工作负载和需求。开始较大的改动前请先留言，以便
-提前确定范围和接口。
+如果你正在研究 RAG、Agent 轨迹存储、Parquet 性能或嵌入式湖仓，欢迎在
+相关 Issue 中说明工作负载和需求。开始较大改动前请先留言，以便提前确认
+范围和接口。
 
-Relify 使用 uv、Maturin、Cargo 和一层轻量的 Makefile 编排：
+本地开发使用 uv、Maturin、Cargo 和 Makefile：
 
 ```bash
 make sync
@@ -197,14 +196,14 @@ make develop
 make check
 ```
 
-质量门禁、Fixtures、Benchmark 和贡献规范详见
+质量门禁、测试数据、基准测试和贡献流程参见
 [CONTRIBUTING.md](https://github.com/petrizhang/relify/blob/main/CONTRIBUTING.md)。
 
 ## 许可证
 
 Relify 的原创代码采用
-[MIT License](https://github.com/petrizhang/relify/blob/main/LICENSE)。Wheel 中
-包含采用 Apache-2.0 许可证的 DataFusion Python Binding；详情参见
+[MIT License](https://github.com/petrizhang/relify/blob/main/LICENSE)。发行包还
+包含采用 Apache-2.0 许可证的第三方组件，详见
 [第三方声明](https://github.com/petrizhang/relify/blob/main/THIRD_PARTY_NOTICES.md)。
 
 Relify 的开发受益于 LanceDB、DataFusion、DuckDB、StarRocks、Apache
