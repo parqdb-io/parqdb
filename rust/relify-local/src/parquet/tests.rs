@@ -243,6 +243,36 @@ async fn uniform_provider_accepts_a_single_file_location() {
 }
 
 #[tokio::test]
+async fn uniform_provider_rejects_a_directory_without_parquet_data() {
+    let temporary = TempDir::new().unwrap();
+    let (store, location) = relation(&temporary, "empty");
+    for (name, bytes) in [
+        ("README.txt", Bytes::from_static(b"not parquet")),
+        ("empty.parquet", Bytes::new()),
+    ] {
+        let file = child_location(&location, name, false).unwrap();
+        let resolved = store.registry().resolve(&file).unwrap();
+        resolved
+            .store()
+            .put_opts(resolved.path(), bytes.into(), PutMode::Create.into())
+            .await
+            .unwrap();
+    }
+
+    let error = store
+        .uniform_dataset_provider(&location, Vec::new())
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, Error::InvalidArgument(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("Parquet table contains no data files")
+    );
+}
+
+#[tokio::test]
 async fn cluster_filter_prunes_unrelated_row_groups() {
     let temporary = TempDir::new().unwrap();
     let (store, location) = relation(&temporary, "postings");

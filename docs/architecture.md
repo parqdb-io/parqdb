@@ -211,7 +211,8 @@ and reads the uniform schema from the first listed file. Selected CIDs map
 directly to DataFusion file groups, avoiding per-query object listing and
 whole-relation partition pruning while retaining the standard Parquet reader
 and page cache.
-The session retains manifests in an entry- and byte-bounded planning cache;
+The session retains manifests in a configurable entry- and byte-bounded
+planning cache;
 oversized manifests are used for the current plan but not admitted. Stable
 internal table names keep only a lightweight deferred provider and therefore do
 not pin an evicted manifest. Decoded postings are not cached. A full probe needs

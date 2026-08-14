@@ -103,6 +103,11 @@ The new bounds are enforced before the next metadata cache access. Either
 limit may be `0` to disable metadata caching. The byte budget does not include
 parsed-object and allocator overhead.
 
+Index-relation manifests and native-routing centroid matrices also use bounded
+session caches. Their `relify.query.manifest.cache.*` and
+`relify.query.centroid.cache.*` limits are initialization options documented in
+[Configuration](configuration.md#local-session).
+
 The full embedded DataFusion Python API is available from
 `relify.datafusion`:
 

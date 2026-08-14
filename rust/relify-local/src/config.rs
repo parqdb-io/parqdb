@@ -11,6 +11,11 @@ use relify_index::{
     DEFAULT_METADATA_CACHE_BYTES, DEFAULT_METADATA_CACHE_ENTRIES, MetadataCacheConfig,
 };
 
+const DEFAULT_MANIFEST_CACHE_ENTRIES: usize = 128;
+const DEFAULT_MANIFEST_CACHE_BYTES: usize = 64 * 1024 * 1024;
+const DEFAULT_CENTROID_CACHE_ENTRIES: usize = 128;
+const DEFAULT_CENTROID_CACHE_BYTES: usize = 256 * 1024 * 1024;
+
 config_namespace! {
     /// Options for index metadata caching.
     pub struct MetadataCacheOptions {
@@ -46,6 +51,55 @@ config_namespace! {
     }
 }
 
+config_namespace! {
+    /// Options for immutable index-relation manifests.
+    pub struct ManifestCacheOptions {
+        /// Maximum number of cached manifests.
+        pub max_entries: usize, default = DEFAULT_MANIFEST_CACHE_ENTRIES
+
+        /// Maximum estimated bytes retained by cached manifests.
+        pub max_bytes: usize, default = DEFAULT_MANIFEST_CACHE_BYTES
+    }
+}
+
+config_namespace! {
+    /// Options for index-relation manifest planning.
+    pub struct ManifestOptions {
+        /// Manifest cache options.
+        pub cache: ManifestCacheOptions, default = ManifestCacheOptions::default()
+    }
+}
+
+config_namespace! {
+    /// Options for native centroid routing matrices.
+    pub struct CentroidCacheOptions {
+        /// Maximum number of cached centroid matrices.
+        pub max_entries: usize, default = DEFAULT_CENTROID_CACHE_ENTRIES
+
+        /// Maximum bytes retained by cached centroid values.
+        pub max_bytes: usize, default = DEFAULT_CENTROID_CACHE_BYTES
+    }
+}
+
+config_namespace! {
+    /// Options for centroid routing.
+    pub struct CentroidOptions {
+        /// Centroid matrix cache options.
+        pub cache: CentroidCacheOptions, default = CentroidCacheOptions::default()
+    }
+}
+
+config_namespace! {
+    /// Options for query planning and routing.
+    pub struct QueryOptions {
+        /// Index-relation manifest options.
+        pub manifest: ManifestOptions, default = ManifestOptions::default()
+
+        /// Centroid routing options.
+        pub centroid: CentroidOptions, default = CentroidOptions::default()
+    }
+}
+
 /// Relify options carried by `DataFusion`'s session configuration.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RelifyConfig {
@@ -53,6 +107,8 @@ pub struct RelifyConfig {
     pub metadata: MetadataOptions,
     /// Parquet reader options.
     pub parquet: ParquetOptions,
+    /// Query planning and routing options.
+    pub query: QueryOptions,
 }
 
 impl ConfigExtension for RelifyConfig {
@@ -115,6 +171,11 @@ impl ConfigField for RelifyConfig {
             &format!("{key_prefix}.parquet"),
             "Parquet reader options.",
         );
+        self.query.visit(
+            visitor,
+            &format!("{key_prefix}.query"),
+            "Query planning and routing options.",
+        );
     }
 
     fn set(&mut self, key: &str, value: &str) -> DataFusionResult<()> {
@@ -122,6 +183,7 @@ impl ConfigField for RelifyConfig {
         match section {
             "metadata" => self.metadata.set(remainder, value),
             "parquet" => self.parquet.set(remainder, value),
+            "query" => self.query.set(remainder, value),
             _ => Err(DataFusionError::Configuration(format!(
                 "Config value \"{section}\" not found on RelifyConfig"
             ))),
@@ -192,6 +254,40 @@ pub(crate) fn parquet_page_cache_capacity(config: &SessionConfig) -> Option<usiz
         .capacity
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct IndexRelationCacheConfig {
+    pub(crate) manifest_max_entries: usize,
+    pub(crate) manifest_max_bytes: usize,
+    pub(crate) centroid_max_entries: usize,
+    pub(crate) centroid_max_bytes: usize,
+}
+
+impl Default for IndexRelationCacheConfig {
+    fn default() -> Self {
+        Self {
+            manifest_max_entries: DEFAULT_MANIFEST_CACHE_ENTRIES,
+            manifest_max_bytes: DEFAULT_MANIFEST_CACHE_BYTES,
+            centroid_max_entries: DEFAULT_CENTROID_CACHE_ENTRIES,
+            centroid_max_bytes: DEFAULT_CENTROID_CACHE_BYTES,
+        }
+    }
+}
+
+pub(crate) fn index_relation_cache_config(config: &SessionConfig) -> IndexRelationCacheConfig {
+    let query = &config
+        .options()
+        .extensions
+        .get::<RelifyConfig>()
+        .expect("Relify config extension must be installed")
+        .query;
+    IndexRelationCacheConfig {
+        manifest_max_entries: query.manifest.cache.max_entries,
+        manifest_max_bytes: query.manifest.cache.max_bytes,
+        centroid_max_entries: query.centroid.cache.max_entries,
+        centroid_max_bytes: query.centroid.cache.max_bytes,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,7 +297,11 @@ mod tests {
         let config = relify_session_config()
             .set_str("relify.metadata.cache.max_entries", "7")
             .set_str("relify.metadata.cache.max_bytes", "4096")
-            .set_str("relify.parquet.page_cache.capacity", "8192");
+            .set_str("relify.parquet.page_cache.capacity", "8192")
+            .set_str("relify.query.manifest.cache.max_entries", "3")
+            .set_str("relify.query.manifest.cache.max_bytes", "1024")
+            .set_str("relify.query.centroid.cache.max_entries", "5")
+            .set_str("relify.query.centroid.cache.max_bytes", "2048");
         let (config, _) =
             LocalSessionOptions::new(config, RuntimeEnvBuilder::default()).into_parts();
 
@@ -210,6 +310,15 @@ mod tests {
             MetadataCacheConfig::new(7, 4096)
         );
         assert_eq!(parquet_page_cache_capacity(&config), Some(8192));
+        assert_eq!(
+            index_relation_cache_config(&config),
+            IndexRelationCacheConfig {
+                manifest_max_entries: 3,
+                manifest_max_bytes: 1024,
+                centroid_max_entries: 5,
+                centroid_max_bytes: 2048,
+            }
+        );
     }
 
     #[test]

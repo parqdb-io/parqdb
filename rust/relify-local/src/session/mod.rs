@@ -30,7 +30,7 @@ use self::catalog::validate_index_name;
 use self::catalog_list::RelifyCatalogList;
 #[cfg(test)]
 use crate::SearchRequest;
-use crate::config::{LocalSessionOptions, metadata_cache_config};
+use crate::config::{LocalSessionOptions, index_relation_cache_config, metadata_cache_config};
 use crate::coordination::SessionCoordination;
 use crate::durability::{create_dir_all, sync_directory};
 use crate::local_uri::directory_to_file_uri;
@@ -280,6 +280,7 @@ impl LocalSession {
         let automatic_capacity = automatic_page_cache_capacity(runtime.memory_pool.as_ref());
         let initial_capacity = crate::config::parquet_page_cache_capacity(&session_config)
             .unwrap_or(automatic_capacity);
+        let relation_cache_config = index_relation_cache_config(&session_config);
         let parquet_page_cache = Arc::new(DecompressedParquetPageCache::new(initial_capacity));
         let page_cache_factory: Arc<dyn ParquetPageCacheFactory> = Arc::new(
             RelifyParquetPageCacheFactory::new(Arc::clone(&parquet_page_cache), automatic_capacity),
@@ -311,6 +312,7 @@ impl LocalSession {
             source_bindings: Arc::new(RwLock::new(HashMap::new())),
             index_relation_providers: Arc::new(index_relation::IndexRelationProviderRegistry::new(
                 registry,
+                relation_cache_config,
             )),
             sql_relations: Arc::new(RwLock::new(HashMap::new())),
             state_root,
