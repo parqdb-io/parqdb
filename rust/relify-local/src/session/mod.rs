@@ -305,13 +305,13 @@ impl LocalSession {
             table_catalog: catalog_list as Arc<dyn TableCatalog>,
             coordination: SessionCoordination::open(coordination_root)?,
             indexes: IndexRepository::new(index_catalog, metadata),
-            parquet: ParquetStore::with_context(registry, context.clone()),
+            parquet: ParquetStore::with_context(registry.clone(), context.clone()),
             parquet_page_cache,
             context,
             source_bindings: Arc::new(RwLock::new(HashMap::new())),
-            index_relation_providers: Arc::new(
-                index_relation::IndexRelationProviderRegistry::default(),
-            ),
+            index_relation_providers: Arc::new(index_relation::IndexRelationProviderRegistry::new(
+                registry,
+            )),
             sql_relations: Arc::new(RwLock::new(HashMap::new())),
             state_root,
             warehouse,

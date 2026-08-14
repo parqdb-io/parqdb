@@ -1,19 +1,27 @@
+//! Narrow Parquet provider for immutable IVF postings partitioned by `cid`.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::mem::size_of;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
+use datafusion::common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion::common::{ScalarValue, Statistics};
 use datafusion::datasource::file_format::FileFormat;
-use datafusion::datasource::listing::{ListingTable, PartitionedFile};
+use datafusion::datasource::file_format::parquet::ParquetFormat;
+use datafusion::datasource::listing::helpers::pruned_partition_list;
+use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder};
 use datafusion::datasource::table_schema::TableSchema;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::{Expr, Operator, TableProviderFilterPushDown, TableType};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::empty::EmptyExec;
+use futures::TryStreamExt;
+use relify_storage::StorageRegistry;
 
 use crate::{Error, Result};
 
@@ -39,17 +47,43 @@ impl fmt::Debug for HiveCidParquetProvider {
 
 impl HiveCidParquetProvider {
     pub(super) async fn load(
-        listing: Arc<ListingTable>,
-        file_schema: SchemaRef,
+        registry: &StorageRegistry,
+        location: &str,
         state: &dyn Session,
     ) -> Result<Self> {
-        let listed = listing.list_files_for_scan(state, &[], None).await?;
+        let resolved = registry.resolve(location)?;
+        let store = resolved.store();
+        state
+            .runtime_env()
+            .register_object_store(resolved.base_url(), Arc::clone(&store));
+        let table_path = ListingTableUrl::parse(location)?;
+        let partition_columns = [("cid".to_owned(), DataType::Int32)];
+        let listed = pruned_partition_list(
+            state,
+            store.as_ref(),
+            &table_path,
+            &[],
+            ".parquet",
+            &partition_columns,
+        )
+        .await?
+        .try_collect::<Vec<_>>()
+        .await?;
+        let first = listed.first().ok_or_else(|| {
+            Error::InvalidArgument(format!("Parquet table contains no data files: {location}"))
+        })?;
+        let format =
+            Arc::new(ParquetFormat::new().with_options(state.default_table_options().parquet));
+        let file_schema = format
+            .infer_schema(state, &store, std::slice::from_ref(&first.object_meta))
+            .await?;
+        let table_schema = TableSchema::new(
+            Arc::clone(&file_schema),
+            vec![Arc::new(Field::new("cid", DataType::Int32, false))],
+        );
+        let schema = Arc::clone(table_schema.table_schema());
         let mut files = BTreeMap::<i32, Vec<PartitionedFile>>::new();
-        for file in listed
-            .file_groups
-            .into_iter()
-            .flat_map(FileGroup::into_inner)
-        {
+        for file in listed {
             let [ScalarValue::Int32(Some(cid))] = file.partition_values.as_slice() else {
                 return Err(Error::InvalidSchema(
                     "Hive CID postings file has an invalid partition value".into(),
@@ -60,18 +94,49 @@ impl HiveCidParquetProvider {
         for cluster_files in files.values_mut() {
             cluster_files.sort_unstable_by(|left, right| left.path().cmp(right.path()));
         }
-        let object_store_url = listing
-            .table_paths()
-            .first()
-            .ok_or_else(|| Error::InvalidSchema("Parquet relation has no table path".into()))?
-            .object_store();
         Ok(Self {
-            schema: listing.schema(),
+            schema,
             file_schema,
-            object_store_url,
-            format: Arc::clone(&listing.options().format),
+            object_store_url: table_path.object_store(),
+            format,
             files,
         })
+    }
+
+    pub(super) fn resident_size(&self) -> usize {
+        let mut size = size_of::<Self>();
+        let mut heap_size = DFHeapSizeCtx::default();
+        for files in self.files.values() {
+            size = size
+                .saturating_add(size_of::<i32>())
+                .saturating_add(size_of::<Vec<PartitionedFile>>())
+                .saturating_add(
+                    files
+                        .capacity()
+                        .saturating_mul(size_of::<PartitionedFile>()),
+                );
+            for file in files {
+                size = size
+                    .saturating_add(file.path().as_ref().len())
+                    .saturating_add(file.object_meta.e_tag.as_ref().map_or(0, String::capacity))
+                    .saturating_add(
+                        file.object_meta
+                            .version
+                            .as_ref()
+                            .map_or(0, String::capacity),
+                    )
+                    .saturating_add(
+                        file.partition_values
+                            .iter()
+                            .map(ScalarValue::size)
+                            .sum::<usize>(),
+                    );
+                if let Some(statistics) = &file.statistics {
+                    size = size.saturating_add(statistics.heap_size(&mut heap_size));
+                }
+            }
+        }
+        size
     }
 
     fn selected_files(&self, filters: &[Expr]) -> Vec<PartitionedFile> {
@@ -160,7 +225,7 @@ impl TableProvider for HiveCidParquetProvider {
     }
 }
 
-fn cid_filter_values(filter: &Expr) -> Option<BTreeSet<i32>> {
+pub(super) fn cid_filter_values(filter: &Expr) -> Option<BTreeSet<i32>> {
     match filter {
         Expr::InList(list) if !list.negated && is_cid_column(&list.expr) => list
             .list
@@ -216,11 +281,16 @@ fn cid_literal(expression: &Expr) -> Option<i32> {
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::{Int32Array, Int64Array};
     use arrow::datatypes::{Field, Schema};
+    use arrow::record_batch::RecordBatch;
     use datafusion::datasource::file_format::parquet::ParquetFormat;
     use datafusion::prelude::{SessionConfig, SessionContext, col, lit};
+    use tempfile::TempDir;
+    use url::Url;
 
     use super::*;
+    use crate::parquet::{ParquetStore, ParquetWriterOptions};
 
     fn provider(cluster_count: i32) -> HiveCidParquetProvider {
         let file_schema = Arc::new(Schema::new(vec![Field::new(
@@ -275,6 +345,28 @@ mod tests {
             provider.supports_filters_pushdown(&[&unrelated]).unwrap(),
             [TableProviderFilterPushDown::Unsupported]
         );
+
+        let reversed = lit(2_i64).eq(col("cid"));
+        assert_eq!(
+            provider
+                .selected_files(std::slice::from_ref(&reversed))
+                .len(),
+            1
+        );
+        let union = col("cid").eq(lit(0_i32)).or(col("cid").eq(lit(2_i32)));
+        assert_eq!(provider.selected_files(&[union]).len(), 2);
+        let empty = col("cid").eq(lit(0_i32)).and(col("cid").eq(lit(2_i32)));
+        assert!(provider.selected_files(&[empty]).is_empty());
+
+        let overflow = col("cid").eq(lit(i64::from(i32::MAX) + 1));
+        let null = col("cid").eq(Expr::Literal(ScalarValue::Int32(None), None));
+        let negated = col("cid").in_list(vec![lit(1_i32)], true);
+        for unsupported in [&overflow, &null, &negated] {
+            assert_eq!(
+                provider.supports_filters_pushdown(&[unsupported]).unwrap(),
+                [TableProviderFilterPushDown::Unsupported]
+            );
+        }
     }
 
     #[tokio::test]
@@ -303,5 +395,68 @@ mod tests {
         assert_eq!(plan.name(), "EmptyExec");
         assert_eq!(plan.schema().fields().len(), 1);
         assert_eq!(plan.schema().field(0).name(), "key_1");
+    }
+
+    #[tokio::test]
+    async fn real_parquet_scan_matches_listing_table_contract() {
+        let temporary = TempDir::new().unwrap();
+        let context = SessionContext::new();
+        let store = ParquetStore::with_context(StorageRegistry::default(), context.clone());
+        let location = Url::from_directory_path(temporary.path().join("postings"))
+            .unwrap()
+            .to_string();
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("cid", DataType::Int32, false),
+                Field::new("key_1", DataType::Int64, false),
+            ])),
+            vec![
+                Arc::new(Int32Array::from(vec![0, 0, 1, 1])),
+                Arc::new(Int64Array::from(vec![10, 20, 30, 40])),
+            ],
+        )
+        .unwrap();
+        context.register_batch("input", batch).unwrap();
+        store
+            .write_hive_cid_dataframe(
+                &location,
+                context.table("input").await.unwrap(),
+                2,
+                &ParquetWriterOptions::default(),
+            )
+            .await
+            .unwrap();
+        let (listing, _) = store
+            .uniform_dataset_listing_table(&location, vec![("cid".into(), DataType::Int32)])
+            .await
+            .unwrap();
+        let custom = Arc::new(
+            HiveCidParquetProvider::load(&store.registry(), &location, &context.state())
+                .await
+                .unwrap(),
+        );
+        context.register_table("listing", listing).unwrap();
+        context.register_table("custom", custom).unwrap();
+
+        for query in [
+            "SELECT key_1 FROM {table} WHERE cid IN (0, 1) ORDER BY key_1 LIMIT 3",
+            "SELECT cid FROM {table} WHERE key_1 > 15 ORDER BY cid, key_1 LIMIT 2",
+        ] {
+            let listing = context
+                .sql(&query.replace("{table}", "listing"))
+                .await
+                .unwrap()
+                .collect()
+                .await
+                .unwrap();
+            let custom = context
+                .sql(&query.replace("{table}", "custom"))
+                .await
+                .unwrap()
+                .collect()
+                .await
+                .unwrap();
+            assert_eq!(custom, listing);
+        }
     }
 }

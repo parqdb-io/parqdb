@@ -359,7 +359,7 @@ impl LocalSession {
     ) -> Result<datafusion::dataframe::DataFrame> {
         let provider = self
             .index_relation_providers
-            .get_or_create_parquet(key, layout, &self.parquet)
+            .get_or_create_parquet(key, layout, &self.context.state())
             .await?;
         Ok(self.context.read_table(provider)?)
     }
@@ -382,9 +382,9 @@ impl LocalSession {
         }
 
         let provider = self
-            .index_relation_dataframe(relation_key, layout)
-            .await?
-            .into_view();
+            .index_relation_providers
+            .deferred_parquet_provider(relation_key, layout, &self.context.state())
+            .await?;
         let identifier = Uuid::new_v5(&Uuid::NAMESPACE_URL, key.as_bytes());
         let name = format!("__relify_{role}_{}", identifier.simple());
         let mut relations = self

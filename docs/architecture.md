@@ -206,12 +206,17 @@ entry and byte limits.
 The local writer stores postings in Hive-style `cid=<value>` partitions with
 one Parquet file per non-empty cluster. It hash-partitions construction work by
 `cid` first, so one cluster reaches exactly one Hive writer. The local reader
-lists each immutable postings relation once and retains a `cid`-to-files
-manifest. Selected CIDs map directly to DataFusion file groups, avoiding
-per-query object listing and whole-relation partition pruning while retaining
-the standard Parquet reader and page cache. Decoded postings are not cached. A
-full probe needs neither centroid routing nor a cluster predicate. IVF postings
-store exact vectors by default,
+lists each immutable postings relation once to build a `cid`-to-files manifest
+and reads the uniform schema from the first listed file. Selected CIDs map
+directly to DataFusion file groups, avoiding per-query object listing and
+whole-relation partition pruning while retaining the standard Parquet reader
+and page cache.
+The session retains manifests in an entry- and byte-bounded planning cache;
+oversized manifests are used for the current plan but not admitted. Stable
+internal table names keep only a lightweight deferred provider and therefore do
+not pin an evicted manifest. Decoded postings are not cached. A full probe needs
+neither centroid routing nor a cluster predicate. IVF postings store exact
+vectors by default,
 so key/vector-only projections without a source filter can compute and rank
 results from index tables alone. Other projections and filters resolve source
 rows by key. Callers can continue from the resulting lazy DataFrame directly or

@@ -428,6 +428,7 @@ impl PageCache for FilePageCache {
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
+    use std::sync::Barrier;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use arrow::array::{ArrayRef, Int32Array, RecordBatch};
@@ -638,6 +639,33 @@ mod tests {
         read_all(&bytes, &reads, cache.bind(new_file));
 
         assert!(reads.load(Ordering::Relaxed) > 0);
+    }
+
+    #[test]
+    fn concurrent_admission_returns_one_canonical_page() {
+        let cache = Arc::new(DecompressedParquetPageCache::new(16 * 1024));
+        let file = ParquetFileCacheKey::new("memory://concurrent.parquet", Some(1), 4_096);
+        let pages = cache.bind(file);
+        let barrier = Arc::new(Barrier::new(3));
+        let handles = (1..=2)
+            .map(|value| {
+                let pages = Arc::clone(&pages);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    pages.insert(cached_page(0, 512, value))
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait();
+        let admitted = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>();
+
+        assert!(Arc::ptr_eq(&admitted[0], &admitted[1]));
+        assert_eq!(cache.stats().admissions, 1);
+        assert_eq!(cache.stats().page_count, 1);
     }
 
     #[test]

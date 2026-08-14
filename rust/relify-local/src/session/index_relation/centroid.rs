@@ -108,36 +108,61 @@ impl CentroidCache {
                         charge: 0,
                     },
                 );
-                self.evict(&mut state);
                 cell
             }
         };
 
-        let matrix = Arc::clone(
-            cell.get_or_try_init(|| async { load().await.map(Arc::new) })
-                .await?,
-        );
+        let matrix = match cell
+            .get_or_try_init(|| async { load().await.map(Arc::new) })
+            .await
+        {
+            Ok(matrix) => Arc::clone(matrix),
+            Err(error) => {
+                self.remove_cell(relation_key, &cell);
+                return Err(error);
+            }
+        };
         let charge = matrix.charge();
         let mut state = self.state();
-        if let Some(entry) = state.entries.get_mut(relation_key)
+        if charge > self.byte_capacity {
+            remove_matching_cell(&mut state, relation_key, &cell);
+        } else if let Some(entry) = state.entries.get_mut(relation_key)
             && Arc::ptr_eq(&entry.cell, &cell)
             && entry.charge == 0
         {
             entry.charge = charge;
             state.resident_bytes = state.resident_bytes.saturating_add(charge);
+            state.entries.to_back(relation_key);
+            self.evict(&mut state);
         }
-        self.evict(&mut state);
         Ok(matrix)
     }
 
     fn evict(&self, state: &mut CacheState) {
         while state.entries.len() > self.entry_capacity || state.resident_bytes > self.byte_capacity
         {
-            let Some((_, entry)) = state.entries.pop_front() else {
+            let pending = state.entries.len();
+            let mut evicted = false;
+            for _ in 0..pending {
+                let Some((key, entry)) = state.entries.pop_front() else {
+                    return;
+                };
+                if entry.charge == 0 {
+                    state.entries.insert(key, entry);
+                    continue;
+                }
+                state.resident_bytes = state.resident_bytes.saturating_sub(entry.charge);
+                evicted = true;
                 break;
-            };
-            state.resident_bytes = state.resident_bytes.saturating_sub(entry.charge);
+            }
+            if !evicted {
+                break;
+            }
         }
+    }
+
+    fn remove_cell(&self, relation_key: &str, cell: &CentroidCell) {
+        remove_matching_cell(&mut self.state(), relation_key, cell);
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, CacheState> {
@@ -150,6 +175,17 @@ impl CentroidCache {
     fn stats(&self) -> (usize, usize) {
         let state = self.state();
         (state.entries.len(), state.resident_bytes)
+    }
+}
+
+fn remove_matching_cell(state: &mut CacheState, relation_key: &str, cell: &CentroidCell) {
+    if state
+        .entries
+        .get(relation_key)
+        .is_some_and(|entry| Arc::ptr_eq(&entry.cell, cell))
+        && let Some(entry) = state.entries.remove(relation_key)
+    {
+        state.resident_bytes = state.resident_bytes.saturating_sub(entry.charge);
     }
 }
 
@@ -202,6 +238,12 @@ mod tests {
     #[tokio::test]
     async fn oversized_matrix_is_not_retained() {
         let cache = CentroidCache::new(4, 4);
+        cache
+            .get_or_load("resident", || async {
+                CentroidMatrix::new(1, 1, vec![0.0])
+            })
+            .await
+            .unwrap();
         let matrix = cache
             .get_or_load("centroids", || async {
                 CentroidMatrix::new(1, 2, vec![0.0, 1.0])
@@ -210,6 +252,30 @@ mod tests {
             .unwrap();
 
         assert_eq!(matrix.values(1, 2).unwrap(), [0.0, 1.0]);
+        assert_eq!(cache.stats(), (1, size_of::<f32>()));
+    }
+
+    #[tokio::test]
+    async fn failed_matrix_load_is_removed_and_retried() {
+        let cache = CentroidCache::new(2, 1024);
+        let loads = AtomicUsize::new(0);
+        let error = cache
+            .get_or_load("centroids", || async {
+                loads.fetch_add(1, Ordering::Relaxed);
+                Err(Error::InvalidSchema("failed".into()))
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(error, Error::InvalidSchema(_)));
         assert_eq!(cache.stats(), (0, 0));
+
+        cache
+            .get_or_load("centroids", || async {
+                loads.fetch_add(1, Ordering::Relaxed);
+                CentroidMatrix::new(1, 1, vec![0.0])
+            })
+            .await
+            .unwrap();
+        assert_eq!(loads.load(Ordering::Relaxed), 2);
     }
 }
