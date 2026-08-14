@@ -2,7 +2,7 @@
   <img src="https://raw.githubusercontent.com/petrizhang/relify/main/assets/relify-header.svg" alt="Relify" width="760">
   <p>
     <a href="https://github.com/petrizhang/relify/blob/main/README.md">English</a> |
-    <a href="https://github.com/petrizhang/relify/blob/main/README.zh-CN.md">中文</a>
+    中文
   </p>
   <p>
     <strong>面向开放湖仓的向量索引与 SQL 原生检索。</strong>
