@@ -11,6 +11,7 @@ use arrow::compute::take;
 use arrow::datatypes::{DataType, Field, FieldRef};
 #[cfg(test)]
 use arrow::datatypes::{Schema, SchemaRef};
+#[cfg(test)]
 use arrow::record_batch::RecordBatch;
 use datafusion::common::{DataFusionError, ScalarValue};
 use datafusion::dataframe::DataFrame;
@@ -22,11 +23,13 @@ use datafusion::prelude::{Expr, col};
 use relify_meta::{IndexSnapshot, PostingEncoding};
 
 #[cfg(test)]
+use crate::ivf::read_centroids;
+use crate::ivf::select_clusters;
+#[cfg(test)]
 use crate::ivf::{
     borrow_source_vectors, candidate_source_rows, source_key_arrays, source_rows_by_key,
     validate_unique_keys,
 };
-use crate::ivf::{read_centroids, select_clusters};
 use crate::{ClusterSelection, Error, ResolvedSearch, Result};
 use relify_kernels::{LvqBatchView, LvqBits, detect};
 
@@ -811,6 +814,7 @@ pub(crate) struct SearchInput<'a> {
     pub projection: Option<&'a [String]>,
 }
 
+#[cfg(test)]
 pub(crate) fn selected_cluster_ids(
     snapshot: &IndexSnapshot,
     centroids: &RecordBatch,

@@ -17,10 +17,13 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
+#[cfg(test)]
 use datafusion::catalog::TableProvider;
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::file_format::FileFormat;
+use datafusion::datasource::file_format::options::ReadOptions;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
+use datafusion::datasource::listing::{ListingTable, ListingTableConfig, ListingTableUrl};
 use datafusion::physical_expr::LexOrdering;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr_common::sort_expr::PhysicalSortExpr;
@@ -307,23 +310,45 @@ impl ParquetStore {
     /// Relify index publication guarantees a uniform schema, so one
     /// deterministic file is sufficient and avoids `DataFusion`'s default
     /// all-file schema merge.
+    #[cfg(test)]
     pub(crate) async fn uniform_dataset_provider(
         &self,
         location: &str,
         partition_columns: Vec<(String, DataType)>,
     ) -> Result<Arc<dyn TableProvider>> {
+        let (provider, _) = self
+            .uniform_dataset_listing_table(location, partition_columns)
+            .await?;
+        Ok(provider)
+    }
+
+    pub(crate) async fn uniform_dataset_listing_table(
+        &self,
+        location: &str,
+        partition_columns: Vec<(String, DataType)>,
+    ) -> Result<(Arc<ListingTable>, SchemaRef)> {
         self.register(location)?;
         let schema = self.infer_uniform_dataset_schema(location).await?;
-        let dataframe = self
-            .context
-            .read_parquet(
-                location,
-                ParquetReadOptions::default()
-                    .schema(schema.as_ref())
-                    .table_partition_cols(partition_columns),
-            )
-            .await?;
-        Ok(dataframe.into_view())
+        let options = ParquetReadOptions::default()
+            .schema(schema.as_ref())
+            .table_partition_cols(partition_columns)
+            .to_listing_options(
+                &self.context.copied_config(),
+                self.context.copied_table_options(),
+            );
+        let table_path = ListingTableUrl::parse(location)?;
+        let provider = ListingTable::try_new(
+            ListingTableConfig::new(table_path)
+                .with_listing_options(options)
+                .with_schema(Arc::clone(&schema)),
+        )?
+        .with_cache(
+            self.context
+                .runtime_env()
+                .cache_manager
+                .get_file_statistic_cache(),
+        );
+        Ok((Arc::new(provider), schema))
     }
 
     async fn infer_uniform_dataset_schema(&self, location: &str) -> Result<SchemaRef> {

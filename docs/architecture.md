@@ -200,13 +200,18 @@ candidate decisions and retained-batch memory.
 Relify routes centroid matrices up to a bounded in-process size with its native
 SIMD kernel; larger matrices remain in the relational plan as a centroid
 distance projection, Top-K, and postings semi-join. Native routing attaches the
-selected CIDs as a static predicate on the Parquet scan.
+selected CIDs as a static predicate on the Parquet scan. A session caches
+validated native centroid matrices by immutable metadata location, with both
+entry and byte limits.
 The local writer stores postings in Hive-style `cid=<value>` partitions with
 one Parquet file per non-empty cluster. It hash-partitions construction work by
 `cid` first, so one cluster reaches exactly one Hive writer. The local reader
-binds `cid` as a partition column, allowing DataFusion to remove unselected
-files while planning the scan. A full probe needs neither centroid routing nor
-a cluster predicate. IVF postings store exact vectors by default,
+lists each immutable postings relation once and retains a `cid`-to-files
+manifest. Selected CIDs map directly to DataFusion file groups, avoiding
+per-query object listing and whole-relation partition pruning while retaining
+the standard Parquet reader and page cache. Decoded postings are not cached. A
+full probe needs neither centroid routing nor a cluster predicate. IVF postings
+store exact vectors by default,
 so key/vector-only projections without a source filter can compute and rank
 results from index tables alone. Other projections and filters resolve source
 rows by key. Callers can continue from the resulting lazy DataFrame directly or

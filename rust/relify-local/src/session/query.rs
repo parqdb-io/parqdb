@@ -18,7 +18,7 @@ use super::source::{
 use crate::query::{
     compile_datafusion_sql, compile_index_only_plan, datafusion_centroid_relation_required,
     datafusion_cluster_relation_required, datafusion_source_relation_required,
-    selected_cluster_ids, use_native_cluster_routing, validated_cluster_search,
+    selected_cluster_ids_from_values, use_native_cluster_routing, validated_cluster_search,
 };
 use crate::{ClusterSelection, Error, ResolvedSearch, Result, SearchRequest};
 
@@ -180,8 +180,14 @@ impl LocalSession {
         let snapshot = loaded.metadata.current_snapshot()?;
         validate_index_source_schema(source_schema.as_ref(), snapshot)?;
         let postings_relation_key = relation_key(index_relation(snapshot, "ivf_postings")?);
+        let centroid_cache_key = format!("{}\0ivf_centroids", loaded.entry.metadata_location);
         let (cluster_selection, nlist) = self
-            .resolve_cluster_selection(snapshot, &request.query, request.nprobe)
+            .resolve_cluster_selection(
+                snapshot,
+                &centroid_cache_key,
+                &request.query,
+                request.nprobe,
+            )
             .await?;
         Ok(ResolvedSearch {
             source_relation_key,
@@ -420,6 +426,7 @@ impl LocalSession {
     async fn resolve_cluster_selection(
         &self,
         snapshot: &IndexSnapshot,
+        cache_key: &str,
         query: &[f32],
         requested_nprobe: Option<usize>,
     ) -> Result<(ClusterSelection, usize)> {
@@ -428,8 +435,21 @@ impl LocalSession {
         let selection = if nprobe == nlist {
             ClusterSelection::All
         } else if use_native_cluster_routing(nlist, dimension) {
-            let centroids = self.read_index_relation(snapshot, "ivf_centroids").await?;
-            let selected = selected_cluster_ids(snapshot, &centroids, query, Some(nprobe))?;
+            let centroids = self
+                .index_relation_providers
+                .get_or_load_centroids(cache_key, || async {
+                    let centroids = self.read_index_relation(snapshot, "ivf_centroids").await?;
+                    let values = crate::ivf::read_centroids(&centroids, nlist, dimension)?;
+                    super::index_relation::CentroidMatrix::new(nlist, dimension, values)
+                })
+                .await?;
+            let selected = selected_cluster_ids_from_values(
+                query,
+                centroids.values(nlist, dimension)?,
+                nlist,
+                dimension,
+                nprobe,
+            )?;
             ClusterSelection::Native(selected)
         } else {
             ClusterSelection::Relational {

@@ -1,5 +1,8 @@
 //! Session-scoped providers for immutable index relations.
 
+mod centroid;
+mod hive_cid;
+
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, Mutex, RwLock};
@@ -8,6 +11,10 @@ use arrow::datatypes::DataType;
 use datafusion::catalog::TableProvider;
 use hashlink::LinkedHashMap;
 use tokio::sync::OnceCell;
+
+use centroid::CentroidCache;
+pub(super) use centroid::CentroidMatrix;
+use hive_cid::HiveCidParquetProvider;
 
 use crate::parquet::ParquetStore;
 use crate::{Error, Result};
@@ -43,20 +50,32 @@ pub(super) struct IndexRelationProviderRegistry {
     registered: RwLock<HashMap<String, Provider>>,
     parquet: Mutex<LinkedHashMap<ParquetProviderKey, ProviderCell>>,
     parquet_capacity: usize,
+    centroids: CentroidCache,
 }
 
 impl Default for IndexRelationProviderRegistry {
     fn default() -> Self {
-        Self::new(DEFAULT_PARQUET_PROVIDER_CACHE_ENTRIES)
+        Self {
+            registered: RwLock::new(HashMap::new()),
+            parquet: Mutex::new(LinkedHashMap::new()),
+            parquet_capacity: DEFAULT_PARQUET_PROVIDER_CACHE_ENTRIES,
+            centroids: CentroidCache::default(),
+        }
     }
 }
 
 impl IndexRelationProviderRegistry {
-    fn new(parquet_capacity: usize) -> Self {
+    #[cfg(test)]
+    fn new(
+        parquet_capacity: usize,
+        centroid_entry_capacity: usize,
+        centroid_byte_capacity: usize,
+    ) -> Self {
         Self {
             registered: RwLock::new(HashMap::new()),
             parquet: Mutex::new(LinkedHashMap::new()),
             parquet_capacity,
+            centroids: CentroidCache::new(centroid_entry_capacity, centroid_byte_capacity),
         }
     }
 
@@ -91,11 +110,30 @@ impl IndexRelationProviderRegistry {
             layout,
         };
         self.get_or_create(key, || async {
-            parquet
-                .uniform_dataset_provider(relation_key, layout.partition_columns())
-                .await
+            let (listing, file_schema) = parquet
+                .uniform_dataset_listing_table(relation_key, layout.partition_columns())
+                .await?;
+            match layout {
+                IndexRelationLayout::Plain => Ok(listing as Provider),
+                IndexRelationLayout::HiveCid => Ok(Arc::new(
+                    HiveCidParquetProvider::load(listing, file_schema, &parquet.context().state())
+                        .await?,
+                ) as Provider),
+            }
         })
         .await
+    }
+
+    pub(super) async fn get_or_load_centroids<F, Fut>(
+        &self,
+        relation_key: &str,
+        load: F,
+    ) -> Result<Arc<CentroidMatrix>>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<CentroidMatrix>>,
+    {
+        self.centroids.get_or_load(relation_key, load).await
     }
 
     async fn get_or_create<F, Fut>(&self, key: ParquetProviderKey, create: F) -> Result<Provider>
@@ -152,7 +190,7 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_misses_build_one_provider() {
-        let registry = IndexRelationProviderRegistry::new(2);
+        let registry = IndexRelationProviderRegistry::new(2, 2, 1024);
         let builds = Arc::new(AtomicUsize::new(0));
         let key = ParquetProviderKey {
             relation_key: "relation".into(),
@@ -181,7 +219,7 @@ mod tests {
 
     #[tokio::test]
     async fn parquet_provider_cache_is_bounded() {
-        let registry = IndexRelationProviderRegistry::new(2);
+        let registry = IndexRelationProviderRegistry::new(2, 2, 1024);
         for relation_key in ["a", "b", "c"] {
             registry
                 .get_or_create(
