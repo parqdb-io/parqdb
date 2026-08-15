@@ -57,7 +57,6 @@ def main() -> None:
                 str(requirements),
             ],
             cwd=repository,
-            env=uv_environment,
             check=True,
         )
 

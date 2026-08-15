@@ -8,9 +8,12 @@ Session / AsyncSession
         |
         v
 SessionTransport
-        |
-        v
-SessionService
+        +--> InProcessTransport ------------------+
+        |                                         |
+        +--> HttpTransport --> HTTP / Arrow IPC   |
+                                  |               |
+                                  v               v
+                              ASGI adapter --> SessionService
         |
         v
 private embedded host
@@ -35,8 +38,9 @@ They do not inherit DataFusion objects. `VectorQuery`, `IVF`, and
 `WriteOptions` are immutable request values that can cross a future transport.
 
 `SessionTransport` is private. `InProcessTransport` delegates directly to
-`SessionService` without serialization. Network transports must implement the
-same operation contract and return the same public values and errors.
+`SessionService` without serialization. `HttpTransport` sends versioned JSON
+requests and incrementally decodes Arrow IPC query results. Both return the same
+public values and errors.
 
 `SessionService` is the only Python layer that coordinates portable operations
 with the private embedded host. DataFusion-specific registration and planning
@@ -74,11 +78,14 @@ Native SQL and vector queries return `ManagedQueryStream`. The stream owns the
 DataFusion stream, cancellation token, and admission permit. Exhaustion,
 explicit close, cancellation, or Arrow reader destruction releases the permit.
 
-The network boundary uses the Arrow IPC streaming format. Encoding pulls one
-record batch at a time and emits bounded byte chunks through a shared executor.
-The native incremental decoder accepts arbitrary transport boundaries, returns
-at most one batch per pull, and bounds each incomplete IPC frame. Neither side
-collects a complete result before forwarding it.
+The Python ASGI adapter invokes the same long-lived `SessionService` used by the
+embedded transport. It does not plan queries or own execution resources. The
+network boundary uses the Arrow IPC streaming format. Encoding pulls one record
+batch at a time and emits bounded byte chunks through a shared executor. The
+native incremental decoder accepts arbitrary transport boundaries, returns at
+most one batch per pull, and bounds each incomplete IPC frame. Neither side
+collects a complete result before forwarding it. Closing the HTTP response
+closes the managed native stream and releases query admission.
 
 Centroid routing uses a bounded native matrix path for ordinary indexes and a
 relational path for larger matrices. Selected cluster IDs become static

@@ -110,7 +110,7 @@ print(summary.to_pydict())
 | --- | --- | --- | --- |
 | 内嵌 DataFusion | Parquet | 构建和查询 IVF、IVF-LVQ4 与 IVF-LVQ8 索引 | 已支持 |
 | 内嵌 DataFusion | Iceberg | 通过 PyIceberg 查询精确表快照 | 实验性 |
-| 客户端/服务端 | Parquet 与 Iceberg | 共享统一 Session API | 开发中 |
+| 客户端/服务端 | 已注册的 Parquet 与 Iceberg 数据 | 只读查询 HTTP API | 实验性 |
 
 首个正式支持的产品形态是内嵌 DataFusion 运行时。索引规范仍独立于该运行
 时；Python 包不再内置分布式计算引擎适配器。

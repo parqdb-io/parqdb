@@ -21,6 +21,9 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bounded parallelism, failure retention, and retry.
 - Bounded incremental Arrow IPC encoding and decoding with transport-level
   backpressure and no full-result buffering.
+- A query-only HTTP transport and Python ASGI server using the same session
+  facades, service contract, error hierarchy, and managed query streams as
+  embedded execution.
 
 ### Changed
 

@@ -115,7 +115,7 @@ requirements.
 | --- | --- | --- | --- |
 | Embedded DataFusion | Parquet | Build and query IVF, IVF-LVQ4, and IVF-LVQ8 indexes | Supported |
 | Embedded DataFusion | Iceberg | Query exact table snapshots through PyIceberg | Experimental |
-| Client/server | Parquet and Iceberg | Shared portable session API | In development |
+| Client/server | Existing Parquet and Iceberg catalog | Query-only HTTP API | Experimental |
 
 The first supported product surface is the embedded DataFusion runtime. The
 index specification remains independent of that runtime; distributed engine

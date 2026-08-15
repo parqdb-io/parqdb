@@ -20,6 +20,7 @@ from .config import IVF, WriteOptions
 from .datafusion import RuntimeEnvBuilder
 from .datafusion import SessionConfig as DataFusionSessionConfig
 from .datafusion.expr import SortKey
+from .errors import UnsupportedOperationError
 from .identifier import TableIdentifier
 from .query import VectorQuery
 from .table import _normalize_query
@@ -417,7 +418,9 @@ class Session:
     def _embedded_host(self) -> Any:
         transport = self._async._transport
         if not isinstance(transport, InProcessTransport):
-            raise RuntimeError("operation is available only in embedded mode")
+            raise UnsupportedOperationError(
+                "operation is available only in embedded mode"
+            )
         return transport._service.host
 
     @property
@@ -613,16 +616,38 @@ async def connect_async(
     iceberg: object | None = None,
     config: DataFusionSessionConfig | None = None,
     runtime: RuntimeEnvBuilder | None = None,
+    headers: Mapping[str, str] | None = None,
+    timeout: float | timedelta | None = None,
 ) -> AsyncSession:
-    transport = await InProcessTransport.open(
-        os.fspath(root) if root is not None else None,
-        catalog=catalog,
-        index_root=index_root,
-        storage_options=storage_options,
-        iceberg=iceberg,
-        config=config,
-        runtime=runtime,
-    )
+    location = os.fspath(root) if root is not None else None
+    if isinstance(location, str) and _is_http_url(location):
+        _reject_remote_embedded_options(
+            catalog=catalog,
+            index_root=index_root,
+            storage_options=storage_options,
+            iceberg=iceberg,
+            config=config,
+            runtime=runtime,
+        )
+        from ._http_transport import HttpTransport
+
+        transport: SessionTransport = await HttpTransport.open(
+            location,
+            headers=headers,
+            timeout=timeout,
+        )
+    else:
+        if headers is not None or timeout is not None:
+            raise ValueError("headers and timeout require an http(s) server URL")
+        transport = await InProcessTransport.open(
+            location,
+            catalog=catalog,
+            index_root=index_root,
+            storage_options=storage_options,
+            iceberg=iceberg,
+            config=config,
+            runtime=runtime,
+        )
     return AsyncSession(transport)
 
 
@@ -635,6 +660,8 @@ def connect(
     iceberg: object | None = None,
     config: DataFusionSessionConfig | None = None,
     runtime: RuntimeEnvBuilder | None = None,
+    headers: Mapping[str, str] | None = None,
+    timeout: float | timedelta | None = None,
 ) -> Session:
     bridge = _BlockingBridge()
     try:
@@ -647,12 +674,26 @@ def connect(
                 iceberg=iceberg,
                 config=config,
                 runtime=runtime,
+                headers=headers,
+                timeout=timeout,
             )
         )
     except BaseException:
         bridge.close()
         raise
     return Session(session, bridge)
+
+
+def _is_http_url(location: str) -> bool:
+    return location.lower().startswith(("http://", "https://"))
+
+
+def _reject_remote_embedded_options(**options: object) -> None:
+    configured = [name for name, value in options.items() if value is not None]
+    if configured:
+        raise ValueError(
+            f"{configured[0]} is configured by the Relify server, not the client"
+        )
 
 
 def _vector_query(
