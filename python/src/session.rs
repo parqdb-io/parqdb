@@ -9,9 +9,9 @@ use datafusion_python::context::{PyRuntimeEnvBuilder, PySessionConfig};
 use datafusion_python::dataframe::PyDataFrame;
 use pyo3::prelude::*;
 use relify_local::{
-    DistanceMetric, IvfConfig, LocalBuildOptions, LocalBuildProgress, LocalSession,
-    LocalSessionOptions, ParquetWriterOptions, PersistentParquetOptions, PostingEncoding,
-    SearchRequest, relify_session_config,
+    DistanceMetric, IndexBuildState, IvfConfig, LocalSession, LocalSessionOptions,
+    ParquetWriterOptions, PersistentParquetOptions, PostingEncoding, SearchRequest,
+    relify_session_config,
 };
 use relify_meta::RelationReference;
 use tokio::runtime::Runtime;
@@ -30,6 +30,15 @@ type PyIndexInfo = (
     i64,
 );
 type PyParquetPageCacheStats = (usize, usize, usize, usize, u64, u64, u64, u64, u64, u64);
+type PyIndexBuildStatus = (
+    &'static str,
+    Option<f64>,
+    Option<&'static str>,
+    Option<u64>,
+    Option<u64>,
+    Option<i64>,
+    Option<String>,
+);
 static SHARED_RUNTIME: OnceLock<std::result::Result<Arc<Runtime>, String>> = OnceLock::new();
 
 fn parse_posting_encoding(value: &str) -> PyResult<PostingEncoding> {
@@ -82,31 +91,6 @@ pub(crate) fn shared_runtime() -> PyResult<Arc<Runtime>> {
 #[pyclass(name = "_ParquetWriterOptions", frozen)]
 pub(crate) struct PyParquetWriterOptions {
     options: ParquetWriterOptions,
-}
-
-#[pyclass(name = "_NativeBuildProgress", frozen)]
-pub(crate) struct PyNativeBuildProgress {
-    progress: LocalBuildProgress,
-}
-
-#[pymethods]
-impl PyNativeBuildProgress {
-    #[new]
-    fn new() -> Self {
-        Self {
-            progress: LocalBuildProgress::default(),
-        }
-    }
-
-    fn snapshot(&self) -> (&'static str, u64, u64, f64) {
-        let snapshot = self.progress.snapshot();
-        (
-            snapshot.phase,
-            snapshot.completed,
-            snapshot.total,
-            snapshot.fraction,
-        )
-    }
 }
 
 #[pymethods]
@@ -522,15 +506,13 @@ impl PyNativeSession {
         posting_encoding,
         metric,
         writer_options,
-        partitions,
-        threads,
-        progress=None
+        partitions
     ))]
     #[allow(clippy::too_many_arguments)]
-    fn create_index(
+    fn submit_create_index<'py>(
         &self,
-        py: Python<'_>,
-        source: String,
+        py: Python<'py>,
+        source: &str,
         index_name: String,
         vector_field: String,
         source_key_fields: Vec<String>,
@@ -539,32 +521,32 @@ impl PyNativeSession {
         metric: &str,
         writer_options: &PyParquetWriterOptions,
         partitions: Option<usize>,
-        threads: Option<usize>,
-        progress: Option<&PyNativeBuildProgress>,
-    ) -> PyResult<String> {
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let source = parse_relation_reference(source)?;
         let session = Arc::clone(&self.session);
         let runtime = Arc::clone(&self.runtime);
+        let build_runtime = Arc::clone(&runtime);
         let writer_options = writer_options.options.clone();
-        let progress = progress.map(|tracker| tracker.progress.clone());
         let posting_encoding = parse_posting_encoding(posting_encoding)?;
         let metric = parse_metric(metric)?;
-        py.detach(move || {
-            runtime.block_on(session.create_index_with_options(
-                &source,
-                &index_name,
-                &vector_field,
-                &source_key_fields,
-                IvfConfig::with_metric(nlist, posting_encoding, metric),
-                &LocalBuildOptions {
-                    writer_options,
-                    partitions,
-                    threads,
-                    progress,
-                },
-            ))
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            build_runtime
+                .spawn(async move {
+                    session.submit_create_index(
+                        &source,
+                        index_name,
+                        vector_field,
+                        source_key_fields,
+                        IvfConfig::with_metric(nlist, posting_encoding, metric),
+                        writer_options,
+                        partitions,
+                    )
+                })
+                .await
+                .map_err(|error| runtime_error(error.to_string()))?
+                .map_err(|error| core_error(&error))?;
+            Ok(())
         })
-        .map(|result| result.metadata_location)
-        .map_err(|error| core_error(&error))
     }
 
     #[pyo3(signature = (
@@ -574,28 +556,25 @@ impl PyNativeSession {
         posting_encoding,
         metric,
         writer_options,
-        partitions,
-        threads,
-        progress=None
+        partitions
     ))]
     #[allow(clippy::too_many_arguments)]
-    fn refresh_index(
+    fn submit_refresh_index<'py>(
         &self,
-        py: Python<'_>,
-        source: String,
+        py: Python<'py>,
+        source: &str,
         index_name: String,
         nlist: Option<usize>,
         posting_encoding: Option<String>,
         metric: Option<String>,
         writer_options: &PyParquetWriterOptions,
         partitions: Option<usize>,
-        threads: Option<usize>,
-        progress: Option<&PyNativeBuildProgress>,
-    ) -> PyResult<String> {
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let source = parse_relation_reference(source)?;
         let session = Arc::clone(&self.session);
         let runtime = Arc::clone(&self.runtime);
+        let build_runtime = Arc::clone(&runtime);
         let writer_options = writer_options.options.clone();
-        let progress = progress.map(|tracker| tracker.progress.clone());
         let config = match (nlist, posting_encoding, metric) {
             (Some(nlist), Some(posting_encoding), Some(metric)) => Some(IvfConfig::with_metric(
                 nlist,
@@ -609,21 +588,78 @@ impl PyNativeSession {
                 ));
             }
         };
-        py.detach(move || {
-            runtime.block_on(session.refresh_index_with_options(
-                &source,
-                &index_name,
-                config,
-                &LocalBuildOptions {
-                    writer_options,
-                    partitions,
-                    threads,
-                    progress,
-                },
-            ))
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            build_runtime
+                .spawn(async move {
+                    session
+                        .submit_refresh_index(
+                            &source,
+                            index_name,
+                            config,
+                            writer_options,
+                            partitions,
+                        )
+                        .await
+                })
+                .await
+                .map_err(|error| runtime_error(error.to_string()))?
+                .map_err(|error| core_error(&error))?;
+            Ok(())
         })
-        .map(|result| result.metadata_location)
-        .map_err(|error| core_error(&error))
+    }
+
+    fn index_build_status<'py>(
+        &self,
+        py: Python<'py>,
+        source: &str,
+        index_name: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let source = parse_relation_reference(source)?;
+        let session = Arc::clone(&self.session);
+        let runtime = Arc::clone(&self.runtime);
+        let build_runtime = Arc::clone(&runtime);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let status = build_runtime
+                .spawn(async move { session.index_build_status(&source, &index_name).await })
+                .await
+                .map_err(|error| runtime_error(error.to_string()))?
+                .map_err(|error| core_error(&error))?;
+            let state = match status.state {
+                IndexBuildState::Pending => "pending",
+                IndexBuildState::Building => "building",
+                IndexBuildState::Ready => "ready",
+                IndexBuildState::Failed => "failed",
+            };
+            Ok((
+                state,
+                status.progress,
+                status.phase,
+                status.completed,
+                status.total,
+                status.current_snapshot_id,
+                status.error,
+            ) as PyIndexBuildStatus)
+        })
+    }
+
+    fn wait_for_index_build<'py>(
+        &self,
+        py: Python<'py>,
+        source: &str,
+        index_name: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let source = parse_relation_reference(source)?;
+        let session = Arc::clone(&self.session);
+        let runtime = Arc::clone(&self.runtime);
+        let build_runtime = Arc::clone(&runtime);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            build_runtime
+                .spawn(async move { session.wait_for_index_build(&source, &index_name).await })
+                .await
+                .map_err(|error| runtime_error(error.to_string()))?
+                .map_err(|error| core_error(&error))?;
+            Ok(())
+        })
     }
 
     #[pyo3(signature = (
@@ -855,7 +891,6 @@ fn parse_relation_reference(value: &str) -> PyResult<RelationReference> {
 pub(crate) fn add_session_bindings(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(new_session_config, module)?)?;
     module.add_class::<PyParquetWriterOptions>()?;
-    module.add_class::<PyNativeBuildProgress>()?;
     module.add_class::<PyNativeSession>()?;
     Ok(())
 }

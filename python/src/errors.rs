@@ -3,7 +3,7 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use relify_catalog::Error as CatalogErrorKind;
 use relify_index::Error as IndexError;
-use relify_local::Error as LocalError;
+use relify_local::{BuildFailureKind, Error as LocalError};
 
 create_exception!(
     _native,
@@ -122,6 +122,18 @@ pub(crate) fn core_error(error: &LocalError) -> PyErr {
         LocalError::IndexNotFound(_) => IndexNotFoundError::new_err(message),
         LocalError::AlreadyExists(_) => AlreadyExistsError::new_err(message),
         LocalError::BuildAlreadyRunning(_) => BuildAlreadyRunningError::new_err(message),
+        LocalError::BuildFailed { kind, .. } => match kind {
+            BuildFailureKind::InvalidArgument => InvalidArgumentError::new_err(message),
+            BuildFailureKind::InvalidSchema => InvalidSchemaError::new_err(message),
+            BuildFailureKind::IndexNotFound => IndexNotFoundError::new_err(message),
+            BuildFailureKind::AlreadyExists => AlreadyExistsError::new_err(message),
+            BuildFailureKind::BuildAlreadyRunning => BuildAlreadyRunningError::new_err(message),
+            BuildFailureKind::AmbiguousIndex => AmbiguousIndexError::new_err(message),
+            BuildFailureKind::InvalidMetadata => InvalidMetadataError::new_err(message),
+            BuildFailureKind::Catalog => CatalogError::new_err(message),
+            BuildFailureKind::Storage => StorageError::new_err(message),
+            BuildFailureKind::Backend => BackendError::new_err(message),
+        },
         LocalError::QueryQueueFull(_) => QueryQueueFullError::new_err(message),
         LocalError::QueryQueueTimeout(_) => QueryQueueTimeoutError::new_err(message),
         LocalError::AmbiguousIndex(_) => AmbiguousIndexError::new_err(message),

@@ -18,6 +18,7 @@ use relify_meta::{
 use uuid::Uuid;
 
 use super::LocalSession;
+use super::build_coordinator::{ActiveBuildState, BuildKey};
 use super::catalog::local_index_identifier;
 use crate::builder::{
     IvfBuildContext, IvfPostingsSpec, PreparedIvf, TrainedIvf, build_ivf_postings,
@@ -31,6 +32,38 @@ use crate::{Error, IvfConfig, LocalBuildProgress, PublishedIndex, Result};
 const IVF_CENTROIDS_LEASE_MS: i64 = 30_000;
 const IVF_CENTROIDS_RENEW_INTERVAL: Duration = Duration::from_secs(10);
 const IVF_CENTROIDS_WAIT_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Observable state of one process-scoped index build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexBuildState {
+    /// Accepted and waiting for the session build slot.
+    Pending,
+    /// Actively constructing or publishing index data.
+    Building,
+    /// A published index is available.
+    Ready,
+    /// The initial build failed and no index is published.
+    Failed,
+}
+
+/// Current build and publication state for one source-scoped index.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexBuildStatus {
+    /// Current lifecycle state.
+    pub state: IndexBuildState,
+    /// Estimated overall completion.
+    pub progress: Option<f64>,
+    /// Current build phase.
+    pub phase: Option<&'static str>,
+    /// Work units completed in the current phase.
+    pub completed: Option<u64>,
+    /// Total work units in the current phase.
+    pub total: Option<u64>,
+    /// Published snapshot available to queries, if any.
+    pub current_snapshot_id: Option<i64>,
+    /// Most recent process-local build failure.
+    pub error: Option<String>,
+}
 
 struct ResolvedIvfCentroids {
     reference: IvfCentroidsReference,
@@ -65,6 +98,175 @@ pub struct LocalBuildOptions {
 }
 
 impl LocalSession {
+    /// Accepts an IVF build for background execution by this session.
+    #[allow(clippy::too_many_arguments)]
+    pub fn submit_create_index(
+        &self,
+        source: &RelationReference,
+        index_name: String,
+        vector_field: String,
+        source_key_fields: Vec<String>,
+        config: IvfConfig,
+        writer_options: ParquetWriterOptions,
+        partitions: Option<usize>,
+    ) -> Result<()> {
+        source.validate()?;
+        writer_options.validate()?;
+        validate_partitions(partitions)?;
+        validate_build_request(&vector_field, &source_key_fields, config.nlist)?;
+        if self.index_exists(&index_name)? {
+            return Err(Error::AlreadyExists(index_name));
+        }
+        let source_uri = parquet_source_uri(source)?.to_owned();
+        let key = build_key(source, &index_name);
+        let progress = LocalBuildProgress::default();
+        let options = LocalBuildOptions {
+            writer_options,
+            partitions,
+            threads: self.builds.dop(),
+            progress: Some(progress.clone()),
+        };
+        let session = self.clone();
+        self.builds.submit(key, None, progress, async move {
+            session
+                .create_index_with_options(
+                    &source_uri,
+                    &index_name,
+                    &vector_field,
+                    &source_key_fields,
+                    config,
+                    &options,
+                )
+                .await
+                .map(|_| ())
+        })
+    }
+
+    /// Accepts an IVF refresh for background execution by this session.
+    pub async fn submit_refresh_index(
+        &self,
+        source: &RelationReference,
+        index_name: String,
+        config: Option<IvfConfig>,
+        writer_options: ParquetWriterOptions,
+        partitions: Option<usize>,
+    ) -> Result<()> {
+        source.validate()?;
+        writer_options.validate()?;
+        validate_partitions(partitions)?;
+        let published = self
+            .list_relation_indexes(source)
+            .await?
+            .into_iter()
+            .find(|index| index.name == index_name)
+            .ok_or_else(|| Error::IndexNotFound(index_name.clone()))?;
+        let source_uri = parquet_source_uri(source)?.to_owned();
+        let key = build_key(source, &index_name);
+        let progress = LocalBuildProgress::default();
+        let options = LocalBuildOptions {
+            writer_options,
+            partitions,
+            threads: self.builds.dop(),
+            progress: Some(progress.clone()),
+        };
+        let session = self.clone();
+        self.builds.submit(
+            key,
+            Some(published.current_snapshot_id),
+            progress,
+            async move {
+                session
+                    .refresh_index_with_options(&source_uri, &index_name, config, &options)
+                    .await
+                    .map(|_| ())
+            },
+        )
+    }
+
+    /// Returns process-local build state combined with durable publication state.
+    pub async fn index_build_status(
+        &self,
+        source: &RelationReference,
+        index_name: &str,
+    ) -> Result<IndexBuildStatus> {
+        source.validate()?;
+        let _ = local_index_identifier(index_name)?;
+        let key = build_key(source, index_name);
+        let active = self.builds.snapshot(&key);
+        let published = self
+            .list_relation_indexes(source)
+            .await?
+            .into_iter()
+            .find(|index| index.name == index_name);
+
+        if let Some(active) = &active
+            && matches!(
+                active.state,
+                ActiveBuildState::Pending | ActiveBuildState::Building
+            )
+        {
+            return Ok(active_status(active, published.as_ref()));
+        }
+        if let Some(published) = published {
+            let error = active.as_ref().and_then(|active| {
+                if active.state == ActiveBuildState::Failed
+                    && active.base_snapshot_id == Some(published.current_snapshot_id)
+                {
+                    active.error.clone()
+                } else {
+                    None
+                }
+            });
+            if active.as_ref().is_some_and(|active| {
+                active.state == ActiveBuildState::Failed
+                    && active.base_snapshot_id != Some(published.current_snapshot_id)
+            }) {
+                self.builds.forget_failure(&key);
+            }
+            return Ok(IndexBuildStatus {
+                state: IndexBuildState::Ready,
+                progress: None,
+                phase: None,
+                completed: None,
+                total: None,
+                current_snapshot_id: Some(published.current_snapshot_id),
+                error,
+            });
+        }
+        if let Some(active) = active
+            && active.state == ActiveBuildState::Failed
+        {
+            return Ok(IndexBuildStatus {
+                state: IndexBuildState::Failed,
+                progress: Some(active.progress.fraction),
+                phase: Some(active.progress.phase),
+                completed: Some(active.progress.completed),
+                total: Some(active.progress.total),
+                current_snapshot_id: None,
+                error: active.error,
+            });
+        }
+        Err(Error::IndexNotFound(index_name.to_owned()))
+    }
+
+    /// Waits for an accepted build or an existing publication.
+    pub async fn wait_for_index_build(
+        &self,
+        source: &RelationReference,
+        index_name: &str,
+    ) -> Result<()> {
+        source.validate()?;
+        let _ = local_index_identifier(index_name)?;
+        let key = build_key(source, index_name);
+        if let Some(result) = self.builds.wait(&key).await {
+            result?;
+            return Ok(());
+        }
+        self.index_build_status(source, index_name)
+            .await
+            .map(|_| ())
+    }
+
     /// Builds and publishes an IVF index over a Parquet source table.
     pub async fn create_index(
         &self,
@@ -440,6 +642,39 @@ impl LocalSession {
                 Err(error)
             }
         }
+    }
+}
+
+fn build_key(source: &RelationReference, index_name: &str) -> BuildKey {
+    BuildKey::new(source.identity_key(), index_name.to_owned())
+}
+
+fn parquet_source_uri(source: &RelationReference) -> Result<&str> {
+    match source {
+        RelationReference::Parquet { uri } => Ok(uri),
+        RelationReference::Iceberg { .. } => Err(Error::InvalidArgument(
+            "the installed builder currently supports Parquet source tables".into(),
+        )),
+    }
+}
+
+fn active_status(
+    active: &super::build_coordinator::ActiveBuildSnapshot,
+    published: Option<&super::IndexInfo>,
+) -> IndexBuildStatus {
+    IndexBuildStatus {
+        state: match active.state {
+            ActiveBuildState::Pending => IndexBuildState::Pending,
+            ActiveBuildState::Building => IndexBuildState::Building,
+            ActiveBuildState::Complete => IndexBuildState::Ready,
+            ActiveBuildState::Failed => IndexBuildState::Failed,
+        },
+        progress: Some(active.progress.fraction),
+        phase: Some(active.progress.phase),
+        completed: Some(active.progress.completed),
+        total: Some(active.progress.total),
+        current_snapshot_id: published.map(|index| index.current_snapshot_id),
+        error: active.error.clone(),
     }
 }
 

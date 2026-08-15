@@ -6,13 +6,13 @@ from dataclasses import dataclass
 from datetime import timedelta
 from functools import partial
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol, cast
 
 import pyarrow
 
 from .build import IndexStatus
 from .catalog import IndexInfo
-from .config import IVF, WriteOptions
+from .config import IVF, WriteOptions, native_writer_options
 from .datafusion import RuntimeEnvBuilder
 from .datafusion import SessionConfig as DataFusionSessionConfig
 from .datafusion.expr import SortKey
@@ -186,18 +186,27 @@ class SessionService:
         wait_timeout: timedelta | None,
     ) -> None:
         self._ensure_open()
-        await asyncio.to_thread(
-            partial(
-                self._host._builds.create,
-                identifier,
-                index=index,
-                column=column,
-                key=key,
-                config=config,
-                writer_options=writer_options,
-                wait_timeout=wait_timeout,
-            )
+        if wait_timeout is not None:
+            _validate_timeout(wait_timeout, "wait_timeout")
+        options = writer_options or WriteOptions()
+        if not isinstance(config, IVF):
+            raise TypeError("the first implementation supports only relify.IVF")
+        if not isinstance(options, WriteOptions):
+            raise TypeError("writer_options must be relify.WriteOptions")
+        source = await self._source_reference(identifier)
+        await self._host._native.submit_create_index(
+            source,
+            index,
+            column,
+            key,
+            config.nlist,
+            config.encoding,
+            config.metric,
+            native_writer_options(options),
+            options.partitions,
         )
+        if wait_timeout is not None:
+            await self._wait_for_index(source, index, wait_timeout)
 
     async def refresh_index(
         self,
@@ -209,22 +218,41 @@ class SessionService:
         wait_timeout: timedelta | None,
     ) -> None:
         self._ensure_open()
-        await asyncio.to_thread(
-            partial(
-                self._host._builds.refresh,
-                identifier,
-                index=index,
-                config=config,
-                writer_options=writer_options,
-                wait_timeout=wait_timeout,
-            )
+        if wait_timeout is not None:
+            _validate_timeout(wait_timeout, "wait_timeout")
+        if config is not None and not isinstance(config, IVF):
+            raise TypeError("the first implementation supports only relify.IVF")
+        options = writer_options or WriteOptions()
+        if not isinstance(options, WriteOptions):
+            raise TypeError("writer_options must be relify.WriteOptions")
+        source = await self._source_reference(identifier)
+        await self._host._native.submit_refresh_index(
+            source,
+            index,
+            config.nlist if config is not None else None,
+            config.encoding if config is not None else None,
+            config.metric if config is not None else None,
+            native_writer_options(options),
+            options.partitions,
         )
+        if wait_timeout is not None:
+            await self._wait_for_index(source, index, wait_timeout)
 
     async def index_status(
         self, identifier: TableIdentifier, index: str
     ) -> IndexStatus:
         self._ensure_open()
-        return await asyncio.to_thread(self._host._builds.status, identifier, index)
+        source = await self._source_reference(identifier)
+        values = await self._host._native.index_build_status(source, index)
+        state = values[0]
+        if state not in {"pending", "building", "ready", "failed"}:
+            raise RuntimeError(
+                f"native build coordinator returned invalid state: {state}"
+            )
+        return IndexStatus(
+            cast(Literal["pending", "building", "ready", "failed"], state),
+            *values[1:],
+        )
 
     async def wait_for_index(
         self,
@@ -233,7 +261,9 @@ class SessionService:
         timeout: timedelta,
     ) -> None:
         self._ensure_open()
-        await asyncio.to_thread(self._host._builds.wait, identifier, index, timeout)
+        _validate_timeout(timeout, "timeout")
+        source = await self._source_reference(identifier)
+        await self._wait_for_index(source, index, timeout)
 
     async def list_indexes(self, identifier: TableIdentifier) -> list[IndexInfo]:
         self._ensure_open()
@@ -271,9 +301,33 @@ class SessionService:
             "bypass_index": query.bypass_index,
         }
 
+    async def _source_reference(self, identifier: TableIdentifier) -> str:
+        return await asyncio.to_thread(self._host._relation_reference, identifier)
+
+    async def _wait_for_index(
+        self,
+        source: str,
+        index: str,
+        timeout: timedelta,
+    ) -> None:
+        try:
+            await asyncio.wait_for(
+                self._host._native.wait_for_index_build(source, index),
+                timeout=timeout.total_seconds(),
+            )
+        except TimeoutError as error:
+            raise TimeoutError(f"timed out waiting for index: {index}") from error
+
     def _ensure_open(self) -> None:
         if self._closed:
             raise RuntimeError("session is closed")
+
+
+def _validate_timeout(timeout: timedelta, name: str) -> None:
+    if not isinstance(timeout, timedelta):
+        raise TypeError(f"{name} must be datetime.timedelta")
+    if timeout.total_seconds() <= 0:
+        raise ValueError(f"{name} must be positive")
 
 
 async def _collect_batches(stream: AsyncBatchStream) -> list[pyarrow.RecordBatch]:

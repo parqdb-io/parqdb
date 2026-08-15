@@ -13,17 +13,17 @@ Relify develops one narrow path at a time. Current priorities follow the
   composition.
 - Bounded metadata, planning, centroid, and decompressed Parquet page caches.
 - Process-scoped query admission and cancellable managed Arrow streams.
+- Portable synchronous and asynchronous session facades.
+- Process-scoped native index build coordination.
 - Atomic refresh and reachability-based orphan removal.
 
 ## Next
 
-1. Finish the portable synchronous and asynchronous session surface.
-2. Move build coordination completely into native `LocalSession`.
-3. Add bounded incremental Arrow IPC encoding and decoding.
-4. Add a query-only HTTP transport and Python ASGI server.
-5. Add remote table and index lifecycle after URI authorization,
+1. Add bounded incremental Arrow IPC encoding and decoding.
+2. Add a query-only HTTP transport and Python ASGI server.
+3. Add remote table and index lifecycle after URI authorization,
    table-scoped identity, and interrupted-build tests pass.
-6. Run one conformance suite against embedded and HTTP transports.
+4. Run one conformance suite against embedded and HTTP transports.
 
 ## Later
 

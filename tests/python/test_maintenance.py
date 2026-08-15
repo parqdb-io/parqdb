@@ -4,15 +4,12 @@ import os
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from threading import Event
 from typing import Any, cast
 from urllib.parse import unquote, urlparse
 
-import pyarrow as pa
 import pytest
 import relify
 from _support import WAIT, build_index, register_source, write_vectors
-from relify._service import TableDescriptor
 
 
 def _uri_path(uri: str) -> Path:
@@ -265,119 +262,6 @@ def test_remove_orphans_enforces_minimum_retention(
             older_than=cutoff,
         )
     } == {"metadata", "index_data"}
-
-
-def test_remove_orphans_can_run_during_an_active_build(tmp_path: Path) -> None:
-    class BlockingNative:
-        def __init__(self) -> None:
-            self.started = Event()
-            self.release = Event()
-            self.published = False
-
-        def index_exists(self, _name: str) -> bool:
-            return False
-
-        def create_index(
-            self,
-            *,
-            source: str,
-            index_name: str,
-            vector_field: str,
-            source_key_fields: list[str],
-            nlist: int,
-            posting_encoding: str,
-            metric: str,
-            writer_options: object,
-            partitions: int | None,
-            threads: int | None,
-            progress: object | None,
-        ) -> str:
-            del (
-                source,
-                index_name,
-                vector_field,
-                source_key_fields,
-                nlist,
-                posting_encoding,
-                metric,
-                writer_options,
-                partitions,
-                threads,
-                progress,
-            )
-            self.started.set()
-            assert self.release.wait(timeout=5)
-            self.published = True
-            return "file:///metadata.json"
-
-        def list_source_indexes(
-            self,
-            _source: str,
-        ) -> list[tuple[str, str, str, str, dict[str, str], int]]:
-            if not self.published:
-                return []
-            return [
-                (
-                    "vectors_embedding",
-                    "embedding",
-                    "ivf",
-                    "l2_squared",
-                    {},
-                    1,
-                )
-            ]
-
-        def load_index_entry(self, _name: str) -> tuple[str, str]:
-            return "file:///metadata.json", "{}"
-
-        def remove_orphans(
-            self,
-            _older_than_ms: int,
-            _dry_run: bool,
-        ) -> list[tuple[str, str, int]]:
-            return []
-
-        def persistent_table_source_by_identifier(
-            self,
-            _catalog: str,
-            _namespace: list[str],
-            _name: str,
-        ) -> str:
-            return "file:///source.parquet"
-
-    session = relify.connect(tmp_path / "relify-data")
-    native = BlockingNative()
-    session._native = native  # type: ignore[assignment]
-    session._repository = native  # type: ignore[assignment]
-    session._indexes = relify.IndexCatalog(native)  # type: ignore[arg-type]
-    session._resolve_build_relation = lambda _identifier: {  # type: ignore[method-assign]
-        "profile": "parquet",
-        "uri": "file:///source.parquet",
-    }
-    vectors = relify.SourceTable(
-        session,
-        TableDescriptor(
-            relify.TableIdentifier("datafusion", ("public",), "vectors"),
-            pa.schema([]),
-        ),
-    )
-    vectors.create_index(
-        "vectors_embedding",
-        column="embedding",
-        key=["id"],
-        config=relify.IVF(nlist=1),
-    )
-    assert native.started.wait(timeout=5)
-    try:
-        assert (
-            session.maintenance.remove_orphans(
-                older_than=datetime.now(UTC),
-            )
-            == ()
-        )
-    finally:
-        native.release.set()
-    vectors.wait_for_index("vectors_embedding", timeout=WAIT)
 
 
 @pytest.mark.parametrize("value", [None, "yesterday", 1])

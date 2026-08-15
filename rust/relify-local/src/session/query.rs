@@ -6,6 +6,7 @@ use arrow::array::{ArrayRef, Int32Array};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion::execution::context::SQLOptions;
 use datafusion::prelude::{SessionContext, col, lit};
 use relify_meta::{DistanceMetric, IndexSnapshot, PostingEncoding, RelationReference};
 use uuid::Uuid;
@@ -80,10 +81,24 @@ impl LocalSession {
         Ok(ManagedQueryStream::new(stream, permit))
     }
 
-    /// Executes one SQL statement as a cancellable, admission-controlled Arrow stream.
+    /// Executes one read-only SQL statement as a cancellable, admission-controlled Arrow stream.
     pub async fn stream_sql(&self, sql: &str) -> Result<ManagedQueryStream> {
         let permit = self.runtime.admit_query().await?;
-        let stream = self.context.sql(sql).await?.execute_stream().await?;
+        let plan = self.context.state().create_logical_plan(sql).await?;
+        SQLOptions::new()
+            .with_allow_ddl(false)
+            .with_allow_dml(false)
+            .with_allow_statements(false)
+            .verify_plan(&plan)
+            .map_err(|error| {
+                Error::InvalidArgument(format!("SQL execution is read-only: {error}"))
+            })?;
+        let stream = self
+            .context
+            .execute_logical_plan(plan)
+            .await?
+            .execute_stream()
+            .await?;
         Ok(ManagedQueryStream::new(stream, permit))
     }
 

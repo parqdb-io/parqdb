@@ -444,13 +444,6 @@ class Session:
     def _indexes(self, value: Any) -> None:
         self._embedded_host()._indexes = value
 
-    @property
-    def _builds(self) -> Any:
-        return self._embedded_host()._builds
-
-    def _resolve_build_relation(self, identifier: TableIdentifier) -> dict[str, object]:
-        return self._embedded_host()._resolve_build_relation(identifier)
-
     def _list_table_indexes(self, identifier: TableIdentifier) -> list[IndexInfo]:
         return self._embedded_host()._list_table_indexes(identifier)
 

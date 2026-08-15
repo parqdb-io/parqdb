@@ -1,13 +1,14 @@
 //! Embedded Relify session composition.
 
 mod build;
+mod build_coordinator;
 mod catalog;
 mod catalog_list;
 mod index_relation;
 mod query;
 mod source;
 
-pub use build::LocalBuildOptions;
+pub use build::{IndexBuildState, IndexBuildStatus, LocalBuildOptions};
 pub use source::PersistentParquetOptions;
 
 use std::collections::{BTreeMap, HashMap};
@@ -30,7 +31,9 @@ use self::catalog::validate_index_name;
 use self::catalog_list::RelifyCatalogList;
 #[cfg(test)]
 use crate::SearchRequest;
-use crate::config::{LocalSessionOptions, index_relation_cache_config, metadata_cache_config};
+use crate::config::{
+    LocalSessionOptions, build_dop, index_relation_cache_config, metadata_cache_config,
+};
 use crate::coordination::SessionCoordination;
 use crate::durability::{create_dir_all, sync_directory};
 use crate::local_uri::directory_to_file_uri;
@@ -88,6 +91,7 @@ pub struct LocalSession {
     indexes: IndexRepository,
     parquet: ParquetStore,
     runtime: Arc<RelifyRuntime>,
+    builds: build_coordinator::BuildCoordinator,
     context: SessionContext,
     source_bindings: Arc<RwLock<HashMap<String, source::SourceBinding>>>,
     index_relation_providers: Arc<index_relation::IndexRelationProviderRegistry>,
@@ -275,6 +279,7 @@ impl LocalSession {
         let warehouse = Warehouse::open(warehouse_root, registry.clone())?;
         let (session_config, runtime) = options.into_parts()?;
         let relation_cache_config = index_relation_cache_config(&session_config);
+        let build_dop = build_dop(&session_config)?;
         let session_config = session_config.with_extension(Arc::new(
             ParquetPageCacheFactoryConfig::new(runtime.parquet_page_cache_factory()),
         ));
@@ -298,6 +303,7 @@ impl LocalSession {
             indexes: IndexRepository::new(index_catalog, metadata),
             parquet: ParquetStore::with_context(registry.clone(), context.clone()),
             runtime,
+            builds: build_coordinator::BuildCoordinator::new(build_dop),
             context,
             source_bindings: Arc::new(RwLock::new(HashMap::new())),
             index_relation_providers: Arc::new(index_relation::IndexRelationProviderRegistry::new(

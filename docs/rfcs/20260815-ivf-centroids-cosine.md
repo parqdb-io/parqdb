@@ -397,7 +397,6 @@ documents.wait_for_index("documents_lvq8")
 
 `wait_timeout` remains available on `create_index` for callers that want one
 blocking call. `index_status` exposes the current centroid or postings phase.
-The internal `BuildOperation` is not public API.
 
 This API shape follows
 [LanceDB's Python API](https://lancedb.github.io/lancedb/python/python/) and

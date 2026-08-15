@@ -17,7 +17,7 @@ mod session;
 mod vector;
 
 pub use config::{LocalSessionOptions, RelifyConfig, relify_session_config};
-pub use error::{Error, Result};
+pub use error::{BuildFailureKind, Error, Result};
 pub use maintenance::{MaintenanceKind, MaintenanceObject};
 pub use parquet::{ParquetPageCacheStats, ParquetWriterOptions};
 pub use progress::{LocalBuildProgress, LocalBuildProgressSnapshot};
@@ -35,6 +35,6 @@ pub use relify_meta::{IndexMetadata, IndexSnapshot, RelationReference};
 pub use runtime::{QueryAdmissionOptions, QueryAdmissionStats, RelifyRuntime};
 pub use search::{ClusterSelection, ResolvedSearch};
 pub use session::{
-    IndexInfo, LocalBuildOptions, LocalSession, PersistentParquetOptions, SourceDescription,
-    SourceField,
+    IndexBuildState, IndexBuildStatus, IndexInfo, LocalBuildOptions, LocalSession,
+    PersistentParquetOptions, SourceDescription, SourceField,
 };

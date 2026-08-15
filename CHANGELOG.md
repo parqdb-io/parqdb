@@ -17,6 +17,8 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   version 1.
 - A reproducible GIST benchmark runner for Relify and Faiss Flat, SQ4, and SQ8
   comparisons.
+- Native, process-scoped index build coordination with observable status,
+  bounded parallelism, failure retention, and retry.
 
 ### Changed
 
@@ -29,8 +31,8 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - IVF postings no longer copy full source vectors. The public `IVF`
   configuration selects `source`, `lvq4`, or `lvq8` encoding and
   `l2_squared` or `cosine` distance.
-- The experimental Spark integration is query-only while its builder migrates
-  to the IVF-centroids publication contract.
+- Portable SQL terminals now reject DDL, DML, `COPY`, and session-mutating
+  statements before execution.
 
 ### Fixed
 

@@ -4,7 +4,6 @@ import json
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import timedelta
 from itertools import count
 from pathlib import Path
 from types import MappingProxyType
@@ -13,10 +12,8 @@ from urllib.parse import unquote, urlsplit
 
 import pyarrow
 
-from ._native import _NativeBuildProgress, _NativeIndexRepository, _NativeSession
-from .build import BuildCoordinator, _LocalBuildContext, _LocalBuildProgress
+from ._native import _NativeSession
 from .catalog import IndexCatalog, IndexInfo
-from .config import IVF, WriteOptions
 from .datafusion import (
     DataFrame,
     RuntimeEnvBuilder,
@@ -30,7 +27,6 @@ from .iceberg import load_table_state, table_provider_inputs
 from .identifier import TableIdentifier
 from .maintenance import Maintenance
 from .query import VectorQuery
-from .table import TableOperations
 
 
 @dataclass(frozen=True)
@@ -88,7 +84,6 @@ class _EmbeddedSession(SessionContext):
         self._index_root = self._native.warehouse_root()
         self._repository = self._native.index_repository()
         self._indexes = IndexCatalog(self._repository)
-        self._builds = BuildCoordinator(self)
         self.ctx = self._native.context()
         self._query_names = count()
         self._maintenance = Maintenance(self)
@@ -290,21 +285,6 @@ class _EmbeddedSession(SessionContext):
             raise ValueError(f"query source is not registered: {identifier!r}")
         return _parquet_relation_json(source)
 
-    def _resolve_build_relation(
-        self,
-        identifier: TableIdentifier,
-    ) -> dict[str, object]:
-        return json.loads(self._relation_reference(identifier))
-
-    def _build_context(self) -> _LocalBuildContext:
-        return _LocalBuildContext(
-            runtime=self._native,
-            progress=_LocalBuildProgress(_NativeBuildProgress()),
-        )
-
-    def _index_repository(self) -> _NativeIndexRepository:
-        return self._repository
-
     def _list_table_indexes(
         self,
         identifier: TableIdentifier,
@@ -398,7 +378,7 @@ class _EmbeddedSession(SessionContext):
         return TableIdentifier(parts[0], parts[1:-1], parts[-1])
 
 
-class _EmbeddedSourceTable(TableOperations, DataFrame):
+class _EmbeddedSourceTable(DataFrame):
     def __init__(
         self,
         dataframe: DataFrame,
@@ -416,21 +396,9 @@ class _EmbeddedSourceTable(TableOperations, DataFrame):
         self._identifier = identifier
         self._build_source = build_source
 
-    def refresh_index(
-        self,
-        index: str,
-        *,
-        config: IVF | None = None,
-        writer_options: WriteOptions | None = None,
-        wait_timeout: timedelta | None = None,
-    ) -> None:
-        self._session._builds.refresh(
-            self._identifier,
-            index=index,
-            config=config,
-            writer_options=writer_options,
-            wait_timeout=wait_timeout,
-        )
+    @property
+    def identifier(self) -> TableIdentifier:
+        return self._identifier
 
 
 def _connect_embedded(
