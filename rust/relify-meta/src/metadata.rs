@@ -322,7 +322,7 @@ impl SnapshotIdentity {
     }
 }
 
-fn validate_metadata_location(location: &str) -> Result<()> {
+pub(crate) fn validate_metadata_location(location: &str) -> Result<()> {
     let parsed = Url::parse(location).map_err(|error| Error(error.to_string()))?;
     if !parsed.has_host() && parsed.scheme() != "file" {
         return invalid("location must be an absolute URI");

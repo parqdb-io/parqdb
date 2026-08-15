@@ -8,7 +8,10 @@ mod identifier;
 mod sqlite;
 mod table;
 
-pub use catalog::{CatalogEntry, CatalogTombstone, IndexCatalog};
+pub use catalog::{
+    CatalogEntry, CatalogTombstone, IndexCatalog, SharedIvfCatalogEntry, SharedIvfClaim,
+    SharedIvfClaimResult,
+};
 pub use error::{Error, Result};
 pub use identifier::{IndexIdentifier, TableIdentifier};
 #[cfg(feature = "sqlite")]

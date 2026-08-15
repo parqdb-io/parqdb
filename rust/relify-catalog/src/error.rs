@@ -13,6 +13,9 @@ pub enum Error {
     /// The requested index does not exist.
     #[error("index not found: {0}")]
     IndexNotFound(IndexIdentifier),
+    /// The requested shared IVF does not exist or is not ready.
+    #[error("shared IVF not found: {0}")]
+    SharedIvfNotFound(String),
     /// An index with the same identifier already exists.
     #[error("index already exists: {0}")]
     AlreadyExists(IndexIdentifier),
@@ -31,6 +34,9 @@ pub enum Error {
     /// A compare-and-swap catalog commit lost a concurrent update.
     #[error("catalog commit conflict: {0}")]
     CommitConflict(IndexIdentifier),
+    /// A shared-IVF claim is no longer owned by the caller.
+    #[error("shared IVF claim was lost: {0}")]
+    SharedIvfClaimLost(String),
     /// An index metadata document is invalid.
     #[error("invalid index metadata: {0}")]
     InvalidMetadata(String),
@@ -43,6 +49,9 @@ pub enum Error {
     /// The `SQLite` database uses an unsupported catalog schema version.
     #[error("unsupported SQLite catalog schema version: {0}")]
     UnsupportedSchemaVersion(i64),
+    /// The `SQLite` database is not a Relify catalog.
+    #[error("unsupported SQLite catalog application ID: {0}")]
+    UnsupportedApplicationId(i64),
     /// An underlying filesystem operation failed.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
