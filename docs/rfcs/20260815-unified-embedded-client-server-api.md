@@ -17,17 +17,21 @@ The public API must not expose this deployment choice. After `connect`, source
 registration, index lifecycle, query construction, execution, result schemas,
 and errors must have the same behavior in embedded and client/server modes.
 
-LanceDB provides the relevant API precedent: one `connect` entry point selects
-a local or remote connection from the URI, while both implementations satisfy
-the same connection, table, and query interfaces. Relify adopts that interface
-principle. It does not retain a public compute-backend plugin layer: embedded
-and client/server requests both execute through the same DataFusion engine.
+LanceDB provides the relevant API and protocol precedent. One `connect` entry
+point selects a local or remote connection, while both implementations satisfy
+the same connection, table, and query interfaces. Its REST Catalog also defines
+operation models once and maps them to versioned HTTP routes with JSON metadata
+and Arrow IPC data. Relify adopts both principles. It does not retain a public
+compute-backend plugin layer: embedded and client/server requests both execute
+through the same DataFusion engine.
 
 References:
 
 - [LanceDB `connect`](https://github.com/lancedb/lancedb/blob/main/python/python/lancedb/__init__.py)
 - [LanceDB connection interface](https://github.com/lancedb/lancedb/blob/main/python/python/lancedb/db.py)
 - [LanceDB table interface](https://github.com/lancedb/lancedb/blob/main/python/python/lancedb/table.py)
+- [Lance REST Catalog](https://lance.org/format/catalog/rest/)
+- [Lance Namespace OpenAPI specification](https://github.com/lance-format/lance-namespace/blob/main/docs/src/spec.yaml)
 
 ## Decisions
 
@@ -36,9 +40,10 @@ References:
 | How does an application select the mode? | `relify.connect` selects embedded or client/server execution from the URI. |
 | Does the mode change user operations? | No. Both modes return the same public `Session`, `SourceTable`, and query types. |
 | Is compute execution a public plugin point? | No. The supported engine is DataFusion. External engines may use the open specification or a reference SQL compiler. |
-| Where is query meaning defined? | Transport-neutral `VectorQuery` and `SqlQuery` values describe the request. |
+| Where is query meaning defined? | A transport-neutral `VectorQuery` or SQL string describes the request. |
 | Where is a request executed? | Both transports invoke the same session-service contract backed by DataFusion. |
-| How are results transferred? | Arrow RecordBatch streams over Arrow Flight; result rows are never encoded as JSON. |
+| What is the remote protocol? | A versioned HTTP/HTTPS API described by OpenAPI. It follows the Lance REST Catalog operation and route model. |
+| How are results transferred? | Metadata uses JSON. Query results use Arrow IPC streams over HTTP and are never converted to JSON by the SDK. |
 | Is the DataFusion Python API part of the shared contract? | No. Engine-native objects are an explicit embedded-only escape hatch. |
 | Is a catalog object exposed to applications? | No. `Session` provides table registration and discovery; index lifecycle remains table-centered. |
 | What does a path mean in client/server mode? | The execution process resolves it. A server must be able to access every registered URI. |
@@ -55,7 +60,7 @@ Only connection construction changes between modes:
 import relify
 
 embedded = relify.connect("./relify-data")
-remote = relify.connect("relify://127.0.0.1:50051")
+remote = relify.connect("https://relify.example.com")
 ```
 
 All ordinary operations are identical after connection:
@@ -97,7 +102,7 @@ and server administration are not additional application objects.
 
 | API | Result |
 | --- | --- |
-| `relify.connect(location, ...)` | One public `Session` facade backed by an in-process or Flight transport. |
+| `relify.connect(location, ...)` | One public `Session` facade backed by an in-process or HTTP transport. |
 | `session.close()` | Release client or embedded resources. |
 | `with relify.connect(...) as session` | Close the session when the context exits. |
 
@@ -160,23 +165,25 @@ same builder operations in both modes:
 | `limit(count)` | Select the result count. |
 | `bypass_vector_index()` | Execute the reference path without an index. |
 
-`session.sql(statement)` constructs an immutable `SqlQuery`. Neither query type
-contains a DataFusion plan, network channel, or session reference.
+SQL does not require a public query wrapper. A statement is passed directly as
+a string; the transport converts it into an internal request without exposing
+that request type to applications. A `VectorQuery` contains no DataFusion plan,
+network channel, or session reference.
 
 ```python
 vector_query = documents.search(vector, column="embedding").limit(10)
-sql_query = session.sql("SELECT category, COUNT(*) FROM documents GROUP BY category")
+sql = "SELECT category, COUNT(*) FROM documents GROUP BY category"
 
 vector_hits = session.collect(vector_query)
-category_counts = session.collect(sql_query)
+category_counts = session.collect(sql)
 ```
 
 The portable SQL surface initially accepts read-only query statements,
 including projections, filters, joins, CTEs, aggregations, ordering, and
 limits. DataFusion `SET`, DDL, temporary objects, and process-local UDF
-registration are not portable SQL operations. This changes `Session.sql` from
-a DataFusion planning call into query construction; execution begins at
-`stream`, `collect`, `explain`, or `analyze`.
+registration are not portable SQL operations. `session.sql(statement)` executes
+and collects the statement. Callers pass the same string to `stream`, `explain`,
+or `analyze` when they need a different terminal operation.
 
 #### Execution and results
 
@@ -184,11 +191,12 @@ a DataFusion planning call into query construction; execution begins at
 | --- | --- |
 | `session.stream(query)` | `pyarrow.RecordBatchReader` |
 | `session.collect(query)` | `pyarrow.Table` |
+| `session.sql(statement)` | Convenience alias for `session.collect(statement)`. |
 | `session.to_arrow(query)` | Compatibility alias for `collect`. |
 | `session.explain(query, ...)` | Portable plan description. |
 | `session.analyze(query)` | Executed plan and runtime metrics. |
 
-The execution methods accept either `VectorQuery` or `SqlQuery`. Empty results
+The execution methods accept either `VectorQuery` or a SQL string. Empty results
 retain the same schema in both modes. Streaming prevents a remote client from
 materializing a large result before consuming it.
 
@@ -221,9 +229,9 @@ portable and executes through the session service.
 
 ### URI and path semantics
 
-`relify://host:port` identifies a Relify server. A filesystem path or existing
-local catalog form selects embedded execution. Connection credentials and
-timeouts are transport options; they do not alter table or query behavior.
+An `http://` or `https://` URL identifies a Relify server. A filesystem path or
+existing local catalog form selects embedded execution. Connection credentials
+and timeouts are transport options; they do not alter table or query behavior.
 
 Paths passed to operations are resolved by the process that executes the
 operation:
@@ -236,6 +244,45 @@ operation:
 need one source in both modes should use a shared URI or mount the same path in
 the server environment.
 
+### HTTP protocol
+
+Relify follows the Lance REST Catalog's operation-oriented protocol design
+rather than translating the API into generic CRUD resources. Every public
+operation has one transport-neutral request and response model. The embedded
+transport calls that operation directly; the HTTP transport serializes the same
+model as JSON or Arrow IPC.
+
+Routes include the table identifier whenever an operation is table-scoped. This
+lets a reverse proxy perform routing, authentication, authorization, and
+request accounting without deserializing the body. The first protocol version
+uses these routes:
+
+| Operation | Route | Response |
+| --- | --- | --- |
+| List tables | `GET /v1/table` | JSON |
+| Register a Parquet source | `POST /v1/table/{id}/register` | JSON |
+| Describe a table | `POST /v1/table/{id}/describe` | JSON |
+| Deregister a source | `POST /v1/table/{id}/deregister` | JSON |
+| Query a table | `POST /v1/table/{id}/query` | Arrow IPC stream |
+| Execute SQL | `POST /v1/sql` | Arrow IPC stream |
+| Create an index | `POST /v1/table/{id}/create_index` | JSON |
+| List indexes | `POST /v1/table/{id}/index/list` | JSON |
+| Read index status | `POST /v1/table/{id}/index/{index_name}/stats` | JSON |
+| Refresh an index | `POST /v1/table/{id}/index/{index_name}/refresh` | JSON |
+| Drop an index | `POST /v1/table/{id}/index/{index_name}/drop` | JSON |
+
+`POST /v1/table/{id}/query` accepts the JSON representation of `VectorQuery`.
+`POST /v1/sql` accepts a SQL statement because a join or CTE may not have one
+table that can be named in the route. Both return
+`application/vnd.apache.arrow.stream`. Index construction remains asynchronous;
+the create or refresh response acknowledges the build, and clients poll the
+index stats operation when implementing `wait_for_index`.
+
+The HTTP API is specified with OpenAPI 3.1. Authentication uses standard HTTP
+headers, and a request identifier is returned in a response header. API version
+compatibility is explicit in the `/v1` path rather than negotiated by a
+connection-specific handshake.
+
 ## Architecture
 
 The process boundary is below the public API and above one concrete execution
@@ -246,10 +293,10 @@ flowchart LR
     API["Session, SourceTable, and Query API"] --> T["SessionTransport"]
 
     T -->|embedded| I["InProcessTransport"]
-    T -->|client/server| F["FlightTransport"]
+    T -->|client/server| H["HttpTransport"]
 
     I --> S["SessionService"]
-    F --> N["Arrow Flight"]
+    H --> N["HTTP with JSON and Arrow IPC"]
     N --> R["Relify Server"]
     R --> S
 
@@ -265,7 +312,7 @@ planning or DataFusion logic.
 
 `SessionService` owns the operation contract. Its in-process implementation is
 called directly by `InProcessTransport`; the server exposes the same contract
-through `FlightTransport`. Validation, index selection, planning, and error
+through `HttpTransport`. Validation, index selection, planning, and error
 classification happen behind this boundary once, rather than being duplicated
 in a remote client.
 
@@ -327,39 +374,34 @@ sequenceDiagram
     API->>Transport: execute(query)
     alt Embedded transport
         Transport->>Service: typed request
-    else Flight transport
-        Transport->>Server: versioned request
+    else HTTP transport
+        Transport->>Server: versioned HTTP request
         Server->>Service: typed request
     end
     Service->>Engine: resolve, plan, and execute
     Engine-->>Service: Arrow RecordBatch stream
     alt Embedded transport
         Service-->>Transport: in-process Arrow stream
-    else Flight transport
+    else HTTP transport
         Service-->>Server: Arrow RecordBatch stream
-        Server-->>Transport: Flight data stream
+        Server-->>Transport: HTTP Arrow IPC stream
     end
     Transport-->>API: RecordBatchReader
     API-->>App: pyarrow.Table
 ```
 
-The remote wire contract uses versioned protobuf commands carried by Arrow
-Flight. SQL may use Flight SQL where its semantics match the public `SqlQuery`;
-vector search and index lifecycle use typed Relify commands. Query results and
-tabular metadata use Flight data streams. Small status responses use protobuf
-messages.
-
-The connection handshake exchanges protocol versions before the first request.
-Unsupported protocol versions fail at connection time, not after a query has
-started. The handshake does not allocate correctness-critical session state on
-one server replica.
+The remote wire contract is the OpenAPI operation model described above. JSON
+requests carry SQL, vector-query options, source definitions, and index
+lifecycle commands. Query endpoints stream Arrow RecordBatches as Arrow IPC;
+metadata and status operations return JSON. The HTTP adapter contains no query
+planning or catalog logic.
 
 ## Errors and Cancellation
 
 Both transports map failures to the same public Relify exception hierarchy.
-The wire protocol carries a stable error code and a safe message; Python client
-code must not need to catch transport-specific gRPC exceptions for ordinary
-Relify failures.
+HTTP errors use the status code plus a JSON body containing a stable Relify error
+code, a safe message, and the request identifier. Python client code must not
+need to catch HTTP-library exceptions for ordinary Relify failures.
 
 Client deadlines and cancellation propagate to query execution. Disconnecting
 a client releases its result stream and query state, but does not implicitly
@@ -405,9 +447,9 @@ The public facade is extracted before networking is added:
    Spark and StarRocks sessions;
 3. move current DataFusion behavior behind `SessionService` and
    `InProcessTransport`;
-4. make `VectorQuery` and `SqlQuery` the only inputs to portable terminals;
+4. make `VectorQuery` and SQL strings the only inputs to portable terminals;
 5. run the existing local suite through the facade; and
-6. add `FlightTransport` and the server without changing application code.
+6. add `HttpTransport` and the server without changing application code.
 
 This is a deliberate pre-1.0 API correction. Compatibility aliases may be
 kept for `collect` and `to_arrow`, but DataFusion object inheritance must not be
@@ -440,11 +482,20 @@ Rejected. DataFusion plans can contain process-local providers, expressions,
 UDFs, and Python objects. A partial proxy would look compatible while failing
 on valid local operations.
 
-### REST and JSON
+### Arrow Flight
 
-Rejected for the data path. JSON adds avoidable conversion and copying for
-query vectors and results and does not provide Arrow streaming. A future HTTP
-administration API does not change the query transport.
+Rejected as the required client/server protocol. Flight would require a
+Flight-capable SDK and does not provide a browser-native client path. HTTP can
+carry the same Arrow IPC RecordBatch stream while JSON remains limited to
+operation metadata. Flight may be reconsidered as an optional adapter only when
+a concrete interoperability or performance requirement justifies a second
+wire protocol.
+
+### JSON query results
+
+Rejected as the portable SDK result format. JSON loses Arrow type fidelity and
+adds row conversion and copying. Browser clients can consume Arrow IPC streams
+with Apache Arrow JavaScript.
 
 ### One embedded runtime per benchmark worker
 
@@ -463,6 +514,7 @@ This RFC does not define:
 - mutable server-side SQL session state;
 - arbitrary Python UDF transfer;
 - a remote proxy for the complete DataFusion Python API;
+- Arrow Flight or Flight SQL;
 - hosting Spark or StarRocks inside the first server; or
 - the final authentication, authorization, and TLS deployment model.
 
