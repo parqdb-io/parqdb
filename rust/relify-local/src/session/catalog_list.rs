@@ -4,10 +4,11 @@ use std::sync::Arc;
 
 use datafusion::catalog::{CatalogProvider, CatalogProviderList};
 use relify_catalog::{
-    CatalogEntry, CatalogTombstone, IndexCatalog, IndexIdentifier, TableCatalog, TableDefinition,
-    TableIdentifier,
+    CatalogEntry, CatalogTombstone, IndexCatalog, IndexIdentifier, SharedIvfCatalogEntry,
+    SharedIvfClaim, SharedIvfClaimResult, TableCatalog, TableDefinition, TableIdentifier,
 };
-use relify_meta::{IndexMetadata, RelationReference};
+use relify_meta::{IndexMetadata, RelationReference, SharedIvfDescriptor, SharedIvfMetadata};
+use uuid::Uuid;
 
 pub(super) struct RelifyCatalogList {
     catalogs: Arc<dyn CatalogProviderList>,
@@ -119,6 +120,51 @@ impl IndexCatalog for RelifyCatalogList {
 
     fn purge_tombstone(&self, tombstone: &CatalogTombstone) -> relify_catalog::Result<bool> {
         self.indexes.purge_tombstone(tombstone)
+    }
+
+    fn load_shared_ivf(&self, fingerprint: &str) -> relify_catalog::Result<SharedIvfCatalogEntry> {
+        self.indexes.load_shared_ivf(fingerprint)
+    }
+
+    fn claim_shared_ivf(
+        &self,
+        descriptor: &SharedIvfDescriptor,
+        owner: Uuid,
+        lease_duration_ms: i64,
+    ) -> relify_catalog::Result<SharedIvfClaimResult> {
+        self.indexes
+            .claim_shared_ivf(descriptor, owner, lease_duration_ms)
+    }
+
+    fn renew_shared_ivf_claim(
+        &self,
+        claim: &SharedIvfClaim,
+        lease_duration_ms: i64,
+    ) -> relify_catalog::Result<()> {
+        self.indexes
+            .renew_shared_ivf_claim(claim, lease_duration_ms)
+    }
+
+    fn publish_shared_ivf(
+        &self,
+        claim: &SharedIvfClaim,
+        metadata_location: &str,
+        metadata: &SharedIvfMetadata,
+    ) -> relify_catalog::Result<SharedIvfCatalogEntry> {
+        self.indexes
+            .publish_shared_ivf(claim, metadata_location, metadata)
+    }
+
+    fn abandon_shared_ivf(
+        &self,
+        claim: &SharedIvfClaim,
+        error: &str,
+    ) -> relify_catalog::Result<()> {
+        self.indexes.abandon_shared_ivf(claim, error)
+    }
+
+    fn list_shared_ivf(&self) -> relify_catalog::Result<Vec<SharedIvfCatalogEntry>> {
+        self.indexes.list_shared_ivf()
     }
 }
 

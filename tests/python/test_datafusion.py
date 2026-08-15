@@ -213,10 +213,14 @@ def test_squared_l2_udf_is_stateless_and_accepts_query_as_an_argument(
     assert near_ten.to_pydict()["id"] == [2]
 
 
-def test_native_planner_restores_the_relify_distance_udf(
-    indexed_documents: tuple[relify.Session, relify.SourceTable],
+def test_native_planner_does_not_mutate_session_udf_registration(
+    tmp_path: Path,
 ) -> None:
-    session, documents = indexed_documents
+    source = tmp_path / "vectors.parquet"
+    write_vectors(source, [0, 1], [[0.0, 0.0], [10.0, 0.0]])
+    session = relify.connect(tmp_path / "relify-data")
+    documents = register_source(session, source)
+    build_index(documents, nlist=1)
 
     fake_distance = datafusion.udf(
         lambda left, _right: pyarrow.array(
@@ -232,7 +236,7 @@ def test_native_planner_restores_the_relify_distance_udf(
 
     result = session.to_dataframe(documents.search([10.0, 0.0]).limit(1).select(["id"]))
 
-    assert result.to_pydict()["id"] == [2]
+    assert result.to_pydict()["id"] == [0]
 
 
 def test_native_planner_does_not_collide_with_user_relations(

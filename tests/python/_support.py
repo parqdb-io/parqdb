@@ -52,7 +52,7 @@ def build_index(
     column: str = "embedding",
     key: list[str] | None = None,
     nlist: int = 2,
-    encoding: str = "flat",
+    encoding: str = "source",
     builder: relify.Local | None = None,
     writer_options: relify.WriteOptions | None = None,
 ) -> None:

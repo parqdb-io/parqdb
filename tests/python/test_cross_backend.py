@@ -16,6 +16,7 @@ from pyiceberg.types import (
     NestedField,
     StringType,
 )
+from support.indexes import write_shared_ivf_metadata
 
 
 def test_datafusion_queries_spark_style_iceberg_index(tmp_path: Path) -> None:
@@ -84,7 +85,6 @@ def test_datafusion_queries_spark_style_iceberg_index(tmp_path: Path) -> None:
         [
             pa.field("cid", pa.int32(), nullable=False),
             pa.field("key_1", pa.int64(), nullable=False),
-            _vector_field("vector"),
         ]
     )
     postings = _create_table(
@@ -93,18 +93,11 @@ def test_datafusion_queries_spark_style_iceberg_index(tmp_path: Path) -> None:
         Schema(
             NestedField(1, "cid", IntegerType(), required=True),
             NestedField(2, "key_1", LongType(), required=True),
-            NestedField(
-                3,
-                "vector",
-                ListType(4, FloatType(), element_required=True),
-                required=True,
-            ),
         ),
         postings_arrow_schema,
         [
             pa.array([0, 0, 1], type=pa.int32()),
             pa.array([1, 2, 3], type=pa.int64()),
-            _vectors([[0.0, 0.0], [1.0, 0.0], [10.0, 0.0]]),
         ],
     )
 
@@ -116,25 +109,34 @@ def test_datafusion_queries_spark_style_iceberg_index(tmp_path: Path) -> None:
         None,
     )
     source_reference = _relation(source, "lakehouse", ("analytics",), "documents")
+    source_mapping = json.loads(source_reference)
+    centroids_reference = _relation(
+        centroids,
+        "lakehouse",
+        ("relify",),
+        "documents_embedding_centroids",
+    )
+    shared = write_shared_ivf_metadata(
+        tmp_path / "relify-metadata",
+        source=source_mapping,
+        centroids=json.loads(centroids_reference),
+    )
     repository.publish_initial(
         index_name="documents_embedding",
         source_json=source_reference,
         vector_field="embedding",
         source_key_fields=["document_id"],
         builder="fixture",
+        metric="l2_squared",
         parameters={
             "dimension": "2",
             "nlist": "2",
             "ntotal": "3",
-            "store_vectors": "true",
+            "posting_encoding": "source",
+            **shared,
         },
         index_relations={
-            "ivf_centroids": _relation(
-                centroids,
-                "lakehouse",
-                ("relify",),
-                "documents_embedding_centroids",
-            ),
+            "ivf_centroids": centroids_reference,
             "ivf_postings": _relation(
                 postings,
                 "lakehouse",
@@ -152,7 +154,6 @@ def test_datafusion_queries_spark_style_iceberg_index(tmp_path: Path) -> None:
                     [
                         pa.array([0], type=pa.int32()),
                         pa.array([2], type=pa.int64()),
-                        _vectors([[0.0, 0.0]]),
                     ],
                     schema=postings_arrow_schema,
                 )

@@ -140,9 +140,9 @@ def schema_from_pyarrow(schema: pyarrow.Schema) -> CanonicalSchema:
 
 
 def vector_fields(schema: CanonicalSchema) -> tuple[str, ...]:
-    """Return top-level list<float> fields."""
+    """Return top-level list<float> and list<double> fields."""
     return tuple(
-        field.name for field in schema.fields if _is_float_list(field.field_type)
+        field.name for field in schema.fields if _is_vector_list(field.field_type)
     )
 
 
@@ -157,8 +157,8 @@ def validate_ivf_schemas(
     if "_distance" in source.names:
         raise TypeError("source table must not contain reserved column _distance")
     source_vector = source.field(search.vector_field)
-    if source_vector is None or not _is_float_list(source_vector.field_type):
-        raise TypeError("source vector field must be list<float>")
+    if source_vector is None or not _is_vector_list(source_vector.field_type):
+        raise TypeError("source vector field must be list<float> or list<double>")
 
     cid = centroids.field("cid")
     centroid = centroids.field("centroid")
@@ -195,19 +195,30 @@ def validate_ivf_schemas(
         ):
             raise TypeError(f"invalid IVF postings key field: key_{position}")
 
-    vector = postings.field("vector")
-    if search.store_vectors:
-        if (
-            vector is None
-            or not _required_if_known(postings, vector)
-            or not _is_float_list(
-                vector.field_type,
-                required_elements=postings.nullability_known,
-            )
-        ):
-            raise TypeError("invalid IVF postings vector field")
-    elif vector is not None:
+    encoded_fields = (
+        postings.field("offset"),
+        postings.field("scale"),
+        postings.field("code"),
+    )
+    if postings.field("vector") is not None:
         raise TypeError("IVF postings vector field must be absent")
+    if search.posting_encoding == "source":
+        if any(field is not None for field in encoded_fields):
+            raise TypeError("source IVF postings must not contain LVQ fields")
+    else:
+        offset, scale, code = encoded_fields
+        if (
+            offset is None
+            or scale is None
+            or code is None
+            or not _required_if_known(postings, offset)
+            or not _required_if_known(postings, scale)
+            or not _required_if_known(postings, code)
+            or offset.field_type != FLOAT
+            or scale.field_type != FLOAT
+            or code.field_type != BINARY
+        ):
+            raise TypeError("invalid IVF LVQ postings fields")
 
 
 def _type_from_pyarrow(data_type: pyarrow.DataType) -> LogicalType:
@@ -293,6 +304,13 @@ def _is_float_list(
         and field_type.element_type == FLOAT
         and (field_type.element_required or not required_elements)
     )
+
+
+def _is_vector_list(field_type: LogicalType) -> bool:
+    return isinstance(field_type, ListType) and field_type.element_type in {
+        FLOAT,
+        DOUBLE,
+    }
 
 
 def _is_supported_key(field_type: LogicalType) -> bool:

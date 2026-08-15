@@ -34,7 +34,8 @@ class SessionConfig(DataFusionSessionConfig):
 @dataclass(frozen=True)
 class IVF:
     nlist: int
-    encoding: str = "flat"
+    encoding: str = "source"
+    metric: str = "l2_squared"
 
     def __post_init__(self) -> None:
         if not isinstance(self.nlist, int) or isinstance(self.nlist, bool):
@@ -43,8 +44,12 @@ class IVF:
             raise ValueError("nlist must be positive")
         if not isinstance(self.encoding, str):
             raise TypeError("encoding must be a string")
-        if self.encoding not in {"source", "flat", "lvq4", "lvq8"}:
+        if self.encoding not in {"source", "lvq4", "lvq8"}:
             raise ValueError(f"unsupported encoding: {self.encoding}")
+        if not isinstance(self.metric, str):
+            raise TypeError("metric must be a string")
+        if self.metric not in {"l2_squared", "cosine"}:
+            raise ValueError(f"unsupported metric: {self.metric}")
 
 
 @dataclass(frozen=True)

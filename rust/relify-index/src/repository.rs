@@ -3,7 +3,10 @@ use std::sync::Arc;
 use relify_catalog::{
     CatalogEntry, Error as CatalogError, IndexCatalog, IndexIdentifier, SharedIvfCatalogEntry,
 };
-use relify_meta::{IndexMetadata, RelationReference, SharedIvfMetadata, SharedIvfReference};
+use relify_meta::{
+    DistanceMetric, IndexMetadata, IndexSnapshot, RelationReference, SharedIvfMetadata,
+    SharedIvfReference, shared_ivf_reference,
+};
 
 use crate::{Error, MetadataStore, Result};
 
@@ -97,6 +100,36 @@ impl IndexRepository {
             },
             metadata,
         })
+    }
+
+    /// Loads and validates the shared artifact required by one logical IVF snapshot.
+    pub async fn load_snapshot_shared_ivf(
+        &self,
+        snapshot: &IndexSnapshot,
+    ) -> Result<LoadedSharedIvf> {
+        let reference = shared_ivf_reference(snapshot)?;
+        let loaded = self.load_shared_ivf_reference(&reference).await?;
+        let descriptor = &loaded.metadata.descriptor;
+        let metric = DistanceMetric::from_metadata(&snapshot.metric).ok_or_else(|| {
+            Error::InvalidMetadata(format!("unsupported IVF metric: {}", snapshot.metric))
+        })?;
+        let centroids = snapshot
+            .index_relations
+            .get("ivf_centroids")
+            .ok_or_else(|| Error::InvalidMetadata("missing relation role: ivf_centroids".into()))?;
+        if descriptor.source.exact_state_key() != snapshot.source.exact_state_key()
+            || descriptor.vector_field != snapshot.vector_field
+            || usize::try_from(descriptor.dimension).ok()
+                != Some(snapshot.parameter_usize("dimension")?)
+            || usize::try_from(descriptor.nlist).ok() != Some(snapshot.parameter_usize("nlist")?)
+            || descriptor.metric != metric
+            || loaded.metadata.centroids != *centroids
+        {
+            return Err(Error::InvalidMetadata(
+                "logical index does not match its shared IVF artifact".into(),
+            ));
+        }
+        Ok(loaded)
     }
 
     /// Loads all indexes bound to one exact source-table state.

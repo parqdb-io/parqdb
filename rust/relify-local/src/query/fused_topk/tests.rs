@@ -11,6 +11,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion::catalog::MemTable;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+use datafusion::logical_expr::registry::FunctionRegistry;
 use datafusion::physical_plan::{ExecutionPlan, collect, displayable};
 
 use arrow_data::ByteView;
@@ -63,6 +64,24 @@ fn metric_sum(plan: &Arc<dyn ExecutionPlan>, name: &str) -> usize {
         .filter(|metric| metric.value().name() == name)
         .map(|metric| metric.value().as_usize())
         .sum()
+}
+
+#[test]
+fn relify_context_registers_internal_udfs_once_at_initialization() {
+    let context = relify_session_context(
+        relify_session_config(),
+        Arc::new(RuntimeEnvBuilder::default().build().unwrap()),
+    );
+
+    for name in [
+        "relify_squared_l2",
+        "relify_lvq4_l2",
+        "relify_lvq8_l2",
+        "relify_vector_f32",
+        "relify_normalize_vector",
+    ] {
+        assert!(context.udf(name).is_ok(), "missing internal UDF: {name}");
+    }
 }
 
 #[test]

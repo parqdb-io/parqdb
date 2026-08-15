@@ -462,6 +462,7 @@ class BuildCoordinator:
             vector_field=request.column,
             source_key_fields=list(request.key),
             builder=builder,
+            metric=request.config.metric,
             parameters=dict(output.parameters),
             index_relations={
                 role: _relation_json(reference)
@@ -566,6 +567,7 @@ def _build_local(
         source_key_fields=list(request.key),
         nlist=request.config.nlist,
         posting_encoding=request.config.encoding,
+        metric=request.config.metric,
         writer_options=native_writer_options(builder, request.writer_options),
         partitions=request.writer_options.partitions,
         threads=builder.threads,
@@ -599,6 +601,7 @@ def _refresh_local(
         posting_encoding=(
             request.config.encoding if request.config is not None else None
         ),
+        metric=request.config.metric if request.config is not None else None,
         writer_options=native_writer_options(builder, request.writer_options),
         partitions=request.writer_options.partitions,
         threads=builder.threads,

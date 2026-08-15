@@ -304,8 +304,7 @@ def test_nullable_source_schema_accepts_non_null_values(tmp_path: Path) -> None:
         relation_files(snapshot["index-relations"]["ivf_postings"])[0]
     )
     assert not postings.field("key_1").nullable
-    assert not postings.field("vector").nullable
-    assert not postings.field("vector").type.value_field.nullable
+    assert postings.names == ["key_1"]
 
 
 def test_duplicate_source_key_is_a_caller_contract(tmp_path: Path) -> None:
@@ -404,6 +403,5 @@ def test_supported_source_key_types_round_trip_through_postings(
             pa.field("key_5", pa.binary(4), nullable=False),
             pa.field("key_6", pa.string(), nullable=False),
             pa.field("key_7", pa.date32(), nullable=False),
-            pa.field("vector", vector_type(), nullable=False),
         ]
     )

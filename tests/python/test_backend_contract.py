@@ -25,7 +25,7 @@ def test_backend_contract_checks_portable_collection_and_explain() -> None:
     expected = _result_table([1, 2], [0.0, 1.0])
     session = _Session(expected)
     case = BackendQueryCase(
-        "stored vectors",
+        "source-backed IVF",
         PROFILE,
         _query(),
         expected,

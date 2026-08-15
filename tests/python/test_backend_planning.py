@@ -36,7 +36,7 @@ def test_resolved_search_contains_only_portable_backend_input() -> None:
     assert search.nlist == 2
     assert search.nprobe == 1
     assert search.source_key_fields == ("document_id",)
-    assert search.store_vectors
+    assert search.posting_encoding == "source"
     assert search.needs_source
     assert search.source_relation["snapshot-id"] == 101
     assert search.source_relation["namespace"] == ("analytics",)
@@ -57,11 +57,30 @@ def test_index_only_resolution_is_shared_by_every_backend() -> None:
     search = resolve_indexed_search(
         query,
         index="documents_embedding",
-        metadata=_metadata(),
+        metadata=_metadata(posting_encoding="lvq8"),
         projection=("document_id",),
     )
 
     assert not search.needs_source
+
+
+def test_shared_resolution_canonicalizes_cosine_queries_to_float32() -> None:
+    query = relify.VectorQuery(
+        source=relify.TableIdentifier("lakehouse", ("analytics",), "documents"),
+        query=(3.0, 4.0),
+        column="embedding",
+    )
+    metadata = _metadata()
+    metadata["snapshots"][0]["metric"] = "cosine"  # type: ignore[index]
+
+    search = resolve_indexed_search(
+        query,
+        index="documents_embedding",
+        metadata=metadata,
+        projection=("document_id",),
+    )
+
+    assert search.query_vector == pytest.approx((0.6, 0.8), abs=1e-7)
 
 
 def test_shared_projection_and_vector_resolution_report_schema_errors() -> None:
@@ -76,7 +95,7 @@ def test_shared_projection_and_vector_resolution_report_schema_errors() -> None:
         )
 
 
-def _metadata() -> dict[str, object]:
+def _metadata(*, posting_encoding: str = "source") -> dict[str, object]:
     source = {
         "profile": "iceberg",
         "catalog": "lakehouse",
@@ -105,7 +124,10 @@ def _metadata() -> dict[str, object]:
                     "dimension": "2",
                     "nlist": "2",
                     "ntotal": "3",
-                    "store_vectors": "true",
+                    "posting_encoding": posting_encoding,
+                    "shared_ivf_fingerprint": "33333333-3333-3333-3333-333333333333",
+                    "shared_ivf_uuid": "44444444-4444-4444-4444-444444444444",
+                    "shared_ivf_metadata_location": "file:///tmp/shared/v1.metadata.json",
                 },
                 "index-relations": {
                     "ivf_centroids": {

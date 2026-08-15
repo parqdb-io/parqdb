@@ -76,6 +76,20 @@ class _SparkContext:
         pass
 
 
+def _index_parameters(tmp_path: Path) -> dict[str, str]:
+    return {
+        "dimension": "2",
+        "nlist": "2",
+        "ntotal": "3",
+        "posting_encoding": "source",
+        "shared_ivf_fingerprint": "33333333-3333-3333-3333-333333333333",
+        "shared_ivf_uuid": "44444444-4444-4444-4444-444444444444",
+        "shared_ivf_metadata_location": (
+            tmp_path / "shared" / "v1.metadata.json"
+        ).as_uri(),
+    }
+
+
 class _SparkSession:
     def __init__(self) -> None:
         self.sparkContext = _SparkContext()
@@ -141,19 +155,6 @@ def test_spark_create_index_forwards_write_options(
     assert submitted["builder"] is None
 
 
-def test_spark_index_construction_requires_an_explicit_builder(tmp_path: Path) -> None:
-    session, _, _ = _session(tmp_path)
-    documents = session.table("analytics.documents")
-
-    with pytest.raises(ValueError, match="no default index builder"):
-        documents.create_index(
-            "documents_embedding",
-            column="embedding",
-            key=["document_id"],
-            config=relify.IVF(nlist=2),
-        )
-
-
 def test_spark_session_collects_portable_arrow_batches(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -211,12 +212,8 @@ def test_spark_catalog_facade_uses_shared_native_repository(tmp_path: Path) -> N
         vector_field="embedding",
         source_key_fields=["document_id"],
         builder="fixture",
-        parameters={
-            "dimension": "2",
-            "nlist": "2",
-            "ntotal": "3",
-            "store_vectors": "true",
-        },
+        metric="l2_squared",
+        parameters=_index_parameters(tmp_path),
         index_relations={
             "ivf_centroids": json.dumps(relation),
             "ivf_postings": json.dumps(
@@ -350,7 +347,6 @@ def test_native_pyspark_plan_executes_index_only_and_source_join_paths(
 ) -> None:
     pytest.importorskip("pyspark")
     spark_sql = pytest.importorskip("pyspark.sql")
-    spark_functions = pytest.importorskip("pyspark.sql.functions")
     spark_types = pytest.importorskip("pyspark.sql.types")
     planner = pytest.importorskip("relify.experimental.spark.planner")
     spark = (
@@ -439,9 +435,9 @@ def test_native_pyspark_plan_executes_index_only_and_source_join_paths(
         ),
         "documents_embedding_postings": spark.createDataFrame(
             [
-                (0, 1, [0.0, 0.0]),
-                (0, 2, [1.0, 0.0]),
-                (1, 3, [10.0, 0.0]),
+                (0, 1),
+                (0, 2),
+                (1, 3),
             ],
             schema=spark_types.StructType(
                 [
@@ -453,14 +449,6 @@ def test_native_pyspark_plan_executes_index_only_and_source_join_paths(
                     spark_types.StructField(
                         "key_1",
                         spark_types.LongType(),
-                        nullable=False,
-                    ),
-                    spark_types.StructField(
-                        "vector",
-                        spark_types.ArrayType(
-                            spark_types.FloatType(),
-                            containsNull=False,
-                        ),
                         nullable=False,
                     ),
                 ]
@@ -482,12 +470,8 @@ def test_native_pyspark_plan_executes_index_only_and_source_join_paths(
             vector_field="embedding",
             source_key_fields=["document_id"],
             builder="fixture",
-            parameters={
-                "dimension": "2",
-                "nlist": "2",
-                "ntotal": "3",
-                "store_vectors": "true",
-            },
+            metric="l2_squared",
+            parameters=_index_parameters(tmp_path),
             index_relations={
                 "ivf_centroids": centroids.relation_json(),
                 "ivf_postings": postings.relation_json(),
@@ -542,12 +526,13 @@ def test_native_pyspark_plan_executes_index_only_and_source_join_paths(
             ),
         ).select(
             planner._squared_l2(
-                spark_functions.col("vector"),
+                planner._functions().col("vector"),
                 [-3.0e38],
             ).alias("_distance")
         )
         with pytest.raises(Exception, match="squared-L2 distance is non-finite"):
             overflowing.collect()
+
     finally:
         spark.stop()
 

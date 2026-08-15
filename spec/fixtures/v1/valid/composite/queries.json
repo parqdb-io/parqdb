@@ -45,7 +45,7 @@
     ],
     "filter": null,
     "k": 10,
-    "name": "composite-index-without-stored-vectors",
+    "name": "composite-source-encoding",
     "nprobe": 1,
     "projection": [
       "tenant_id",

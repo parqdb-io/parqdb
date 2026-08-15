@@ -95,11 +95,6 @@ impl IndexSnapshot {
             .parse()
             .map_err(|_| Error(format!("invalid parameter: {name}")))
     }
-
-    /// Reads a canonical boolean family parameter.
-    pub fn parameter_bool(&self, name: &str) -> Result<bool> {
-        parse_boolean_parameter(&self.parameters, name)
-    }
 }
 
 /// Complete immutable metadata document for a logical Relify index.
@@ -358,16 +353,4 @@ pub(crate) fn parse_positive_parameter(
         return invalid(format!("{name} is out of range"));
     }
     Ok(parsed)
-}
-
-pub(crate) fn parse_boolean_parameter(
-    parameters: &BTreeMap<String, String>,
-    name: &str,
-) -> Result<bool> {
-    match parameters.get(name).map(String::as_str) {
-        Some("true") => Ok(true),
-        Some("false") => Ok(false),
-        Some(_) => invalid(format!("{name} must be true or false")),
-        None => invalid(format!("missing parameter: {name}")),
-    }
 }

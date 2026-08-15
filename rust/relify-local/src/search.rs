@@ -14,7 +14,7 @@ pub enum ClusterSelection {
     },
 }
 
-use relify_meta::PostingEncoding;
+use relify_meta::{DistanceMetric, PostingEncoding};
 
 /// Fully resolved inputs for one embedded `DataFusion` vector search.
 #[derive(Debug, Clone)]
@@ -23,8 +23,12 @@ pub struct ResolvedSearch {
     pub source_relation_key: String,
     /// Query vector after conversion to the canonical `float` type.
     pub query: Vec<f32>,
+    /// Distance metric applied by this search.
+    pub metric: DistanceMetric,
     /// Source column containing vectors.
     pub vector_field: String,
+    /// Whether source scoring must cast double elements to canonical float.
+    pub source_vector_is_f64: bool,
     /// Ordered source key fields used to resolve postings to source rows.
     pub source_key_fields: Vec<String>,
     /// Backend relation key for IVF postings, absent for exact search.

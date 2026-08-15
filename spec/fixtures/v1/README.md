@@ -1,56 +1,45 @@
 # Format Version 1 Fixtures
 
-These fixtures are shared test vectors for Relify metadata and IVF query
-semantics. They are non-normative; the specification remains authoritative.
+These non-normative fixtures exercise Relify metadata and IVF schema version
+1. The specification remains authoritative.
 
-`valid/` contains two complete logical Parquet indexes. The root fixture uses
-one string source key and stores exact vectors in postings:
+`valid/` contains a source-encoded IVF fixture. It includes logical index
+metadata, shared-IVF metadata, source and centroid Parquet files,
+Hive-partitioned postings, and ordered query results.
 
-- `metadata.json`: portable Relify metadata;
-- `metadata-v2.json`: a legal immutable update from `metadata.json`;
-- `source.parquet`: the indexed source table;
-- `ivf_centroids.parquet`: the centroid relation;
-- `ivf_postings/cid=<value>/part-0.parquet`: the Hive-partitioned posting
-  relation; and
-- `queries.json`: inputs and ordered expected results.
+Additional directories cover:
 
-`valid/composite_no_vectors/` uses the same file layout with two ordered source
-key fields (`int`, then `string`) and `store_vectors = false`. Its postings omit
-the `vector` field, so candidate distance evaluation must resolve vectors from
-the source table. Its query cases cover composite-key ordering.
+- `valid/composite/`: a composite source key;
+- `valid/lvq4/`: LVQ4 codes and expected approximate distances; and
+- `valid/lvq8/`: LVQ8 codes and expected approximate distances.
 
-The URIs in `metadata.json` are stable logical fixture URIs. A test harness maps
-them to the files in `valid/`; it must not rewrite the metadata document.
+All logical indexes use the same public IVF schema version. Encoding changes
+the postings fields, not the schema-version history. Full source vectors are
+absent from every postings fixture.
 
-`catalog.json` is an ordered catalog operation trace. It covers absent loads,
-registration, duplicate registration, compare-and-swap publication, a stale
-commit conflict, and drop. Metadata and location names in the trace are keys
-into its `metadata` and `locations` maps; the fixture does not prescribe a
-catalog API or protocol representation.
+The metadata URIs are stable logical fixture URIs. Test harnesses may map them
+to local files but must preserve the referenced relation state and shared-IVF
+descriptor.
 
-`invalid/` contains metadata documents that readers must reject.
-`invalid/manifest.json` enumerates every document and the violated invariant.
-Harnesses should consume the manifest rather than maintaining a private file
-list.
+`catalog.json` is an ordered catalog operation trace covering registration,
+duplicate registration, compare-and-swap publication, stale commits, and drop.
 
-The valid query cases cover cluster-ID tie-breaking, equal-distance results,
-source prefilters, full probes, `k` larger than the selected candidate set, and
-empty results. Result order within an equal-distance group is not significant.
-Query `filter` objects are fixture-harness inputs, not a portable filter syntax.
+`invalid/manifest.json` enumerates every invalid metadata document and the
+invariant it violates. Harnesses should consume the manifest instead of
+maintaining a separate list.
 
-Relify's DuckDB interoperability test reads these Parquet files and reproduces
-all expected results without importing the Relify package:
+The DuckDB interoperability test reproduces source-encoded query results
+without importing Relify:
 
 ```bash
 make test-interop
 ```
 
-Run the generator after intentionally changing the fixture:
+Regenerate fixtures after an intentional schema change:
 
 ```bash
-uv run python spec/fixtures/v1/generate.py
+.venv/bin/python spec/fixtures/v1/generate.py
 ```
 
-The generator is deterministic at the logical Arrow and JSON level. Parquet
-bytes may differ across PyArrow releases, so fixture review should compare
-schemas and values rather than file hashes.
+Generation is deterministic at the JSON and Arrow value level. Parquet bytes
+may vary across PyArrow releases.

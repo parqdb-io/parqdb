@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 import relify
 from _support import (
     WAIT,
@@ -128,9 +129,8 @@ def test_local_build_publish_and_search(tmp_path: Path) -> None:
     payload_plan = session.explain(
         documents.search([0.0, 0.0]).nprobes(1).select(["title"])
     )
-    assert "HashJoinExec" not in index_only_plan
+    assert "HashJoinExec" in index_only_plan
     assert "IvfTopKExec" in index_only_plan
-    assert "ProjectionExec" not in index_only_plan
     assert "HashJoinExec" in payload_plan
     assert "IvfTopKExec" in payload_plan
     vector_hits = session.to_arrow(
@@ -141,7 +141,7 @@ def test_local_build_publish_and_search(tmp_path: Path) -> None:
     )
     assert vector_hits["document_id"].to_pylist() == ["a", "b"]
     assert vector_hits["embedding"].to_pylist() == [[0.0, 0.0], [1.0, 0.0]]
-    assert "HashJoinExec" not in session.explain(
+    assert "HashJoinExec" in session.explain(
         documents.search([0.0, 0.0]).nprobes(1).select(["document_id", "embedding"])
     )
 
@@ -157,12 +157,13 @@ def test_local_build_publish_and_search(tmp_path: Path) -> None:
     assert entry.metadata["format-version"] == 1
     snapshot = entry.metadata["snapshots"][0]
     assert snapshot["index-family"] == "ivf"
-    assert snapshot["parameters"] == {
-        "dimension": "2",
-        "nlist": "2",
-        "ntotal": "4",
-        "store_vectors": "true",
-    }
+    assert snapshot["parameters"]["dimension"] == "2"
+    assert snapshot["parameters"]["nlist"] == "2"
+    assert snapshot["parameters"]["ntotal"] == "4"
+    assert snapshot["parameters"]["posting_encoding"] == "source"
+    assert snapshot["parameters"]["shared_ivf_fingerprint"]
+    assert snapshot["parameters"]["shared_ivf_uuid"]
+    assert snapshot["parameters"]["shared_ivf_metadata_location"]
     assert set(snapshot["index-relations"]) == {
         "ivf_centroids",
         "ivf_postings",
@@ -181,7 +182,6 @@ def test_local_build_publish_and_search(tmp_path: Path) -> None:
     ) == pa.schema(
         [
             pa.field("key_1", pa.string(), nullable=False),
-            pa.field("vector", required_vector, nullable=False),
         ]
     )
     posting_files = relation_files(snapshot["index-relations"]["ivf_postings"])
@@ -222,7 +222,7 @@ def test_local_lvq_build_and_search(tmp_path: Path) -> None:
             wait_timeout=WAIT,
         )
         snapshot = session.indexes.load(name).metadata["snapshots"][0]
-        assert snapshot["index-schema-version"] == 2
+        assert snapshot["index-schema-version"] == 1
         assert snapshot["parameters"]["posting_encoding"] == encoding
         assert snapshot["parameters"]["dimension"] == str(dimension)
         postings = snapshot["index-relations"]["ivf_postings"]
@@ -277,6 +277,121 @@ def test_local_lvq_build_and_search(tmp_path: Path) -> None:
         payload = session.to_arrow(payload_query)
         assert payload["title"].to_pylist() == ["ten"]
         assert "HashJoinExec" in session.explain(payload_query)
+
+
+def test_shared_ivf_float64_and_cosine_end_to_end(tmp_path: Path) -> None:
+    source = tmp_path / "cosine.parquet"
+    vector = pa.list_(pa.field("element", pa.float64(), nullable=False))
+    table = pa.Table.from_arrays(
+        [
+            pa.array(["x", "diagonal", "y"], type=pa.string()),
+            pa.array([[2.0, 0.0], [1.0, 1.0], [0.0, 3.0]], type=vector),
+        ],
+        schema=pa.schema(
+            [
+                pa.field("document_id", pa.string(), nullable=False),
+                pa.field("embedding", vector, nullable=False),
+            ]
+        ),
+    )
+    pq.write_table(table, source)
+    session = relify.connect(tmp_path / "relify-data")
+    documents = register_source(session, source, "documents")
+
+    cosine_snapshots = []
+    for encoding in ("source", "lvq4", "lvq8"):
+        name = f"cosine_{encoding}"
+        documents.create_index(
+            name,
+            column="embedding",
+            key=["document_id"],
+            config=relify.IVF(nlist=1, encoding=encoding, metric="cosine"),
+            wait_timeout=WAIT,
+        )
+        snapshot = session.indexes.load(name).metadata["snapshots"][0]
+        cosine_snapshots.append(snapshot)
+        hits = session.to_arrow(
+            documents.search([10.0, 0.0], index=name).nprobes(1).limit(3)
+        )
+        assert hits["document_id"].to_pylist() == ["x", "diagonal", "y"]
+        assert hits["_distance"].to_pylist() == pytest.approx(
+            [0.0, 1.0 - 2.0**-0.5, 1.0], abs=1e-5
+        )
+
+    shared_fields = (
+        "shared_ivf_fingerprint",
+        "shared_ivf_uuid",
+        "shared_ivf_metadata_location",
+    )
+    for field in shared_fields:
+        assert (
+            len({snapshot["parameters"][field] for snapshot in cosine_snapshots}) == 1
+        )
+    centroid_relations = [
+        snapshot["index-relations"]["ivf_centroids"] for snapshot in cosine_snapshots
+    ]
+    assert all(relation == centroid_relations[0] for relation in centroid_relations[1:])
+    assert (
+        len(
+            {
+                snapshot["index-relations"]["ivf_postings"]["uri"]
+                for snapshot in cosine_snapshots
+            }
+        )
+        == 3
+    )
+
+    documents.create_index(
+        "l2_source",
+        column="embedding",
+        key=["document_id"],
+        config=relify.IVF(nlist=1, metric="l2_squared"),
+        wait_timeout=WAIT,
+    )
+    l2_snapshot = session.indexes.load("l2_source").metadata["snapshots"][0]
+    assert (
+        l2_snapshot["parameters"]["shared_ivf_fingerprint"]
+        != cosine_snapshots[0]["parameters"]["shared_ivf_fingerprint"]
+    )
+    l2_hits = session.to_arrow(
+        documents.search([2.0, 0.0], index="l2_source").nprobes(1).limit(3)
+    )
+    assert l2_hits["document_id"].to_pylist() == ["x", "diagonal", "y"]
+    assert l2_hits["_distance"].to_pylist() == pytest.approx([0.0, 2.0, 13.0])
+
+    with pytest.raises(relify.InvalidArgumentError, match="non-zero norm"):
+        session.to_arrow(documents.search([0.0, 0.0], index="cosine_source"))
+
+
+def test_cosine_build_rejects_zero_source_vectors(tmp_path: Path) -> None:
+    source = tmp_path / "zero.parquet"
+    required_vector = vector_type()
+    pq.write_table(
+        pa.table(
+            {
+                "document_id": pa.array(["zero"], type=pa.string()),
+                "embedding": pa.array([[0.0, 0.0]], type=required_vector),
+            },
+            schema=pa.schema(
+                [
+                    pa.field("document_id", pa.string(), nullable=False),
+                    pa.field("embedding", required_vector, nullable=False),
+                ]
+            ),
+        ),
+        source,
+    )
+    session = relify.connect(tmp_path / "relify-data")
+    documents = register_source(session, source, "documents")
+
+    with pytest.raises(relify.InvalidSchemaError, match="non-zero norm"):
+        documents.create_index(
+            "cosine_index",
+            column="embedding",
+            key=["document_id"],
+            config=relify.IVF(nlist=1, metric="cosine"),
+            wait_timeout=WAIT,
+        )
 
 
 def test_index_and_source_catalog_survive_python_process_restart(
@@ -394,7 +509,6 @@ def test_composite_keys_are_stored_directly_in_postings(tmp_path: Path) -> None:
         [
             pa.field("key_1", pa.string(), nullable=False),
             pa.field("key_2", pa.int64(), nullable=False),
-            pa.field("vector", required_vector, nullable=False),
         ]
     )
 
@@ -413,7 +527,7 @@ def test_vectors_can_be_omitted_from_postings(tmp_path: Path) -> None:
     )
 
     snapshot = session.indexes.load("compact_index").metadata["snapshots"][0]
-    assert snapshot["parameters"]["store_vectors"] == "false"
+    assert snapshot["parameters"]["posting_encoding"] == "source"
     assert pq.read_schema(
         relation_path(snapshot["index-relations"]["ivf_postings"])
     ) == pa.schema(

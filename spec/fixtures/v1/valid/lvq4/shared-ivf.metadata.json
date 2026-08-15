@@ -1,0 +1,22 @@
+{
+  "artifact-uuid": "ac413538-8613-4ed5-8411-a9579eda38da",
+  "centroids": {
+    "profile": "parquet",
+    "uri": "s3://relify-fixtures/v1/valid/lvq4/ivf_centroids/"
+  },
+  "created-at-ms": 1750000000000,
+  "descriptor": {
+    "clustering-profile-version": 1,
+    "dimension": 3,
+    "metric": "l2_squared",
+    "nlist": 2,
+    "source": {
+      "profile": "parquet",
+      "uri": "s3://relify-fixtures/v1/valid/lvq4/source/"
+    },
+    "vector-field": "embedding"
+  },
+  "fingerprint": "58346df5-81a6-555f-92ee-b22579cf29a8",
+  "format-version": 1,
+  "location": "s3://relify-fixtures/v1/valid/lvq4/shared/ac413538-8613-4ed5-8411-a9579eda38da/"
+}

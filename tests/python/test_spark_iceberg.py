@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 from typing import Any
 
 import pytest
 from support.config import SparkConfig
+from support.indexes import write_shared_ivf_metadata
 
 pytestmark = pytest.mark.requires("spark")
 
@@ -78,7 +80,7 @@ class _HadoopPyIcebergCatalog:
         return self._warehouse.joinpath(*identifier)
 
 
-def test_spark_build_query_and_repository_reopen_with_real_iceberg(
+def test_spark_queries_published_index_and_repository_reopens_with_real_iceberg(
     tmp_path: Path,
     spark: SparkConfig,
 ) -> None:
@@ -111,6 +113,54 @@ def test_spark_build_query_and_repository_reopen_with_real_iceberg(
     spark.sparkContext.setLogLevel("ERROR")
     try:
         spark.sql("CREATE NAMESPACE lakehouse.analytics")
+        spark.sql("CREATE NAMESPACE lakehouse.relify")
+        from pyiceberg.schema import Schema
+        from pyiceberg.types import (
+            FloatType,
+            IntegerType,
+            ListType,
+            LongType,
+            NestedField,
+            StringType,
+        )
+
+        catalog = _HadoopPyIcebergCatalog(warehouse)
+        catalog.create_table(
+            ("analytics", "documents"),
+            schema=Schema(
+                NestedField(1, "document_id", LongType(), required=True),
+                NestedField(
+                    2,
+                    "embedding",
+                    ListType(3, FloatType(), element_required=True),
+                    required=True,
+                ),
+                NestedField(4, "tenant_id", IntegerType(), required=True),
+                NestedField(5, "title", StringType(), required=True),
+            ),
+            properties={},
+        )
+        catalog.create_table(
+            ("relify", "documents_embedding_centroids"),
+            schema=Schema(
+                NestedField(1, "cid", IntegerType(), required=True),
+                NestedField(
+                    2,
+                    "centroid",
+                    ListType(3, FloatType(), element_required=True),
+                    required=True,
+                ),
+            ),
+            properties={},
+        )
+        catalog.create_table(
+            ("relify", "documents_embedding_postings"),
+            schema=Schema(
+                NestedField(1, "cid", IntegerType(), required=True),
+                NestedField(2, "key_1", LongType(), required=True),
+            ),
+            properties={},
+        )
         source_schema = spark_types.StructType(
             [
                 spark_types.StructField(
@@ -145,37 +195,93 @@ def test_spark_build_query_and_repository_reopen_with_real_iceberg(
                 (3, [10.0, 0.0], 7, "c"),
             ],
             source_schema,
-        ).writeTo("lakehouse.analytics.documents").using("iceberg").create()
+        ).writeTo("lakehouse.analytics.documents").append()
 
-        catalog = _HadoopPyIcebergCatalog(warehouse)
+        centroids_schema = spark_types.StructType(
+            [
+                spark_types.StructField("cid", spark_types.IntegerType(), False),
+                spark_types.StructField(
+                    "centroid",
+                    spark_types.ArrayType(spark_types.FloatType(), False),
+                    False,
+                ),
+            ]
+        )
+        spark.createDataFrame(
+            [(0, [0.5, 0.0]), (1, [10.0, 0.0])],
+            centroids_schema,
+        ).writeTo("lakehouse.relify.documents_embedding_centroids").append()
+
+        postings_schema = spark_types.StructType(
+            [
+                spark_types.StructField("cid", spark_types.IntegerType(), False),
+                spark_types.StructField("key_1", spark_types.LongType(), False),
+            ]
+        )
+        spark.createDataFrame(
+            [(0, 1), (0, 2), (1, 3)],
+            postings_schema,
+        ).writeTo("lakehouse.relify.documents_embedding_postings").append()
+
         catalog_uri = f"sqlite://{tmp_path / 'relify.sqlite'}"
+        metadata_root = tmp_path / "relify-metadata"
         session = relify.experimental.spark.connect(
             spark,
             index_catalog=catalog_uri,
             iceberg_catalog=catalog,
+            metadata_root=metadata_root.as_uri(),
         )
-        documents = session.table("analytics.documents")
-        documents.create_index(
-            "documents_embedding",
-            column="embedding",
-            key=["document_id"],
-            config=relify.IVF(nlist=2),
+        source = _relation(
+            catalog.load_table(("analytics", "documents")),
+            ("analytics", "documents"),
         )
-        documents.wait_for_index("documents_embedding")
+        centroids = _relation(
+            catalog.load_table(("relify", "documents_embedding_centroids")),
+            ("relify", "documents_embedding_centroids"),
+        )
+        shared = write_shared_ivf_metadata(
+            metadata_root,
+            source=source,
+            centroids=centroids,
+        )
+        session._native.publish_initial(
+            index_name="documents_embedding",
+            source_json=json.dumps(source, separators=(",", ":")),
+            vector_field="embedding",
+            source_key_fields=["document_id"],
+            builder="fixture",
+            metric="l2_squared",
+            parameters={
+                "dimension": "2",
+                "nlist": "2",
+                "ntotal": "3",
+                "posting_encoding": "source",
+                **shared,
+            },
+            index_relations={
+                "ivf_centroids": json.dumps(centroids, separators=(",", ":")),
+                "ivf_postings": json.dumps(
+                    _relation(
+                        catalog.load_table(("relify", "documents_embedding_postings")),
+                        ("relify", "documents_embedding_postings"),
+                    ),
+                    separators=(",", ":"),
+                ),
+            },
+        )
 
         postings_schema = catalog.load_table(
             ("relify", "documents_embedding_postings")
         ).schema()
         assert postings_schema.find_field("cid").required
         assert postings_schema.find_field("key_1").required
-        vector = postings_schema.find_field("vector")
-        assert vector.required
-        assert vector.field_type.element_required
+        assert "vector" not in {field.name for field in postings_schema.fields}
 
         reopened = relify.experimental.spark.connect(
             spark,
             index_catalog=catalog_uri,
             iceberg_catalog=catalog,
+            metadata_root=metadata_root.as_uri(),
         )
         reopened_documents = reopened.table("analytics.documents")
         query = (
@@ -186,8 +292,8 @@ def test_spark_build_query_and_repository_reopen_with_real_iceberg(
             .select(["document_id", "title"])
         )
         result = reopened.to_dataframe(query)
-        assert result.schema["document_id"].nullable
-        assert result.schema["title"].nullable
+        assert not result.schema["document_id"].nullable
+        assert not result.schema["title"].nullable
         assert not result.schema["_distance"].nullable
         assert result.collect() == [
             spark_sql.Row(document_id=1, title="a", _distance=0.0),
@@ -196,7 +302,7 @@ def test_spark_build_query_and_repository_reopen_with_real_iceberg(
 
         datafusion = relify.connect(
             catalog=catalog_uri,
-            index_root=(tmp_path / "relify-metadata").as_uri(),
+            index_root=metadata_root.as_uri(),
             iceberg=catalog,
         )
         datafusion_documents = datafusion.table("lakehouse.analytics.documents")
@@ -217,3 +323,16 @@ def test_spark_build_query_and_repository_reopen_with_real_iceberg(
         }
     finally:
         spark.stop()
+
+
+def _relation(table: Any, identifier: tuple[str, ...]) -> dict[str, object]:
+    snapshot = table.current_snapshot()
+    assert snapshot is not None
+    return {
+        "profile": "iceberg",
+        "catalog": "lakehouse",
+        "namespace": list(identifier[:-1]),
+        "name": identifier[-1],
+        "table-uuid": str(table.metadata.table_uuid).lower(),
+        "snapshot-id": int(snapshot.snapshot_id),
+    }

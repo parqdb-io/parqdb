@@ -8,7 +8,7 @@ mod serde_helpers;
 mod shared_ivf;
 
 pub use error::{Error, Result};
-pub use family::PostingEncoding;
+pub use family::{IVF_SCHEMA_VERSION, PostingEncoding, shared_ivf_reference};
 pub use metadata::{IndexMetadata, IndexSnapshot, SnapshotLogEntry};
 pub use relation::RelationReference;
 pub use shared_ivf::{

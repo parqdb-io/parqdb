@@ -79,10 +79,6 @@ fn builds_ivf_relations_with_source_keys_in_postings() {
             ("cid", DataType::Int32),
             ("key_1", DataType::Utf8),
             ("key_2", DataType::Int64),
-            (
-                "vector",
-                DataType::List(Arc::new(Field::new("element", DataType::Float32, false,))),
-            ),
         ]
     );
     let cids = artifacts
@@ -132,14 +128,20 @@ async fn production_training_samples_across_the_complete_source() {
     context.register_batch("source", source).unwrap();
     let dataframe = context.table("source").await.unwrap();
 
-    let trained = train_centroids(
+    let prepared = prepare_ivf_datafusion(
         dataframe,
         "embedding",
-        1,
-        &ParalliteContext::default(),
+        &["id".into()],
+        IvfConfig::new(1, PostingEncoding::Source),
         &LocalBuildProgress::default(),
     )
     .await
+    .unwrap();
+    let trained = train_prepared_ivf(
+        &prepared,
+        &ParalliteContext::default(),
+        &LocalBuildProgress::default(),
+    )
     .unwrap();
 
     assert!(trained.centroids[0] > 0.0);
@@ -208,34 +210,9 @@ fn signed_and_string_keys_use_the_same_postings_schema() {
     let artifacts =
         build_ivf_tables(&source, "embedding", &["tenant".into(), "id".into()], 2).unwrap();
 
-    assert_eq!(artifacts.postings.num_columns(), 4);
+    assert_eq!(artifacts.postings.num_columns(), 3);
     assert_eq!(artifacts.postings.schema().field(1).name(), "key_1");
     assert_eq!(artifacts.postings.schema().field(2).name(), "key_2");
-    assert_eq!(artifacts.postings.schema().field(3).name(), "vector");
-}
-
-#[test]
-fn vector_storage_can_be_disabled() {
-    let artifacts = build_ivf_tables_with_vector_storage(
-        &example_source(),
-        "embedding",
-        &["id".into()],
-        2,
-        false,
-    )
-    .unwrap();
-
-    assert!(!artifacts.store_vectors);
-    assert_eq!(
-        artifacts
-            .postings
-            .schema()
-            .fields()
-            .iter()
-            .map(|field| field.name().as_str())
-            .collect::<Vec<_>>(),
-        ["cid", "key_1"]
-    );
 }
 
 #[tokio::test]
@@ -254,7 +231,7 @@ async fn writes_only_the_two_ivf_relations() {
     assert_eq!(build.parameters["dimension"], "2");
     assert_eq!(build.parameters["nlist"], "2");
     assert_eq!(build.parameters["ntotal"], "4");
-    assert_eq!(build.parameters["store_vectors"], "true");
+    assert_eq!(build.parameters["posting_encoding"], "source");
     assert_eq!(
         build
             .index_relations
@@ -281,7 +258,7 @@ fn writer_count_respects_target_size_and_explicit_partitions() {
     let source = example_source();
     let keys = ["tenant".into(), "id".into()];
     let row_width =
-        estimate_posting_row_width(source.schema().as_ref(), &keys, 2, PostingEncoding::Flat);
+        estimate_posting_row_width(source.schema().as_ref(), &keys, 2, PostingEncoding::Source);
     let one_file = ParquetWriterOptions {
         target_file_size: usize::MAX,
         ..ParquetWriterOptions::default()

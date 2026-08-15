@@ -82,7 +82,6 @@ verify-datafusion-vendor:
 
 fixtures:
 	$(UV_RUN) python spec/fixtures/v1/generate.py
-	$(UV_RUN) python spec/fixtures/v2/generate.py
 
 datasets:
 	$(UV_RUN) python tools/generate_example_datasets.py

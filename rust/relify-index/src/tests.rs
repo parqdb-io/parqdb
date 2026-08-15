@@ -53,13 +53,20 @@ fn source(uri: &str) -> RelationReference {
 }
 
 fn artifacts(uri: &str, nlist: usize) -> IndexArtifacts {
+    let shared_uuid = Uuid::new_v4();
     IndexArtifacts {
-        format: IndexFormat::ivf_v1(),
+        format: IndexFormat::ivf(DistanceMetric::L2Squared),
         parameters: BTreeMap::from([
             ("dimension".into(), "2".into()),
             ("nlist".into(), nlist.to_string()),
             ("ntotal".into(), "3".into()),
-            ("store_vectors".into(), "true".into()),
+            ("posting_encoding".into(), "source".into()),
+            ("shared_ivf_fingerprint".into(), Uuid::new_v4().to_string()),
+            ("shared_ivf_uuid".into(), shared_uuid.to_string()),
+            (
+                "shared_ivf_metadata_location".into(),
+                format!("file:///metadata/{shared_uuid}/v1.metadata.json"),
+            ),
         ]),
         index_relations: BTreeMap::from([
             ("ivf_centroids".into(), source(&format!("{uri}/centroids"))),
@@ -121,6 +128,42 @@ fn shared_ivf_document(store: &MetadataStore) -> SharedIvfMetadata {
         descriptor,
         centroids: source("file:///indexes/shared/centroids"),
     }
+}
+
+#[tokio::test]
+async fn repository_validates_the_shared_artifact_against_the_logical_snapshot() {
+    let temporary = TempDir::new().unwrap();
+    let repository = repository(&temporary);
+    let store = repository.metadata_store();
+    let shared = shared_ivf_document(store);
+    let shared_location = store.write_shared_ivf(&shared).await.unwrap();
+    let mut snapshot = metadata_document(store).current_snapshot().unwrap().clone();
+    snapshot.source = shared.descriptor.source.clone();
+    snapshot
+        .index_relations
+        .insert("ivf_centroids".into(), shared.centroids.clone());
+    snapshot
+        .parameters
+        .insert("shared_ivf_fingerprint".into(), shared.fingerprint.clone());
+    snapshot
+        .parameters
+        .insert("shared_ivf_uuid".into(), shared.artifact_uuid.to_string());
+    snapshot
+        .parameters
+        .insert("shared_ivf_metadata_location".into(), shared_location);
+
+    repository
+        .load_snapshot_shared_ivf(&snapshot)
+        .await
+        .unwrap();
+
+    snapshot.vector_field = "other_embedding".into();
+    assert!(
+        repository
+            .load_snapshot_shared_ivf(&snapshot)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -454,8 +497,7 @@ async fn publication_uses_the_builder_format_descriptor() {
     let temporary = TempDir::new().unwrap();
     let repository = repository(&temporary);
     let mut build = artifacts("file:///indexes/v2", 2);
-    build.format = IndexFormat::ivf_v2();
-    build.parameters.remove("store_vectors");
+    build.format = IndexFormat::ivf(DistanceMetric::Cosine);
     build
         .parameters
         .insert("posting_encoding".into(), "lvq8".into());
@@ -479,7 +521,8 @@ async fn publication_uses_the_builder_format_descriptor() {
 
     let snapshot = published.metadata.current_snapshot().unwrap();
     assert_eq!(snapshot.index_family, "ivf");
-    assert_eq!(snapshot.index_schema_version, 2);
+    assert_eq!(snapshot.index_schema_version, 1);
+    assert_eq!(snapshot.metric, "cosine");
     assert_eq!(snapshot.parameters["posting_encoding"], "lvq8");
 }
 

@@ -43,11 +43,7 @@ def execute_fixture_query(
         f"p.key_{position} = s.{quote_identifier(field)}"
         for position, field in enumerate(key_fields, start=1)
     )
-    distance_vector = (
-        "p.vector"
-        if snapshot["parameters"]["store_vectors"] == "true"
-        else f"s.{quote_identifier(snapshot['vector-field'])}"
-    )
+    distance_vector = f"s.{quote_identifier(snapshot['vector-field'])}"
     filters = case["filter"] or {}
     filter_sql = " AND ".join(f"s.{quote_identifier(field)} = ?" for field in filters)
     where_clause = f"WHERE {filter_sql}" if filter_sql else ""
@@ -90,7 +86,7 @@ def execute_fixture_query(
 def test_duckdb_reproduces_all_portable_query_results() -> None:
     connection = duckdb.connect()
     try:
-        for directory in (FIXTURES, FIXTURES / "composite_no_vectors"):
+        for directory in (FIXTURES, FIXTURES / "composite"):
             cases = json.loads((directory / "queries.json").read_text(encoding="utf-8"))
             for case in cases:
                 assert_query_result(

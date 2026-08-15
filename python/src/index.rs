@@ -8,7 +8,7 @@ use relify_core::{IndexArtifacts, IndexFormat};
 use relify_index::{
     IndexRepository, InitialIndex, MetadataStore, new_snapshot_id, publish_initial,
 };
-use relify_meta::{IndexMetadata, RelationReference};
+use relify_meta::{DistanceMetric, IndexMetadata, RelationReference};
 use relify_storage::{StorageRegistry, Warehouse};
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -141,12 +141,14 @@ impl PyNativeIndexRepository {
         let runtime = Arc::clone(&self.runtime);
         let loaded = py
             .detach(move || {
-                runtime.block_on(repository.select(
-                    &[],
-                    &source,
-                    identifier.as_ref(),
-                    column.as_deref(),
-                ))
+                runtime.block_on(async move {
+                    let loaded = repository
+                        .select(&[], &source, identifier.as_ref(), column.as_deref())
+                        .await?;
+                    let snapshot = loaded.metadata.current_snapshot()?;
+                    repository.load_snapshot_shared_ivf(snapshot).await?;
+                    Ok::<_, relify_index::Error>(loaded)
+                })
             })
             .map_err(|error| index_error(&error))?;
         let name = loaded.entry.identifier.name().to_owned();
@@ -160,6 +162,7 @@ impl PyNativeIndexRepository {
         vector_field,
         source_key_fields,
         builder,
+        metric,
         parameters,
         index_relations
     ))]
@@ -172,11 +175,14 @@ impl PyNativeIndexRepository {
         vector_field: String,
         source_key_fields: Vec<String>,
         builder: String,
+        metric: &str,
         parameters: BTreeMap<String, String>,
         index_relations: BTreeMap<String, String>,
     ) -> PyResult<String> {
         let identifier = root_identifier(index_name)?;
         let source = relation(source_json)?;
+        let metric = DistanceMetric::from_metadata(metric)
+            .ok_or_else(|| runtime_error("unsupported IVF metric"))?;
         let index_relations = index_relations
             .into_iter()
             .map(|(role, reference)| Ok((role, relation(&reference)?)))
@@ -196,7 +202,7 @@ impl PyNativeIndexRepository {
                     source_key_fields: &source_key_fields,
                     builder: &builder,
                     build: IndexArtifacts {
-                        format: IndexFormat::ivf_v1(),
+                        format: IndexFormat::ivf(metric),
                         parameters,
                         index_relations,
                     },

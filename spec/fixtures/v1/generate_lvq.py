@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import shutil
+import uuid
 from pathlib import Path
 
 import pyarrow as pa
@@ -10,9 +11,14 @@ import pyarrow.parquet as pq
 
 ROOT = Path(__file__).parent
 SNAPSHOT_ID = 901
-UUIDS = {
+FINGERPRINT_NAMESPACE = uuid.UUID("2fb71e63-a27c-4fc5-9d6d-5070698dc398")
+INDEX_UUIDS = {
     "lvq4": "ee577329-84db-40da-af50-bb10d86e2d2f",
     "lvq8": "26878cae-d125-4ec9-b42f-7f0b1ed8c64f",
+}
+SHARED_UUIDS = {
+    "lvq4": "ac413538-8613-4ed5-8411-a9579eda38da",
+    "lvq8": "269b3fe5-0fb3-48f9-85cc-78863622bb48",
 }
 
 
@@ -21,6 +27,30 @@ def write_json(path: Path, value: object) -> None:
         json.dumps(value, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+
+
+def fingerprint(descriptor: dict[str, object]) -> str:
+    source = descriptor["source"]
+    assert isinstance(source, dict)
+    canonical_source = {"profile": source["profile"]}
+    fields = (
+        ("uri",)
+        if source["profile"] == "parquet"
+        else ("table-uuid", "snapshot-id")
+    )
+    canonical_source.update((field, source[field]) for field in fields)
+    canonical_descriptor = {
+        "source": canonical_source,
+        "vector-field": descriptor["vector-field"],
+        "dimension": descriptor["dimension"],
+        "metric": descriptor["metric"],
+        "nlist": descriptor["nlist"],
+        "clustering-profile-version": descriptor["clustering-profile-version"],
+    }
+    canonical = json.dumps(
+        canonical_descriptor, ensure_ascii=False, separators=(",", ":")
+    )
+    return str(uuid.uuid5(FINGERPRINT_NAMESPACE, canonical))
 
 
 def encode(vector: list[float], bits: int) -> tuple[float, float, bytes]:
@@ -51,13 +81,27 @@ def encode(vector: list[float], bits: int) -> tuple[float, float, bytes]:
     return offset, scale, packed
 
 
+def descriptor(encoding: str) -> dict[str, object]:
+    root = f"s3://relify-fixtures/v1/valid/{encoding}"
+    return {
+        "source": {"profile": "parquet", "uri": f"{root}/source/"},
+        "vector-field": "embedding",
+        "dimension": 3,
+        "metric": "l2_squared",
+        "nlist": 2,
+        "clustering-profile-version": 1,
+    }
+
+
 def metadata(encoding: str) -> dict[str, object]:
-    uuid = UUIDS[encoding]
-    root = f"s3://relify-fixtures/v2/{encoding}"
+    index_uuid = INDEX_UUIDS[encoding]
+    shared_uuid = SHARED_UUIDS[encoding]
+    root = f"s3://relify-fixtures/v1/valid/{encoding}"
+    shared = descriptor(encoding)
     return {
         "format-version": 1,
-        "index-uuid": uuid,
-        "location": f"s3://relify-fixtures/v2/metadata/{uuid}/",
+        "index-uuid": index_uuid,
+        "location": f"s3://relify-fixtures/v1/metadata/{index_uuid}/",
         "last-updated-ms": 1_750_000_000_000,
         "last-sequence-number": 1,
         "current-snapshot-id": SNAPSHOT_ID,
@@ -67,17 +111,20 @@ def metadata(encoding: str) -> dict[str, object]:
                 "sequence-number": 1,
                 "timestamp-ms": 1_750_000_000_000,
                 "summary": {"operation": "create"},
-                "source": {"profile": "parquet", "uri": f"{root}/source/"},
+                "source": shared["source"],
                 "vector-field": "embedding",
                 "source-key-fields": ["document_id"],
                 "index-family": "ivf",
-                "index-schema-version": 2,
+                "index-schema-version": 1,
                 "metric": "l2_squared",
                 "parameters": {
                     "dimension": "3",
                     "nlist": "2",
                     "ntotal": "3",
                     "posting_encoding": encoding,
+                    "shared_ivf_fingerprint": fingerprint(shared),
+                    "shared_ivf_uuid": shared_uuid,
+                    "shared_ivf_metadata_location": f"{root}/shared-ivf.metadata.json",
                 },
                 "index-relations": {
                     "ivf_centroids": {
@@ -97,7 +144,25 @@ def metadata(encoding: str) -> dict[str, object]:
                 "snapshot-id": SNAPSHOT_ID,
             }
         ],
-        "properties": {"fixture": f"ivf-parquet-{encoding}-v2"},
+        "properties": {"fixture": f"ivf-parquet-{encoding}"},
+    }
+
+
+def shared_metadata(encoding: str) -> dict[str, object]:
+    shared = descriptor(encoding)
+    shared_uuid = SHARED_UUIDS[encoding]
+    root = f"s3://relify-fixtures/v1/valid/{encoding}"
+    return {
+        "format-version": 1,
+        "artifact-uuid": shared_uuid,
+        "fingerprint": fingerprint(shared),
+        "location": f"{root}/shared/{shared_uuid}/",
+        "created-at-ms": 1_750_000_000_000,
+        "descriptor": shared,
+        "centroids": {
+            "profile": "parquet",
+            "uri": f"{root}/ivf_centroids/",
+        },
     }
 
 
@@ -164,6 +229,7 @@ def write_fixture(encoding: str) -> None:
         compression="NONE",
     )
     write_json(directory / "metadata.json", metadata(encoding))
+    write_json(directory / "shared-ivf.metadata.json", shared_metadata(encoding))
 
     offset, scale, code = encoded[0]
     levels = (1 << bits) - 1
@@ -190,10 +256,6 @@ def write_fixture(encoding: str) -> None:
     )
 
 
-def main() -> None:
-    for encoding in UUIDS:
+def write_lvq_fixtures() -> None:
+    for encoding in INDEX_UUIDS:
         write_fixture(encoding)
-
-
-if __name__ == "__main__":
-    main()
