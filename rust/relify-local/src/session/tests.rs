@@ -40,6 +40,38 @@ fn age_catalog_tombstones(session: &LocalSession) {
         .unwrap();
 }
 
+fn write_page_cache_source(path: &Path) {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Int32,
+        false,
+    )]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int32Array::from_iter_values(0..4_096))],
+    )
+    .unwrap();
+    let properties = WriterProperties::builder()
+        .set_compression(Compression::SNAPPY)
+        .set_data_page_row_count_limit(128)
+        .build();
+    let file = std::fs::File::create(path).unwrap();
+    let mut writer = ArrowWriter::try_new(file, schema, Some(properties)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+}
+
+async fn collect_page_cache_source(session: &LocalSession) -> Vec<RecordBatch> {
+    session
+        .context()
+        .sql("SELECT value FROM page_cache_source")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap()
+}
+
 #[test]
 fn metadata_cache_config_is_shared_with_repository_handles() {
     let temporary = TempDir::new().unwrap();
@@ -91,35 +123,33 @@ async fn metadata_cache_config_tracks_datafusion_session_set() {
 }
 
 #[tokio::test]
-async fn parquet_page_cache_is_used_by_datafusion_scans_and_tracks_session_set() {
+async fn parquet_page_cache_is_shared_across_sessions() {
     let temporary = TempDir::new().unwrap();
     let parquet_path = temporary.path().join("page-cache-source.parquet");
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "value",
-        DataType::Int32,
-        false,
-    )]));
-    let batch = RecordBatch::try_new(
-        Arc::clone(&schema),
-        vec![Arc::new(Int32Array::from_iter_values(0..4_096))],
-    )
-    .unwrap();
-    let properties = WriterProperties::builder()
-        .set_compression(Compression::SNAPPY)
-        .set_data_page_row_count_limit(128)
-        .build();
-    let file = std::fs::File::create(&parquet_path).unwrap();
-    let mut writer = ArrowWriter::try_new(file, schema, Some(properties)).unwrap();
-    writer.write(&batch).unwrap();
-    writer.close().unwrap();
+    write_page_cache_source(&parquet_path);
 
-    let config = relify_session_config().set_str("relify.parquet.page_cache.capacity", "1048576");
-    let session = LocalSession::open_with_options(
-        temporary.path(),
-        LocalSessionOptions::new(config, RuntimeEnvBuilder::default()),
+    let runtime =
+        Arc::new(RelifyRuntime::new(RuntimeEnvBuilder::default(), Some(1024 * 1024)).unwrap());
+    let first_session = LocalSession::open_with_options(
+        temporary.path().join("first"),
+        LocalSessionOptions::with_runtime(relify_session_config(), Arc::clone(&runtime)),
     )
     .unwrap();
-    session
+    let second_session = LocalSession::open_with_options(
+        temporary.path().join("second"),
+        LocalSessionOptions::with_runtime(relify_session_config(), Arc::clone(&runtime)),
+    )
+    .unwrap();
+    first_session
+        .context()
+        .register_parquet(
+            "page_cache_source",
+            parquet_path.to_str().unwrap(),
+            ParquetReadOptions::default(),
+        )
+        .await
+        .unwrap();
+    second_session
         .context()
         .register_parquet(
             "page_cache_source",
@@ -129,41 +159,36 @@ async fn parquet_page_cache_is_used_by_datafusion_scans_and_tracks_session_set()
         .await
         .unwrap();
 
-    let first = session
-        .context()
-        .sql("SELECT value FROM page_cache_source")
-        .await
-        .unwrap()
-        .collect()
-        .await
-        .unwrap();
+    let first = collect_page_cache_source(&first_session).await;
     assert_eq!(
         first.iter().map(RecordBatch::num_rows).sum::<usize>(),
         4_096
     );
     drop(first);
-    let cold = session.parquet_page_cache_stats();
+    let cold = first_session.parquet_page_cache_stats();
     assert!(cold.admissions > 1, "{cold:?}");
 
-    let second = session
-        .context()
-        .sql("SELECT value FROM page_cache_source")
-        .await
-        .unwrap()
-        .collect()
-        .await
-        .unwrap();
+    let second = collect_page_cache_source(&second_session).await;
     assert_eq!(
         second.iter().map(RecordBatch::num_rows).sum::<usize>(),
         4_096
     );
     drop(second);
-    let warm = session.parquet_page_cache_stats();
+    let warm = second_session.parquet_page_cache_stats();
     assert!(warm.hits > cold.hits, "cold={cold:?}, warm={warm:?}");
+    assert!(Arc::ptr_eq(
+        &first_session.runtime(),
+        &second_session.runtime()
+    ));
+    assert!(Arc::ptr_eq(
+        &first_session.context().runtime_env(),
+        &second_session.context().runtime_env()
+    ));
 
-    session.clear_parquet_page_cache();
-    assert_eq!(session.parquet_page_cache_stats().resident_bytes, 0);
-    session
+    first_session.clear_parquet_page_cache();
+    assert_eq!(second_session.parquet_page_cache_stats().resident_bytes, 0);
+
+    second_session
         .context()
         .sql("SET relify.parquet.page_cache.capacity = 0")
         .await
@@ -171,16 +196,9 @@ async fn parquet_page_cache_is_used_by_datafusion_scans_and_tracks_session_set()
         .collect()
         .await
         .unwrap();
-    let admissions = session.parquet_page_cache_stats().admissions;
-    session
-        .context()
-        .sql("SELECT value FROM page_cache_source")
-        .await
-        .unwrap()
-        .collect()
-        .await
-        .unwrap();
-    let disabled = session.parquet_page_cache_stats();
+    let admissions = second_session.parquet_page_cache_stats().admissions;
+    collect_page_cache_source(&second_session).await;
+    let disabled = first_session.parquet_page_cache_stats();
     assert_eq!(disabled.capacity, 0);
     assert_eq!(disabled.admissions, admissions);
 }
@@ -202,6 +220,10 @@ fn session_preserves_datafusion_config_and_runtime() {
     assert!(Arc::ptr_eq(
         &context.runtime_env().memory_pool,
         &memory_pool
+    ));
+    assert!(Arc::ptr_eq(
+        &context.runtime_env(),
+        &session.runtime().datafusion()
     ));
     assert_eq!(session.parquet_page_cache_stats().capacity, 4096 / 5);
 }
