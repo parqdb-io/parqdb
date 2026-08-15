@@ -128,7 +128,7 @@ def test_experimental_backends_are_not_registered_as_stable_builtins() -> None:
     assert not hasattr(relify, "spark")
     assert not hasattr(relify, "starrocks")
     assert not hasattr(relify, "Spark")
-    assert relify.experimental.Spark is relify.experimental.spark.Spark
+    assert not hasattr(relify.experimental, "Spark")
 
     for name in ("spark", "starrocks"):
         with pytest.raises(relify.backends.BackendNotFoundError):

@@ -20,6 +20,8 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - The public `IVF` configuration now selects a canonical `encoding` instead of
   exposing the earlier `store_vectors` storage detail.
+- The experimental Spark integration is query-only while its builder migrates
+  to the shared-IVF publication contract.
 
 ### Fixed
 

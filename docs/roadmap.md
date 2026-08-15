@@ -15,7 +15,7 @@ The initial release includes:
 - Parquet source and index tables;
 - local parallel IVF construction with exact-vector and LVQ encodings;
 - DataFusion search, filtering, projection, and exact fallback;
-- exact Iceberg snapshot reads for Spark-built indexes;
+- exact Iceberg snapshot reads for published indexes;
 - independent DuckDB execution of the portable IVF fixtures;
 - reproducible persisted-build and large-k Recall-latency results with a Faiss
   baseline;
@@ -30,25 +30,19 @@ The release gates and procedure are defined in
 
 ### Spark and Iceberg
 
-The initial release also includes:
+The initial release includes:
 
 - a concrete Spark Classic session over a caller-owned `SparkSession`;
 - exact Iceberg source and index snapshot resolution through PyIceberg;
-- distributed MLlib block training over a Faiss-style bounded sample, followed
-  by measured Arrow-batch posting assignment;
-- canonical Iceberg schemas created through PyIceberg and distributed data
-  appended through DataFrameWriterV2;
 - native PySpark DataFrame query plans with relational cluster routing;
 - direct Spark reads of locally built Parquet indexes;
-- asynchronous build status and waiting; and
-- shared index discovery, selection, metadata storage, and publication through
+- shared index discovery, selection, and metadata loading through
   `relify-index`.
 
-Before this path is production-ready it still requires a real Spark/Iceberg
-conformance environment, refresh and failed-build maintenance, cross-driver
-build coordination, reproducible distributed benchmarks, and a remote Relify
-index catalog. The current SQLite catalog is for one Spark driver and
-development use.
+The bundled Spark integration is query-only. Before this path is
+production-ready it still requires a maintained Spark/Iceberg conformance
+environment, reproducible distributed benchmarks, and a remote Relify index
+catalog.
 
 ### StarRocks Query
 
@@ -67,7 +61,7 @@ The query-only StarRocks integration includes:
 This path requires StarRocks 3.5.1 or later and one Iceberg catalog registered
 under the same logical name in StarRocks and PyIceberg. It is intentionally
 query-only and Iceberg-only at the StarRocks execution layer; construction may
-be delegated to an independent Spark builder. Before production use it still
+be delegated to a compatible third-party builder. Before production use it still
 requires a maintained conformance deployment, reproducible StarRocks
 benchmarks, and a remote Relify index catalog.
 
@@ -89,10 +83,9 @@ The stable local and bundled experimental Spark and StarRocks sessions publish
 capabilities through the same API.
 
 Index construction is independently extensible through
-`relify.builders.v1`. Local and Spark builders publish typed source/output
-profiles, while every concrete table shares the same asynchronous lifecycle.
-A StarRocks table can use an explicit `relify.experimental.Spark(spark)`
-builder without adding construction capabilities to the StarRocks backend.
+`relify.builders.v1`. The bundled local builder and compatible third-party
+builders publish typed source/output profiles, while every concrete table
+shares the same asynchronous lifecycle.
 
 ## Next: Remote Catalogs and Spark Connect
 

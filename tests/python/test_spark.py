@@ -6,23 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pyarrow as pa
 import pytest
 import relify
-from relify.experimental.spark.builder import (
-    _assign_postings,
-    _assignment_batches,
-    _AssignmentMetrics,
-    _posting_partitions,
-    _range_partition_postings,
-    _snapshot_row_count,
-    _spark_modules,
-    _spark_write_properties,
-    _train_centroids,
-    _training_sample_fraction,
-    _validate_source_schema,
-)
 from relify.experimental.spark.iceberg import load_table_state
 from relify.experimental.spark.schema import canonical_schema
 
@@ -126,6 +112,7 @@ def test_spark_session_resolves_the_same_table_in_both_catalogs(tmp_path: Path) 
     query = documents.search([0.0, 1.0], column="embedding").nprobes(4).limit(10)
     assert query.source == documents.identifier
     assert query.probe_count == 4
+    assert session.default_builder is None
 
 
 def test_spark_create_index_forwards_write_options(
@@ -152,6 +139,19 @@ def test_spark_create_index_forwards_write_options(
 
     assert submitted["writer_options"] == options
     assert submitted["builder"] is None
+
+
+def test_spark_index_construction_requires_an_explicit_builder(tmp_path: Path) -> None:
+    session, _, _ = _session(tmp_path)
+    documents = session.table("analytics.documents")
+
+    with pytest.raises(ValueError, match="no default index builder"):
+        documents.create_index(
+            "documents_embedding",
+            column="embedding",
+            key=["document_id"],
+            config=relify.IVF(nlist=2),
+        )
 
 
 def test_spark_session_collects_portable_arrow_batches(
@@ -329,128 +329,6 @@ def test_spark_session_registers_parquet_without_iceberg(
     assert spark.read.uris == ["file:///data/documents/*.parquet"]
 
 
-def test_arrow_assignment_uses_float32_centroids_and_smaller_cid_on_ties() -> None:
-    class _Counter:
-        def __init__(self) -> None:
-            self.value = 0
-
-        def add(self, value: int) -> None:
-            self.value += value
-
-    metrics = _AssignmentMetrics(*(_Counter() for _ in range(5)))
-    vectors = pa.array(
-        [[0.0, 0.0], [9.0, 0.0], [5.0, 0.0]],
-        type=pa.list_(pa.float32()),
-    )
-    batch = pa.RecordBatch.from_arrays(
-        [pa.array(["a", "b", "c"]), vectors],
-        names=["key_1", "vector"],
-    )
-    centroids = np.asarray([[0.0, 0.0], [10.0, 0.0]], dtype=np.float32)
-
-    [assigned] = list(
-        _assignment_batches(
-            iter([batch]),
-            centroids=centroids,
-            key_count=1,
-            store_vectors=True,
-            metrics=metrics,
-        )
-    )
-
-    assert assigned.column("cid").to_pylist() == [0, 1, 0]
-    assert assigned.column("vector").to_pylist() == vectors.to_pylist()
-    assert metrics.rows.value == 3
-    assert metrics.batches.value == 1
-    assert metrics.conversion_ns.value > 0
-    assert metrics.distance_ns.value > 0
-    assert metrics.output_ns.value > 0
-
-
-def test_spark_range_partitions_postings_by_cid_then_all_keys() -> None:
-    class _Frame:
-        def __init__(self) -> None:
-            self.calls: list[tuple[Any, ...]] = []
-
-        def repartitionByRange(self, partitions: int, *columns: str) -> _Frame:
-            self.calls.append(("repartitionByRange", partitions, *columns))
-            return self
-
-        def sortWithinPartitions(self, *columns: str) -> _Frame:
-            self.calls.append(("sortWithinPartitions", *columns))
-            return self
-
-    postings = _Frame()
-
-    assert (
-        _range_partition_postings(
-            postings,
-            key_count=2,
-            partitions=7,
-        )
-        is postings
-    )
-    assert postings.calls == [
-        ("repartitionByRange", 7, "cid", "key_1", "key_2"),
-        ("sortWithinPartitions", "cid", "key_1", "key_2"),
-    ]
-    with pytest.raises(ValueError, match="key"):
-        _range_partition_postings(postings, key_count=0, partitions=1)
-    with pytest.raises(ValueError, match="partitions"):
-        _range_partition_postings(postings, key_count=1, partitions=0)
-
-
-def test_spark_posting_partitions_default_and_validate_overrides() -> None:
-    context = type("_Context", (), {"defaultParallelism": 8})()
-
-    assert _posting_partitions(context, None) == 8
-    assert _posting_partitions(context, 17) == 17
-    for value in (0, -1, True):
-        with pytest.raises(ValueError, match="partitions"):
-            _posting_partitions(context, value)
-
-
-def test_spark_write_options_map_to_iceberg_properties() -> None:
-    properties = _spark_write_properties(
-        relify.WriteOptions(
-            partitions=17,
-            compression="zstd(3)",
-            target_file_size=64 * 1024 * 1024,
-        )
-    )
-
-    assert properties == {
-        "format-version": "2",
-        "write.format.default": "parquet",
-        "write.distribution-mode": "range",
-        "write.parquet.compression-codec": "zstd",
-        "write.parquet.compression-level": "3",
-        "write.target-file-size-bytes": str(64 * 1024 * 1024),
-    }
-
-
-def test_spark_training_uses_faiss_sample_bound() -> None:
-    assert _training_sample_fraction(2, 2) is None
-    assert _training_sample_fraction(512, 2) is None
-    assert _training_sample_fraction(1_024, 2) == 0.5
-    with pytest.raises(ValueError, match="nlist"):
-        _training_sample_fraction(1, 2)
-
-
-def test_spark_reads_ntotal_from_the_exact_iceberg_snapshot() -> None:
-    catalog = _IcebergCatalog()
-    identifier = relify.TableIdentifier(
-        "lakehouse",
-        ("analytics",),
-        "documents",
-    )
-
-    assert _snapshot_row_count(catalog, identifier, 101) == 3
-
-    catalog.tables[("analytics", "documents")]._snapshot.summary = None
-    assert _snapshot_row_count(catalog, identifier, 101) is None
-
-
 def test_spark_connect_is_rejected_explicitly(tmp_path: Path) -> None:
     class _Connect:
         @property
@@ -472,6 +350,7 @@ def test_native_pyspark_plan_executes_index_only_and_source_join_paths(
 ) -> None:
     pytest.importorskip("pyspark")
     spark_sql = pytest.importorskip("pyspark.sql")
+    spark_functions = pytest.importorskip("pyspark.sql.functions")
     spark_types = pytest.importorskip("pyspark.sql.types")
     planner = pytest.importorskip("relify.experimental.spark.planner")
     spark = (
@@ -647,7 +526,6 @@ def test_native_pyspark_plan_executes_index_only_and_source_join_paths(
             spark_sql.Row(document_id=3, title="c", _distance=100.0),
         ]
 
-        modules = _spark_modules()
         overflowing = spark.createDataFrame(
             [([3.0e38],)],
             spark_types.StructType(
@@ -664,46 +542,12 @@ def test_native_pyspark_plan_executes_index_only_and_source_join_paths(
             ),
         ).select(
             planner._squared_l2(
-                modules["functions"].col("vector"),
+                spark_functions.col("vector"),
                 [-3.0e38],
             ).alias("_distance")
         )
         with pytest.raises(Exception, match="squared-L2 distance is non-finite"):
             overflowing.collect()
-
-        source_frame = frames["documents"]
-        assert (
-            _validate_source_schema(
-                source_frame,
-                column="embedding",
-                key=["document_id"],
-            )
-            is None
-        )
-        trained = _train_centroids(
-            source_frame,
-            column="embedding",
-            nlist=2,
-            ntotal=3,
-            modules=modules,
-        )
-        assert trained.shape == (2, 2)
-        assigned = _assign_postings(
-            source_frame,
-            column="embedding",
-            key=["document_id"],
-            centroids=np.asarray(
-                [[0.0, 0.0], [10.0, 0.0]],
-                dtype=np.float32,
-            ),
-            store_vectors=True,
-            modules=modules,
-        )
-        assert assigned.orderBy("key_1").collect() == [
-            spark_sql.Row(cid=0, key_1=1, vector=[0.0, 0.0]),
-            spark_sql.Row(cid=0, key_1=2, vector=[1.0, 0.0]),
-            spark_sql.Row(cid=1, key_1=3, vector=[10.0, 0.0]),
-        ]
     finally:
         spark.stop()
 

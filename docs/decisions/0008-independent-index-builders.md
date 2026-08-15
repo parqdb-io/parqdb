@@ -33,13 +33,12 @@ failure.
 Builder objects own construction compute and physical writes:
 
 - `Local` builds Parquet indexes through the embedded Rust runtime.
-- `Spark(spark_session)` builds Iceberg indexes through the caller-owned
-  Spark Classic session.
+- compatible third-party builders may build Iceberg indexes through their own
+  execution runtime.
 
-A local session defaults to `Local()`. A Spark session defaults to
-`Spark(session.spark)`. A StarRocks session has no default builder, so callers
-must pass one explicitly. The same `Spark` object may be used with a
-StarRocks table when both sessions bind the same logical Iceberg catalog.
+A local session defaults to `Local()`. The bundled experimental Spark and
+StarRocks sessions currently have no default builder. Callers may pass a
+compatible third-party builder explicitly.
 
 `WriteOptions` contains output properties meaningful across builders:
 partition count, Parquet compression, and target file size. Local-only thread,

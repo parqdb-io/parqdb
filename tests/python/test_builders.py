@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
 
 import pytest
 import relify
@@ -91,17 +90,6 @@ def test_builder_capabilities_are_typed(profile: BuildProfile) -> None:
     assert not capabilities.supports(
         BuildProfile("future", profile.source_profile, profile.index_profile)
     )
-
-
-def test_spark_builder_requires_a_classic_session() -> None:
-    with pytest.raises(NotImplementedError, match="Spark Classic"):
-        relify.experimental.Spark(object())
-
-    class _Spark:
-        sparkContext: Any = None
-
-    with pytest.raises(TypeError, match="active"):
-        relify.experimental.Spark(_Spark())
 
 
 def test_coordinator_discards_output_that_violates_the_builder_profile(

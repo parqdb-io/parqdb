@@ -27,8 +27,8 @@ current IVF family stores:
 - postings that map clusters to source keys and either source references,
   exact vectors, or LVQ codes.
 
-Parquet relations are used by the local builder. The Spark builder publishes
-the same logical relations as Iceberg tables. The
+Parquet relations are used by the local builder. The specification also defines
+the same logical relations for Iceberg tables. The
 [open index specification](../spec/README.md) defines their schemas and query
 semantics independently of the Python implementation.
 
@@ -70,10 +70,9 @@ A builder creates the physical index and publishes its metadata:
 
 - `relify.Local` builds Parquet indexes in the current process with native Rust
   training and assignment.
-- `relify.experimental.spark.Spark` builds Iceberg indexes with Spark Classic.
-
-Builders are selected independently from query backends. This is what allows a
-Spark-built Iceberg index to be queried by DataFusion or StarRocks.
+Spark and StarRocks currently have no built-in builder. Builders remain
+independent from query backends, so a compatible third-party builder may
+publish an Iceberg index for DataFusion, Spark, or StarRocks to query.
 
 ## Backend
 
@@ -83,7 +82,7 @@ engine. It owns engine-specific planning and result collection:
 | Backend | Source and index access | Build | Query |
 | --- | --- | --- | --- |
 | Local DataFusion | Parquet; Iceberg query with PyIceberg | Parquet | Stable |
-| Spark Classic | Parquet query; Iceberg query and build | Iceberg | Experimental |
+| Spark Classic | Parquet and Iceberg query | No built-in builder | Experimental |
 | StarRocks | Iceberg through Arrow Flight SQL | No built-in builder | Experimental |
 
 All backends accept the same `VectorQuery` shape and can return a portable

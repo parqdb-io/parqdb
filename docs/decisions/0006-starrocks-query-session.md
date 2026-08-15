@@ -5,7 +5,7 @@
 
 ## Context
 
-Relify needs an OLAP reader that demonstrates one Spark-built Iceberg index can
+Relify needs an OLAP reader that demonstrates one open Iceberg index can
 be queried by another engine without export, conversion, or reconstruction.
 StarRocks already owns distributed Iceberg scans, joins, filtering, Top-K, and
 query scheduling. Relify should supply portable index discovery and query
@@ -61,10 +61,10 @@ and garbage collection are separate future work.
 
 ## Consequences
 
-Spark can build canonical Iceberg index tables and publish Relify metadata,
-while StarRocks reads the same exact table snapshots and executes the complete
-IVF query in its own distributed runtime. Neither `relify-local` nor DataFusion
-is instantiated in a StarRocks session.
+A conforming builder can publish canonical Iceberg index tables and Relify
+metadata, while StarRocks reads the same exact table snapshots and executes the
+complete IVF query in its own distributed runtime. Neither `relify-local` nor
+DataFusion is instantiated in a StarRocks session.
 
 The query-intent and repository boundaries remain backend-independent;
 StarRocks-specific SQL and ADBC behavior remain isolated under
