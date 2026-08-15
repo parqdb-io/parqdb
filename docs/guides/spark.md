@@ -5,6 +5,9 @@ with native PySpark DataFrame plans. It accepts a caller-owned
 Spark Classic session; Relify does not create or configure the Spark cluster or
 Iceberg catalog.
 
+The current planner accepts source-encoded L2 IVF indexes. Cosine and LVQ
+postings are currently local-backend capabilities.
+
 ## Requirements
 
 - standard CPython 3.11 through 3.14;

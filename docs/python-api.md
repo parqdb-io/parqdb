@@ -126,9 +126,8 @@ df = (
 release. It is a separate namespace, so an application may also install the
 official `datafusion` package without either package replacing the other.
 
-The local session can also query an Iceberg index built by Spark. Bind the same
-PyIceberg catalog name recorded in the index metadata and use the same Relify
-index catalog:
+The local session can also query a compatible Iceberg index registered in the
+Relify catalog. Bind the PyIceberg catalog name recorded in the index metadata:
 
 ```python
 from pyiceberg.catalog import load_catalog
@@ -196,8 +195,8 @@ hits = session.to_dataframe(
 ```
 
 The Parquet source URI must be the same canonical URI recorded by the selected
-index. Spark construction is not implemented, so the session consumes an
-already published compatible index.
+index. Spark construction is not implemented for the shared-IVF schema, so the
+session consumes an already published compatible index.
 
 Search returns a native PySpark DataFrame:
 
@@ -225,13 +224,12 @@ public Spark DataFrame plan as text.
 
 Centroid Top-K and postings pruning remain relational operators in the Spark
 plan. Relify uses a left-semi join with the selected `cid` DataFrame rather
-than expanding a large `IN` list. Source resolution is omitted for an
-index-only key/vector projection with no source predicate. Other projections
-and predicates join source rows transparently.
+than expanding a large `IN` list. The current source encoding resolves
+candidate vectors and projected rows from the source relation.
 
-The first Spark implementation supports Spark Classic, initial index
-construction, native DataFrame queries, and a SQLite development index
-catalog. Spark Connect, refresh, cross-driver build coordination, Iceberg
+The current Spark implementation supports Spark Classic query plans and a
+SQLite development index catalog. Index construction is unavailable until a
+conforming shared-IVF builder is implemented. Spark Connect, refresh, Iceberg
 maintenance, remote index catalogs, and production conformance tests remain
 open.
 
@@ -358,20 +356,16 @@ documents.create_index(
 )
 ```
 
-The vector column must be a required `list<float32>` with required, finite
-elements of one fixed dimension. Keys may be composite and are copied into the
-postings table without creating an internal row identifier. `encoding`
-accepts `flat`, `lvq4`, `lvq8`, or `source`. `flat` stores exact vectors, while
-LVQ stores compact per-vector codes and evaluates approximate distance directly
-from the postings table. `source` stores only keys and resolves candidate
-vectors from the source. Omitting `encoding` selects `flat`.
+The vector column may contain `float32` or `float64` elements. Values must be
+finite, non-null, and have one fixed positive dimension. Keys may be composite
+and are copied into the postings table without creating an internal row
+identifier. `encoding` accepts `source`, `lvq4`, or `lvq8`; omitting it selects
+`source`. The `metric` is `l2_squared` by default and also accepts `cosine`.
 
-The same table method is implemented by every backend, but only the local
-session has a default builder. Spark and StarRocks callers must pass a
-compatible third-party builder explicitly. On the local session, the call
-above starts an asynchronous `Local()` build. Omitting
-`wait_timeout` returns after submission. Build state can be inspected or
-awaited:
+The same table method is available to backend integrations, but only the local
+session currently advertises a compatible builder. The call above starts an
+asynchronous `Local()` build. Omitting `wait_timeout` returns after submission.
+Build state can be inspected or awaited:
 
 ```python
 status = documents.index_status("documents_embedding")
@@ -683,13 +677,13 @@ supports:
 - one SQLite catalog for Parquet definitions and index mappings;
 - the root index namespace in the Python facade;
 - Parquet source and index tables;
-- `source`, `flat`, `lvq4`, and `lvq8` IVF postings with squared L2 distance;
+- `source`, `lvq4`, and `lvq8` IVF postings with squared L2 or cosine distance;
 - one local Rust builder; and
 - one native DataFusion session for build, query, and relational composition.
 
-The experimental Spark implementation supports one Iceberg catalog and native
-DataFrame queries on Spark Classic. The
-experimental StarRocks implementation supports query-only Iceberg reads over
-Arrow Flight SQL.
+The experimental Spark implementation supports native DataFrame queries over
+compatible source-encoded L2 IVF indexes in Parquet and Iceberg on Spark
+Classic. The experimental StarRocks implementation supports query-only Iceberg
+reads over Arrow Flight SQL.
 Portable standalone SQL compilation, Spark Connect, remote index catalogs,
 StarRocks construction, and StarRocks Parquet reads are not implemented.

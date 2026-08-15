@@ -13,7 +13,9 @@ The initial release includes:
 - exact paths and nested `*` patterns over `file`, S3, and HDFS sources;
 - `file`, S3, and HDFS warehouses;
 - Parquet source and index tables;
-- local parallel IVF construction with exact-vector and LVQ encodings;
+- local parallel IVF construction with shared centroids and source, LVQ4, or
+  LVQ8 postings;
+- squared-L2 and cosine search over `float32` and `float64` source vectors;
 - DataFusion search, filtering, projection, and exact fallback;
 - exact Iceberg snapshot reads for published indexes;
 - independent DuckDB execution of the portable IVF fixtures;
@@ -53,10 +55,8 @@ The query-only StarRocks integration includes:
 - exact Iceberg table UUID, schema, and snapshot validation through PyIceberg;
 - StarRocks SQL compilation with relational centroid routing, postings
   pruning, transparent source resolution, filtering, projection, and Top-K;
-- index-only queries when stored vectors and the requested projection permit
-  them;
 - Arrow-table collection and native `EXPLAIN`; and
-- an opt-in StarRocks/Iceberg execution of the shared specification fixtures.
+- an opt-in StarRocks/Iceberg execution of the source-encoded L2 IVF fixture.
 
 This path requires StarRocks 3.5.1 or later and one Iceberg catalog registered
 under the same logical name in StarRocks and PyIceberg. It is intentionally
@@ -96,7 +96,7 @@ query results as the built-in execution paths.
 
 ## Later
 
-Additional index families, metrics, SDK languages, construction using
+Additional index families, distance metrics, SDK languages, construction using
 StarRocks compute, Parquet queries through StarRocks, and managed services
 remain out of scope until the implemented paths have independent conformance
 tests and reproducible benchmarks.

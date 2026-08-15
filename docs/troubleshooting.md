@@ -59,9 +59,9 @@ print(parquet.ParquetFile("/data/documents.parquet").schema_arrow)
 ```
 
 Every vector value must be non-null, have one fixed dimension, and contain only
-non-null finite `float32` elements. The physical source schema may declare list
-elements nullable, but the indexed values cannot contain nulls. The source and
-postings key types must match exactly. Use the
+non-null finite `float32` or `float64` elements. The physical source schema may
+declare list elements nullable, but indexed values cannot contain nulls. The
+source and postings key types must match exactly. Use the
 [IVF schema specification](../spec/ivf/index-schema.md) as the normative
 contract. A compute engine may expose a more conservatively nullable query
 schema; that query schema does not replace the file or table schema used for
@@ -196,11 +196,11 @@ logical name. Load the table independently through both APIs before opening a
 Relify session. Relify uses PyIceberg for UUID, schema, metadata location, and
 snapshot validation.
 
-### A second Spark driver cannot coordinate a build
+### Spark index construction is unavailable
 
-The 0.1 SQLite catalog is a single-coordinator development path. Cross-driver
-coordination requires the planned remote catalog and is not currently
-supported.
+The experimental Spark integration is query-only for the shared-IVF schema.
+Build the current Parquet format with the local backend or register an index
+published by a conforming external builder.
 
 ## StarRocks and Iceberg
 

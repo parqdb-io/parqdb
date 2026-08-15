@@ -108,6 +108,11 @@ Start with defaults. `nlist` and query-time `nprobes` have the largest effect
 on IVF recall and candidate work. Writer settings primarily affect persistence
 and scan layout.
 
+The default `source` encoding keeps vectors in the source table. `lvq4` and
+`lvq8` store compact codes in postings. Set `metric="cosine"` to normalize
+source and query vectors and report cosine distance; the default is
+`l2_squared`.
+
 ## Query and Continue with DataFusion
 
 Collect a portable Arrow result:
