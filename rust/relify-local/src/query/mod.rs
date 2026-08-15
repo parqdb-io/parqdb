@@ -35,8 +35,10 @@ use relify_kernels::{LvqBatchView, LvqBits, detect};
 
 mod fused_topk;
 mod lvq_codes;
+mod stream;
 
 pub(crate) use lvq_codes::lvq_code_rows;
+pub use stream::ManagedQueryStream;
 
 pub(crate) use fused_topk::relify_session_context;
 

@@ -18,6 +18,7 @@ use tokio::runtime::Runtime;
 
 use crate::errors::{InvalidArgumentError, core_error, runtime_error};
 use crate::index::PyNativeIndexRepository;
+use crate::stream::{AbortOnDrop, PyNativeQueryStream};
 
 type PySourceField = (String, String, bool);
 type PyIndexInfo = (
@@ -408,6 +409,11 @@ impl PyNativeSession {
         self.session.clear_parquet_page_cache();
     }
 
+    fn query_admission_stats(&self) -> (usize, usize) {
+        let stats = self.session.runtime().query_admission_stats();
+        (stats.active, stats.queued)
+    }
+
     fn remove_orphans(
         &self,
         py: Python<'_>,
@@ -617,6 +623,73 @@ impl PyNativeSession {
         py.detach(move || runtime.block_on(session.plan_search(&request)))
             .map(PyDataFrame::new)
             .map_err(|error| core_error(&error))
+    }
+
+    #[pyo3(signature = (
+        source,
+        query,
+        index=None,
+        column=None,
+        nprobe=None,
+        limit=10,
+        projection=None,
+        filter=None,
+        bypass_index=false
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn stream_search<'py>(
+        &self,
+        py: Python<'py>,
+        source: &str,
+        query: Vec<f32>,
+        index: Option<String>,
+        column: Option<String>,
+        nprobe: Option<usize>,
+        limit: usize,
+        projection: Option<Vec<String>>,
+        filter: Option<String>,
+        bypass_index: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let session = Arc::clone(&self.session);
+        let runtime = Arc::clone(&self.runtime);
+        let query_runtime = Arc::clone(&runtime);
+        let request = SearchRequest {
+            source: parse_relation_reference(source)?,
+            index,
+            column,
+            query,
+            nprobe,
+            limit,
+            projection,
+            filter,
+            bypass_index,
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let task = query_runtime.spawn(async move { session.stream_search(&request).await });
+            let mut abort_on_drop = AbortOnDrop::new(task.abort_handle());
+            let stream = task
+                .await
+                .map_err(|error| runtime_error(error.to_string()))?
+                .map_err(|error| core_error(&error))?;
+            abort_on_drop.disarm();
+            Ok(PyNativeQueryStream::new(stream, runtime))
+        })
+    }
+
+    fn stream_sql<'py>(&self, py: Python<'py>, sql: String) -> PyResult<Bound<'py, PyAny>> {
+        let session = Arc::clone(&self.session);
+        let runtime = Arc::clone(&self.runtime);
+        let query_runtime = Arc::clone(&runtime);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let task = query_runtime.spawn(async move { session.stream_sql(&sql).await });
+            let mut abort_on_drop = AbortOnDrop::new(task.abort_handle());
+            let stream = task
+                .await
+                .map_err(|error| runtime_error(error.to_string()))?
+                .map_err(|error| core_error(&error))?;
+            abort_on_drop.disarm();
+            Ok(PyNativeQueryStream::new(stream, runtime))
+        })
     }
 
     #[pyo3(signature = (

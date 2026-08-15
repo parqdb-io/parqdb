@@ -11,6 +11,7 @@ use bytes::Bytes;
 use datafusion::execution::memory_pool::{GreedyMemoryPool, MemoryPool};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::ParquetReadOptions;
+use futures::StreamExt;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
@@ -27,6 +28,7 @@ use uuid::Uuid;
 use super::*;
 use crate::local_uri::directory_to_file_uri;
 use crate::{IvfConfig, MaintenanceKind, PublishedIndex, relify_session_config};
+use crate::{QueryAdmissionOptions, QueryAdmissionStats, RelifyRuntime};
 
 struct MemoryEntry {
     entry: CatalogEntry,
@@ -226,6 +228,59 @@ fn session_preserves_datafusion_config_and_runtime() {
         &session.runtime().datafusion()
     ));
     assert_eq!(session.parquet_page_cache_stats().capacity, 4096 / 5);
+}
+
+#[tokio::test]
+async fn managed_query_stream_holds_and_releases_admission() {
+    let temporary = TempDir::new().unwrap();
+    let runtime = Arc::new(
+        RelifyRuntime::with_query_admission(
+            RuntimeEnvBuilder::default(),
+            Some(0),
+            QueryAdmissionOptions {
+                max_active: 1,
+                max_queued: 1,
+                queue_timeout: std::time::Duration::from_secs(1),
+            },
+        )
+        .unwrap(),
+    );
+    let session = LocalSession::open_with_options(
+        temporary.path(),
+        LocalSessionOptions::with_runtime(relify_session_config(), Arc::clone(&runtime)),
+    )
+    .unwrap();
+
+    let mut first = session.stream_sql("SELECT 1 AS value").await.unwrap();
+    let waiting_session = session.clone();
+    let waiting =
+        tokio::spawn(async move { waiting_session.stream_sql("SELECT 2 AS value").await });
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while runtime.query_admission_stats().queued != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        runtime.query_admission_stats(),
+        QueryAdmissionStats {
+            active: 1,
+            queued: 1,
+        }
+    );
+
+    first.cancel();
+    let mut second = waiting.await.unwrap().unwrap();
+    assert_eq!(runtime.query_admission_stats().active, 1);
+    assert_eq!(second.next().await.unwrap().unwrap().num_rows(), 1);
+    assert!(second.next().await.is_none());
+    assert_eq!(runtime.query_admission_stats().active, 0);
+
+    let mut cancelled = session.stream_sql("SELECT 3 AS value").await.unwrap();
+    cancelled.cancellation_token().cancel();
+    assert!(cancelled.next().await.is_none());
+    assert_eq!(runtime.query_admission_stats().active, 0);
 }
 
 #[derive(Default)]

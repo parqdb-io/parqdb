@@ -17,9 +17,10 @@ use super::source::{
     validate_index_source_schema, vector_elements_are_f64,
 };
 use crate::query::{
-    compile_datafusion_sql, compile_index_only_plan, datafusion_centroid_relation_required,
-    datafusion_cluster_relation_required, datafusion_source_relation_required,
-    selected_cluster_ids_from_values, use_native_cluster_routing, validated_cluster_search,
+    ManagedQueryStream, compile_datafusion_sql, compile_index_only_plan,
+    datafusion_centroid_relation_required, datafusion_cluster_relation_required,
+    datafusion_source_relation_required, selected_cluster_ids_from_values,
+    use_native_cluster_routing, validated_cluster_search,
 };
 use crate::{ClusterSelection, Error, ResolvedSearch, Result, SearchRequest};
 
@@ -53,6 +54,20 @@ impl LocalSession {
         let plan = self.plan_search(request).await?;
         let schema = Arc::clone(plan.schema().inner());
         Ok((plan.collect().await?, schema))
+    }
+
+    /// Executes one search as a cancellable, admission-controlled Arrow stream.
+    pub async fn stream_search(&self, request: &SearchRequest) -> Result<ManagedQueryStream> {
+        let permit = self.runtime.admit_query().await?;
+        let stream = self.plan_search(request).await?.execute_stream().await?;
+        Ok(ManagedQueryStream::new(stream, permit))
+    }
+
+    /// Executes one SQL statement as a cancellable, admission-controlled Arrow stream.
+    pub async fn stream_sql(&self, sql: &str) -> Result<ManagedQueryStream> {
+        let permit = self.runtime.admit_query().await?;
+        let stream = self.context.sql(sql).await?.execute_stream().await?;
+        Ok(ManagedQueryStream::new(stream, permit))
     }
 
     /// Plans one IVF query in this session's `DataFusion` context.

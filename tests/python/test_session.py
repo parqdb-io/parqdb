@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any, cast
 
+import pyarrow
 import pytest
 import relify
 from _support import build_index, register_source, write_vectors
@@ -30,6 +32,81 @@ def test_session_does_not_require_explicit_close(tmp_path: Path) -> None:
         == relify.backends.load("local").declared_capabilities
     )
     assert not hasattr(session, "context")
+
+
+def test_native_sql_stream_is_an_async_arrow_iterator(tmp_path: Path) -> None:
+    session = relify.connect(tmp_path / "async-stream")
+
+    async def consume() -> list[int]:
+        stream = await session._native.stream_sql(
+            "SELECT value FROM UNNEST([1, 2, 3]) AS values(value)"
+        )
+        assert stream.schema() == pyarrow.schema([("value", pyarrow.int64())])
+        values: list[int] = []
+        async for batch in stream:
+            assert isinstance(batch, pyarrow.RecordBatch)
+            values.extend(batch.column("value").to_pylist())
+        await stream.aclose()
+        return values
+
+    assert asyncio.run(consume()) == [1, 2, 3]
+
+
+def test_cancelling_queued_native_stream_releases_admission(tmp_path: Path) -> None:
+    session = relify.connect(tmp_path / "cancelled-stream")
+
+    async def wait_for_stats(expected: tuple[int, int]) -> None:
+        for _ in range(1_000):
+            if session._native.query_admission_stats() == expected:
+                return
+            await asyncio.sleep(0.001)
+        raise AssertionError(
+            f"query admission did not reach {expected}: "
+            f"{session._native.query_admission_stats()}"
+        )
+
+    async def cancel_queued() -> None:
+        first = await session._native.stream_sql("SELECT 1 AS value")
+        await wait_for_stats((1, 0))
+        waiting = asyncio.ensure_future(session._native.stream_sql("SELECT 2 AS value"))
+        await wait_for_stats((1, 1))
+
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+        await wait_for_stats((1, 0))
+
+        await first.aclose()
+        await wait_for_stats((0, 0))
+
+    asyncio.run(cancel_queued())
+
+
+def test_query_runtime_settings_apply_at_session_creation(tmp_path: Path) -> None:
+    config = (
+        relify.SessionConfig()
+        .set("relify.execution.query_dop", "2")
+        .set("relify.execution.query_concurrency", "2")
+        .set("relify.execution.query_queue_capacity", "0")
+        .set("relify.execution.query_queue_timeout", "100ms")
+        .with_information_schema()
+    )
+    session = relify.connect(tmp_path / "query-runtime", config=config)
+    assert session.sql("SHOW datafusion.execution.target_partitions").to_pydict()[
+        "value"
+    ] == ["2"]
+
+    async def occupy_both_slots() -> None:
+        first = await session._native.stream_sql("SELECT 1 AS value")
+        second = await session._native.stream_sql("SELECT 2 AS value")
+        assert session._native.query_admission_stats() == (2, 0)
+        with pytest.raises(relify._native.QueryQueueFullError):
+            await session._native.stream_sql("SELECT 3 AS value")
+        await first.aclose()
+        await second.aclose()
+        assert session._native.query_admission_stats() == (0, 0)
+
+    asyncio.run(occupy_both_slots())
 
 
 def test_session_uses_datafusion_config_and_runtime(tmp_path: Path) -> None:

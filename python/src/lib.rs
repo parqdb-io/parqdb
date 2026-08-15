@@ -4,6 +4,7 @@ mod datafusion;
 mod errors;
 mod index;
 mod session;
+mod stream;
 
 use pyo3::prelude::*;
 
@@ -13,5 +14,6 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     datafusion::add_datafusion_bindings(module)?;
     index::add_index_bindings(module)?;
     session::add_session_bindings(module)?;
+    module.add_class::<stream::PyNativeQueryStream>()?;
     Ok(())
 }

@@ -16,7 +16,9 @@ workspace = true
 [dependencies]
 arrow.workspace = true
 datafusion-python.workspace = true
+futures.workspace = true
 pyo3 = { workspace = true, features = ["abi3-py310", "extension-module"] }
+pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
 relify-catalog = { version = "0.1.0-rc.2", path = "../rust/relify-catalog" }
 relify-core = { version = "0.1.0-rc.2", path = "../rust/relify-core" }
 relify-index = { version = "0.1.0-rc.2", path = "../rust/relify-index" }
@@ -25,4 +27,5 @@ relify-meta = { version = "0.1.0-rc.2", path = "../rust/relify-meta" }
 relify-storage = { version = "0.1.0-rc.2", path = "../rust/relify-storage" }
 serde_json.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 uuid.workspace = true
