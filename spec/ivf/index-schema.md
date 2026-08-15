@@ -6,10 +6,10 @@ This document defines index family `ivf` at `index-schema-version = 1`.
 Supported metrics are `l2_squared` and `cosine`. Supported postings encodings
 are `source`, `lvq4`, and `lvq8`.
 
-An IVF index consists of one immutable shared centroid artifact and one logical
-index postings relation. Logical indexes over the same source state, vector
-field, dimension, metric, cluster count, and clustering profile may reference
-the same centroid artifact.
+An IVF index references one immutable centroid artifact and owns exactly one
+postings relation. Logical indexes over the same source state, vector field,
+dimension, metric, cluster count, and clustering profile may reference the
+same centroid artifact. They never share postings.
 
 ## 2. Logical Index Metadata
 
@@ -21,9 +21,9 @@ An IVF snapshot must contain exactly these parameters:
 | `nlist` | Number of IVF clusters `C`. |
 | `ntotal` | Number of indexed source rows `N`. |
 | `posting_encoding` | `source`, `lvq4`, or `lvq8`. |
-| `shared_ivf_fingerprint` | Deterministic UUID identifying the shared IVF descriptor. |
-| `shared_ivf_uuid` | UUID of the referenced shared IVF artifact. |
-| `shared_ivf_metadata_location` | Absolute URI of its immutable metadata file. |
+| `ivf_centroids_fingerprint` | Deterministic UUID identifying the IVF centroid descriptor. |
+| `ivf_centroids_uuid` | UUID of the referenced IVF centroid artifact. |
+| `ivf_centroids_metadata_location` | Absolute URI of its immutable metadata file. |
 
 `dimension`, `nlist`, and `ntotal` use the canonical base-10 representation of
 a positive integer, without a sign or leading zero. `dimension` and `nlist`
@@ -34,16 +34,16 @@ The snapshot contains exactly these index relation roles:
 
 | Role | Definition |
 |---|---|
-| `ivf_centroids` | The centroid relation named by the shared IVF metadata. |
+| `ivf_centroids` | The centroid relation named by the IVF centroid metadata. |
 | `ivf_postings` | The postings owned by this logical index. |
 
-The snapshot's `ivf_centroids` reference must equal the shared metadata's
+The snapshot's `ivf_centroids` reference must equal the centroid metadata's
 centroid reference. Its source, vector field, dimension, metric, and `nlist`
-must equal the corresponding shared descriptor fields.
+must equal the corresponding descriptor fields.
 
-## 3. Shared IVF Metadata
+## 3. IVF Centroid Metadata
 
-A shared IVF metadata document has these fields:
+An IVF centroid metadata document has these fields:
 
 | Field | Definition |
 |---|---|
@@ -73,7 +73,7 @@ descriptor field before using the artifact. Source references are compared by
 profile-defined exact state, so Iceberg locator changes do not prevent reuse.
 
 For a Parquet source, the files resolved by the descriptor URI must remain
-unchanged for the lifetime of the shared artifact. Reuse from the same URI is
+unchanged for the lifetime of the centroid artifact. Reuse from the same URI is
 valid only while the resolved file set and every file's bytes remain unchanged.
 Appending, deleting, or overwriting a file, including changing a wildcard
 expansion, makes reuse invalid. Changed data must be published at a different
@@ -105,7 +105,7 @@ type and value. Supported source-key types are `boolean`, `int`, `long`,
 `binary`, `fixed(L)`, `string`, and `date`. String, binary, and fixed values
 are compared byte-for-byte. Integer key types are signed.
 
-## 5. Shared Centroids
+## 5. IVF Centroids
 
 `ivf_centroids` has this schema:
 

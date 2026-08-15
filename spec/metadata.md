@@ -261,9 +261,9 @@ catalog:
         "nlist": "2",
         "ntotal": "3",
         "posting_encoding": "source",
-        "shared_ivf_fingerprint": "73a6be1d-5c50-4f9f-a70b-035ca68b105d",
-        "shared_ivf_uuid": "fe985f6d-3592-4385-a1ca-71347057a210",
-        "shared_ivf_metadata_location": "s3://warehouse/relify/shared/fe985f6d/v1.metadata.json"
+        "ivf_centroids_fingerprint": "73a6be1d-5c50-4f9f-a70b-035ca68b105d",
+        "ivf_centroids_uuid": "fe985f6d-3592-4385-a1ca-71347057a210",
+        "ivf_centroids_metadata_location": "s3://warehouse/relify/centroid-artifacts/fe985f6d/v1.metadata.json"
       },
       "index-relations": {
         "ivf_centroids": {

@@ -82,10 +82,10 @@ def _index_parameters(tmp_path: Path) -> dict[str, str]:
         "nlist": "2",
         "ntotal": "3",
         "posting_encoding": "source",
-        "shared_ivf_fingerprint": "33333333-3333-3333-3333-333333333333",
-        "shared_ivf_uuid": "44444444-4444-4444-4444-444444444444",
-        "shared_ivf_metadata_location": (
-            tmp_path / "shared" / "v1.metadata.json"
+        "ivf_centroids_fingerprint": "33333333-3333-3333-3333-333333333333",
+        "ivf_centroids_uuid": "44444444-4444-4444-4444-444444444444",
+        "ivf_centroids_metadata_location": (
+            tmp_path / "centroid-artifacts" / "v1.metadata.json"
         ).as_uri(),
     }
 

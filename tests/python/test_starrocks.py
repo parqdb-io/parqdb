@@ -19,7 +19,7 @@ from pyiceberg.types import (
     NestedField,
     StringType,
 )
-from support.indexes import write_shared_ivf_metadata
+from support.indexes import write_ivf_centroids_metadata
 
 
 @dataclass(frozen=True)
@@ -182,7 +182,7 @@ def _session(tmp_path: Path) -> tuple[Any, _Connection, _IcebergCatalog]:
     )
     source = _relation(catalog, ("analytics", "documents"))
     centroids = _relation(catalog, ("relify", "documents_embedding_centroids"))
-    shared = write_shared_ivf_metadata(
+    centroid_parameters = write_ivf_centroids_metadata(
         metadata_root,
         source=source,
         centroids=centroids,
@@ -199,7 +199,7 @@ def _session(tmp_path: Path) -> tuple[Any, _Connection, _IcebergCatalog]:
             "nlist": "2",
             "ntotal": "3",
             "posting_encoding": "source",
-            **shared,
+            **centroid_parameters,
         },
         index_relations={
             "ivf_centroids": json.dumps(centroids),

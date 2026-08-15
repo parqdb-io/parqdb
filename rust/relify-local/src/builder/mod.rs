@@ -26,7 +26,7 @@ use datafusion::logical_expr::{
 use datafusion::prelude::col;
 use futures::StreamExt;
 use parallite::ParalliteContext;
-use relify_meta::{PostingEncoding, RelationReference, SharedIvfReference};
+use relify_meta::{IvfCentroidsReference, PostingEncoding, RelationReference};
 #[cfg(test)]
 use relify_storage::StorageRegistry;
 #[cfg(test)]
@@ -74,7 +74,7 @@ pub(crate) struct IvfPostingsSpec<'a> {
     pub source_key_fields: &'a [String],
     pub config: IvfConfig,
     pub trained: &'a TrainedIvf,
-    pub shared_ivf: &'a SharedIvfReference,
+    pub ivf_centroids: &'a IvfCentroidsReference,
     pub centroids: RelationReference,
 }
 
@@ -435,10 +435,10 @@ pub(crate) fn reused_ivf(prepared: &PreparedIvf, centroids: Vec<f32>) -> Result<
     let expected = prepared
         .dimension
         .checked_mul(prepared.nlist)
-        .ok_or_else(|| Error::InvalidSchema("shared centroid shape overflows usize".into()))?;
+        .ok_or_else(|| Error::InvalidSchema("IVF centroid shape overflows usize".into()))?;
     if centroids.len() != expected || centroids.iter().any(|value| !value.is_finite()) {
         return Err(Error::InvalidSchema(
-            "shared centroid relation does not match the build descriptor".into(),
+            "IVF centroid relation does not match the build descriptor".into(),
         ));
     }
     Ok(TrainedIvf {
@@ -475,7 +475,7 @@ pub(crate) async fn build_ivf_postings(
         source_key_fields,
         config,
         trained,
-        shared_ivf,
+        ivf_centroids,
         centroids,
     } = spec;
     let IvfBuildContext {
@@ -519,16 +519,16 @@ pub(crate) async fn build_ivf_postings(
                 config.posting_encoding.as_str().into(),
             ),
             (
-                "shared_ivf_fingerprint".into(),
-                shared_ivf.fingerprint.clone(),
+                "ivf_centroids_fingerprint".into(),
+                ivf_centroids.fingerprint.clone(),
             ),
             (
-                "shared_ivf_uuid".into(),
-                shared_ivf.artifact_uuid.to_string(),
+                "ivf_centroids_uuid".into(),
+                ivf_centroids.artifact_uuid.to_string(),
             ),
             (
-                "shared_ivf_metadata_location".into(),
-                shared_ivf.metadata_location.clone(),
+                "ivf_centroids_metadata_location".into(),
+                ivf_centroids.metadata_location.clone(),
             ),
         ]),
         index_relations: BTreeMap::from([
@@ -934,15 +934,15 @@ pub(crate) async fn build_ivf_with_options(
             ("ntotal".into(), tables.ntotal.to_string()),
             ("posting_encoding".into(), "source".into()),
             (
-                "shared_ivf_fingerprint".into(),
+                "ivf_centroids_fingerprint".into(),
                 "73a6be1d-5c50-4f9f-a70b-035ca68b105d".into(),
             ),
             (
-                "shared_ivf_uuid".into(),
+                "ivf_centroids_uuid".into(),
                 "fe985f6d-3592-4385-a1ca-71347057a210".into(),
             ),
             (
-                "shared_ivf_metadata_location".into(),
+                "ivf_centroids_metadata_location".into(),
                 "file:///metadata/fe985f6d-3592-4385-a1ca-71347057a210/v1.metadata.json".into(),
             ),
         ]),

@@ -161,9 +161,9 @@ def test_local_build_publish_and_search(tmp_path: Path) -> None:
     assert snapshot["parameters"]["nlist"] == "2"
     assert snapshot["parameters"]["ntotal"] == "4"
     assert snapshot["parameters"]["posting_encoding"] == "source"
-    assert snapshot["parameters"]["shared_ivf_fingerprint"]
-    assert snapshot["parameters"]["shared_ivf_uuid"]
-    assert snapshot["parameters"]["shared_ivf_metadata_location"]
+    assert snapshot["parameters"]["ivf_centroids_fingerprint"]
+    assert snapshot["parameters"]["ivf_centroids_uuid"]
+    assert snapshot["parameters"]["ivf_centroids_metadata_location"]
     assert set(snapshot["index-relations"]) == {
         "ivf_centroids",
         "ivf_postings",
@@ -279,7 +279,7 @@ def test_local_lvq_build_and_search(tmp_path: Path) -> None:
         assert "HashJoinExec" in session.explain(payload_query)
 
 
-def test_shared_ivf_float64_and_cosine_end_to_end(tmp_path: Path) -> None:
+def test_ivf_centroids_float64_and_cosine_end_to_end(tmp_path: Path) -> None:
     source = tmp_path / "cosine.parquet"
     vector = pa.list_(pa.field("element", pa.float64(), nullable=False))
     table = pa.Table.from_arrays(
@@ -318,12 +318,12 @@ def test_shared_ivf_float64_and_cosine_end_to_end(tmp_path: Path) -> None:
             [0.0, 1.0 - 2.0**-0.5, 1.0], abs=1e-5
         )
 
-    shared_fields = (
-        "shared_ivf_fingerprint",
-        "shared_ivf_uuid",
-        "shared_ivf_metadata_location",
+    centroid_fields = (
+        "ivf_centroids_fingerprint",
+        "ivf_centroids_uuid",
+        "ivf_centroids_metadata_location",
     )
-    for field in shared_fields:
+    for field in centroid_fields:
         assert (
             len({snapshot["parameters"][field] for snapshot in cosine_snapshots}) == 1
         )
@@ -350,8 +350,8 @@ def test_shared_ivf_float64_and_cosine_end_to_end(tmp_path: Path) -> None:
     )
     l2_snapshot = session.indexes.load("l2_source").metadata["snapshots"][0]
     assert (
-        l2_snapshot["parameters"]["shared_ivf_fingerprint"]
-        != cosine_snapshots[0]["parameters"]["shared_ivf_fingerprint"]
+        l2_snapshot["parameters"]["ivf_centroids_fingerprint"]
+        != cosine_snapshots[0]["parameters"]["ivf_centroids_fingerprint"]
     )
     l2_hits = session.to_arrow(
         documents.search([2.0, 0.0], index="l2_source").nprobes(1).limit(3)

@@ -16,7 +16,7 @@ from pyiceberg.types import (
     NestedField,
     StringType,
 )
-from support.indexes import write_shared_ivf_metadata
+from support.indexes import write_ivf_centroids_metadata
 
 
 def test_datafusion_queries_spark_style_iceberg_index(tmp_path: Path) -> None:
@@ -116,7 +116,7 @@ def test_datafusion_queries_spark_style_iceberg_index(tmp_path: Path) -> None:
         ("relify",),
         "documents_embedding_centroids",
     )
-    shared = write_shared_ivf_metadata(
+    centroid_parameters = write_ivf_centroids_metadata(
         tmp_path / "relify-metadata",
         source=source_mapping,
         centroids=json.loads(centroids_reference),
@@ -133,7 +133,7 @@ def test_datafusion_queries_spark_style_iceberg_index(tmp_path: Path) -> None:
             "nlist": "2",
             "ntotal": "3",
             "posting_encoding": "source",
-            **shared,
+            **centroid_parameters,
         },
         index_relations={
             "ivf_centroids": centroids_reference,

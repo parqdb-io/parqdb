@@ -30,16 +30,16 @@ fn valid_snapshot() -> IndexSnapshot {
             ("ntotal".into(), "4".into()),
             ("posting_encoding".into(), "source".into()),
             (
-                "shared_ivf_fingerprint".into(),
+                "ivf_centroids_fingerprint".into(),
                 "73a6be1d-5c50-4f9f-a70b-035ca68b105d".into(),
             ),
             (
-                "shared_ivf_uuid".into(),
+                "ivf_centroids_uuid".into(),
                 "fe985f6d-3592-4385-a1ca-71347057a210".into(),
             ),
             (
-                "shared_ivf_metadata_location".into(),
-                "file:///tmp/relify/shared/v1.metadata.json".into(),
+                "ivf_centroids_metadata_location".into(),
+                "file:///tmp/relify/centroid-artifacts/v1.metadata.json".into(),
             ),
         ]),
         index_relations: BTreeMap::from([

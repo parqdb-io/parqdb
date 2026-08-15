@@ -2,23 +2,23 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use relify_meta::{IndexMetadata, RelationReference, SharedIvfDescriptor, SharedIvfMetadata};
+use relify_meta::{IndexMetadata, IvfCentroidsDescriptor, IvfCentroidsMetadata, RelationReference};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use uuid::Uuid;
 
 use crate::identifier::namespace_key;
 use crate::{
-    CatalogEntry, CatalogTombstone, Error, IndexCatalog, IndexIdentifier, Result,
-    SharedIvfCatalogEntry, SharedIvfClaim, SharedIvfClaimResult, TableCatalog, TableDefinition,
+    CatalogEntry, CatalogTombstone, Error, IndexCatalog, IndexIdentifier, IvfCentroidsCatalogEntry,
+    IvfCentroidsClaim, IvfCentroidsClaimResult, Result, TableCatalog, TableDefinition,
     TableIdentifier,
 };
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 const APPLICATION_ID: i64 = 0x524c_4659; // ASCII "RLFY"
 const ROOT_NAMESPACE_KEY: &str = "[]";
-const SHARED_IVF_STATE_BUILDING: &str = "building";
-const SHARED_IVF_STATE_READY: &str = "ready";
-const SHARED_IVF_STATE_FAILED: &str = "failed";
+const IVF_CENTROIDS_STATE_BUILDING: &str = "building";
+const IVF_CENTROIDS_STATE_READY: &str = "ready";
+const IVF_CENTROIDS_STATE_FAILED: &str = "failed";
 
 /// A namespace-aware Relify catalog stored in `SQLite`.
 #[derive(Debug, Clone)]
@@ -353,27 +353,27 @@ impl IndexCatalog for SqliteCatalog {
         )? == 1)
     }
 
-    fn load_shared_ivf(&self, fingerprint: &str) -> Result<SharedIvfCatalogEntry> {
+    fn load_ivf_centroids(&self, fingerprint: &str) -> Result<IvfCentroidsCatalogEntry> {
         let row = self
             .connection()?
             .query_row(
                 "SELECT artifact_uuid, metadata_location
-                 FROM shared_ivf_artifacts
+                 FROM ivf_centroid_artifacts
                  WHERE fingerprint = ?1 AND state = ?2",
-                params![fingerprint, SHARED_IVF_STATE_READY],
+                params![fingerprint, IVF_CENTROIDS_STATE_READY],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
             )
             .optional()?
-            .ok_or_else(|| Error::SharedIvfNotFound(fingerprint.to_owned()))?;
-        shared_ivf_entry(fingerprint, &row.0, &row.1)
+            .ok_or_else(|| Error::IvfCentroidsNotFound(fingerprint.to_owned()))?;
+        ivf_centroids_entry(fingerprint, &row.0, &row.1)
     }
 
-    fn claim_shared_ivf(
+    fn claim_ivf_centroids(
         &self,
-        descriptor: &SharedIvfDescriptor,
+        descriptor: &IvfCentroidsDescriptor,
         owner: Uuid,
         lease_duration_ms: i64,
-    ) -> Result<SharedIvfClaimResult> {
+    ) -> Result<IvfCentroidsClaimResult> {
         descriptor.validate()?;
         validate_lease(owner, lease_duration_ms)?;
         let fingerprint = descriptor.fingerprint()?;
@@ -387,7 +387,7 @@ impl IndexCatalog for SqliteCatalog {
             .query_row(
                 "SELECT descriptor, state, owner, lease_expires_ms,
                         artifact_uuid, metadata_location
-                 FROM shared_ivf_artifacts WHERE fingerprint = ?1",
+                 FROM ivf_centroid_artifacts WHERE fingerprint = ?1",
                 [&fingerprint],
                 |row| {
                     Ok((
@@ -404,41 +404,43 @@ impl IndexCatalog for SqliteCatalog {
         if let Some((stored, state, current_owner, current_lease, artifact_uuid, location)) =
             existing
         {
-            let stored_descriptor: SharedIvfDescriptor = serde_json::from_str(&stored)?;
+            let stored_descriptor: IvfCentroidsDescriptor = serde_json::from_str(&stored)?;
             if !stored_descriptor.is_compatible_with(descriptor) {
                 return Err(Error::InvalidMetadata(
-                    "shared IVF fingerprint collision".into(),
+                    "IVF centroid fingerprint collision".into(),
                 ));
             }
-            if state == SHARED_IVF_STATE_READY {
-                let entry = shared_ivf_entry(
+            if state == IVF_CENTROIDS_STATE_READY {
+                let entry = ivf_centroids_entry(
                     &fingerprint,
                     artifact_uuid.as_deref().ok_or_else(|| {
-                        Error::Implementation("ready shared IVF has no artifact UUID".into())
+                        Error::Implementation("ready IVF centroid artifact has no UUID".into())
                     })?,
                     location.as_deref().ok_or_else(|| {
-                        Error::Implementation("ready shared IVF has no metadata location".into())
+                        Error::Implementation(
+                            "ready IVF centroid artifact has no metadata location".into(),
+                        )
                     })?,
                 )?;
                 transaction.commit()?;
-                return Ok(SharedIvfClaimResult::Ready(entry));
+                return Ok(IvfCentroidsClaimResult::Ready(entry));
             }
-            if state == SHARED_IVF_STATE_BUILDING
+            if state == IVF_CENTROIDS_STATE_BUILDING
                 && current_owner.as_deref() != Some(owner_string.as_str())
                 && let Some(lease_expires_ms) = current_lease
                 && lease_expires_ms > now
             {
                 transaction.commit()?;
-                return Ok(SharedIvfClaimResult::Busy { lease_expires_ms });
+                return Ok(IvfCentroidsClaimResult::Busy { lease_expires_ms });
             }
             transaction.execute(
-                "UPDATE shared_ivf_artifacts
+                "UPDATE ivf_centroid_artifacts
                  SET descriptor = ?1, state = ?2, owner = ?3, lease_expires_ms = ?4,
                      artifact_uuid = NULL, metadata_location = NULL, error = NULL
                  WHERE fingerprint = ?5",
                 params![
                     descriptor_json,
-                    SHARED_IVF_STATE_BUILDING,
+                    IVF_CENTROIDS_STATE_BUILDING,
                     owner_string,
                     lease_expires_ms,
                     fingerprint
@@ -446,37 +448,41 @@ impl IndexCatalog for SqliteCatalog {
             )?;
         } else {
             transaction.execute(
-                "INSERT INTO shared_ivf_artifacts(
+                "INSERT INTO ivf_centroid_artifacts(
                     fingerprint, descriptor, state, owner, lease_expires_ms
                  ) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![
                     fingerprint,
                     descriptor_json,
-                    SHARED_IVF_STATE_BUILDING,
+                    IVF_CENTROIDS_STATE_BUILDING,
                     owner_string,
                     lease_expires_ms
                 ],
             )?;
         }
         transaction.commit()?;
-        Ok(SharedIvfClaimResult::Claimed(SharedIvfClaim {
+        Ok(IvfCentroidsClaimResult::Claimed(IvfCentroidsClaim {
             fingerprint,
             owner,
         }))
     }
 
-    fn renew_shared_ivf_claim(&self, claim: &SharedIvfClaim, lease_duration_ms: i64) -> Result<()> {
+    fn renew_ivf_centroids_claim(
+        &self,
+        claim: &IvfCentroidsClaim,
+        lease_duration_ms: i64,
+    ) -> Result<()> {
         validate_lease(claim.owner, lease_duration_ms)?;
         let now = now_ms()?;
         let lease_expires_ms = now.saturating_add(lease_duration_ms);
         let updated = self.connection()?.execute(
-            "UPDATE shared_ivf_artifacts SET lease_expires_ms = ?1
+            "UPDATE ivf_centroid_artifacts SET lease_expires_ms = ?1
              WHERE fingerprint = ?2 AND state = ?3 AND owner = ?4
                AND lease_expires_ms > ?5",
             params![
                 lease_expires_ms,
                 claim.fingerprint,
-                SHARED_IVF_STATE_BUILDING,
+                IVF_CENTROIDS_STATE_BUILDING,
                 claim.owner.to_string(),
                 now
             ],
@@ -484,23 +490,23 @@ impl IndexCatalog for SqliteCatalog {
         if updated == 1 {
             Ok(())
         } else {
-            Err(Error::SharedIvfClaimLost(claim.fingerprint.clone()))
+            Err(Error::IvfCentroidsClaimLost(claim.fingerprint.clone()))
         }
     }
 
-    fn publish_shared_ivf(
+    fn publish_ivf_centroids(
         &self,
-        claim: &SharedIvfClaim,
+        claim: &IvfCentroidsClaim,
         metadata_location: &str,
-        metadata: &SharedIvfMetadata,
-    ) -> Result<SharedIvfCatalogEntry> {
+        metadata: &IvfCentroidsMetadata,
+    ) -> Result<IvfCentroidsCatalogEntry> {
         metadata.validate()?;
         if metadata.fingerprint != claim.fingerprint {
             return Err(Error::InvalidMetadata(
-                "published shared IVF fingerprint does not match claim".into(),
+                "published IVF centroid fingerprint does not match claim".into(),
             ));
         }
-        relify_meta::SharedIvfReference::new(
+        relify_meta::IvfCentroidsReference::new(
             &claim.fingerprint,
             metadata.artifact_uuid,
             metadata_location,
@@ -510,64 +516,64 @@ impl IndexCatalog for SqliteCatalog {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let updated = transaction.execute(
-            "UPDATE shared_ivf_artifacts
+            "UPDATE ivf_centroid_artifacts
              SET state = ?1, owner = NULL, lease_expires_ms = NULL,
                  artifact_uuid = ?2, metadata_location = ?3, error = NULL
              WHERE fingerprint = ?4 AND descriptor = ?5
                AND state = ?6 AND owner = ?7 AND lease_expires_ms > ?8",
             params![
-                SHARED_IVF_STATE_READY,
+                IVF_CENTROIDS_STATE_READY,
                 metadata.artifact_uuid.to_string(),
                 metadata_location,
                 claim.fingerprint,
                 descriptor_json,
-                SHARED_IVF_STATE_BUILDING,
+                IVF_CENTROIDS_STATE_BUILDING,
                 claim.owner.to_string(),
                 now,
             ],
         )?;
         if updated != 1 {
-            return Err(Error::SharedIvfClaimLost(claim.fingerprint.clone()));
+            return Err(Error::IvfCentroidsClaimLost(claim.fingerprint.clone()));
         }
         transaction.execute(
             "DELETE FROM catalog_tombstones WHERE metadata_location = ?1",
             [metadata_location],
         )?;
         transaction.commit()?;
-        Ok(SharedIvfCatalogEntry {
+        Ok(IvfCentroidsCatalogEntry {
             fingerprint: claim.fingerprint.clone(),
             artifact_uuid: metadata.artifact_uuid,
             metadata_location: metadata_location.to_owned(),
         })
     }
 
-    fn abandon_shared_ivf(&self, claim: &SharedIvfClaim, error: &str) -> Result<()> {
+    fn abandon_ivf_centroids(&self, claim: &IvfCentroidsClaim, error: &str) -> Result<()> {
         let updated = self.connection()?.execute(
-            "UPDATE shared_ivf_artifacts
+            "UPDATE ivf_centroid_artifacts
              SET state = ?1, owner = NULL, lease_expires_ms = NULL, error = ?2
              WHERE fingerprint = ?3 AND state = ?4 AND owner = ?5",
             params![
-                SHARED_IVF_STATE_FAILED,
+                IVF_CENTROIDS_STATE_FAILED,
                 error,
                 claim.fingerprint,
-                SHARED_IVF_STATE_BUILDING,
+                IVF_CENTROIDS_STATE_BUILDING,
                 claim.owner.to_string()
             ],
         )?;
         if updated == 1 {
             Ok(())
         } else {
-            Err(Error::SharedIvfClaimLost(claim.fingerprint.clone()))
+            Err(Error::IvfCentroidsClaimLost(claim.fingerprint.clone()))
         }
     }
 
-    fn list_shared_ivf(&self) -> Result<Vec<SharedIvfCatalogEntry>> {
+    fn list_ivf_centroids(&self) -> Result<Vec<IvfCentroidsCatalogEntry>> {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
             "SELECT fingerprint, artifact_uuid, metadata_location
-             FROM shared_ivf_artifacts WHERE state = ?1 ORDER BY fingerprint",
+             FROM ivf_centroid_artifacts WHERE state = ?1 ORDER BY fingerprint",
         )?;
-        let rows = statement.query_map([SHARED_IVF_STATE_READY], |row| {
+        let rows = statement.query_map([IVF_CENTROIDS_STATE_READY], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -576,7 +582,7 @@ impl IndexCatalog for SqliteCatalog {
         })?;
         rows.map(|row| {
             let (fingerprint, artifact_uuid, location) = row?;
-            shared_ivf_entry(&fingerprint, &artifact_uuid, &location)
+            ivf_centroids_entry(&fingerprint, &artifact_uuid, &location)
         })
         .collect()
     }
@@ -699,7 +705,7 @@ fn create_schema(connection: &mut Connection) -> Result<()> {
              properties TEXT NOT NULL,
              PRIMARY KEY(catalog, namespace, name)
          );
-         CREATE TABLE shared_ivf_artifacts (
+         CREATE TABLE ivf_centroid_artifacts (
              fingerprint TEXT PRIMARY KEY,
              descriptor TEXT NOT NULL,
              state TEXT NOT NULL CHECK(state IN ('building', 'ready', 'failed')),
@@ -723,20 +729,20 @@ fn create_schema(connection: &mut Connection) -> Result<()> {
 fn validate_lease(owner: Uuid, lease_duration_ms: i64) -> Result<()> {
     if owner.is_nil() || lease_duration_ms <= 0 {
         return Err(Error::Implementation(
-            "shared IVF owner and lease duration must be valid".into(),
+            "IVF centroid owner and lease duration must be valid".into(),
         ));
     }
     Ok(())
 }
 
-fn shared_ivf_entry(
+fn ivf_centroids_entry(
     fingerprint: &str,
     artifact_uuid: &str,
     metadata_location: &str,
-) -> Result<SharedIvfCatalogEntry> {
+) -> Result<IvfCentroidsCatalogEntry> {
     let artifact_uuid =
         Uuid::parse_str(artifact_uuid).map_err(|error| Error::Implementation(error.to_string()))?;
-    Ok(SharedIvfCatalogEntry {
+    Ok(IvfCentroidsCatalogEntry {
         fingerprint: fingerprint.to_owned(),
         artifact_uuid,
         metadata_location: metadata_location.to_owned(),

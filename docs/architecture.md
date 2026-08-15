@@ -35,7 +35,7 @@ the specification. It does not perform catalog, storage, or query operations.
 `relify-catalog` defines one top-level registry for runtime tables and Relify
 indexes. Its index side maps a structured identifier to the URI of the current
 immutable metadata document and owns atomic register, compare-and-swap commit,
-drop, and discovery. A separate internal registry coordinates shared-IVF
+drop, and discovery. A separate internal registry coordinates IVF centroid
 claims, leases, and publication by descriptor fingerprint. Its table side
 stores provider-defined definitions needed to reconstruct local external
 tables. It does not read metadata files, source data, or index tables.
@@ -61,7 +61,7 @@ Parquet, object stores, numerical kernels, or a concrete runtime.
 
 `relify-index` owns immutable metadata I/O, catalog loading and discovery,
 implicit index selection, and the publication transaction shared by backends.
-It also loads shared-IVF metadata and validates the artifact identity and
+It also loads IVF centroid metadata and validates the artifact identity and
 descriptor against each logical index snapshot. It accepts portable
 `RelationReference` values and backend-produced `IndexArtifacts`; it does not
 depend on Arrow, DataFusion, Spark, Parquet, Iceberg, numerical kernels, or a
@@ -250,7 +250,7 @@ session. See [`python-api.md`](python-api.md) for implemented behavior and
 
 ## Publication
 
-Before writing postings, a local build resolves the shared-IVF descriptor. One
+Before writing postings, a local build resolves the IVF-centroids descriptor. One
 catalog claim owner trains and publishes immutable centroids; concurrent and
 later builds reuse that artifact. Source, LVQ4, and LVQ8 logical indexes then
 write separate postings against the same centroids.

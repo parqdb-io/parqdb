@@ -35,12 +35,12 @@
       "metric": "l2_squared",
       "parameters": {
         "dimension": "2",
+        "ivf_centroids_fingerprint": "4c774941-faf4-5e06-9a2a-03ffa111641f",
+        "ivf_centroids_metadata_location": "s3://relify-fixtures/v1/valid/ivf-centroids.metadata.json",
+        "ivf_centroids_uuid": "fe985f6d-3592-4385-a1ca-71347057a210",
         "nlist": "2",
         "ntotal": "3",
-        "posting_encoding": "source",
-        "shared_ivf_fingerprint": "4c774941-faf4-5e06-9a2a-03ffa111641f",
-        "shared_ivf_metadata_location": "s3://relify-fixtures/v1/valid/shared-ivf.metadata.json",
-        "shared_ivf_uuid": "fe985f6d-3592-4385-a1ca-71347057a210"
+        "posting_encoding": "source"
       },
       "sequence-number": 1,
       "snapshot-id": 701,

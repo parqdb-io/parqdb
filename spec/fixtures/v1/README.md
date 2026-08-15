@@ -4,7 +4,7 @@ These non-normative fixtures exercise Relify metadata and IVF schema version
 1. The specification remains authoritative.
 
 `valid/` contains a source-encoded IVF fixture. It includes logical index
-metadata, shared-IVF metadata, source and centroid Parquet files,
+metadata, IVF-centroids metadata, source and centroid Parquet files,
 Hive-partitioned postings, and ordered query results.
 
 Additional directories cover:
@@ -18,7 +18,7 @@ the postings fields, not the schema-version history. Full source vectors are
 absent from every postings fixture.
 
 The metadata URIs are stable logical fixture URIs. Test harnesses may map them
-to local files but must preserve the referenced relation state and shared-IVF
+to local files but must preserve the referenced relation state and IVF-centroids
 descriptor.
 
 `catalog.json` is an ordered catalog operation trace covering registration,

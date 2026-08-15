@@ -198,7 +198,7 @@ snapshot validation.
 
 ### Spark index construction is unavailable
 
-The experimental Spark integration is query-only for the shared-IVF schema.
+The experimental Spark integration is query-only for the IVF schema.
 Build the current Parquet format with the local backend or register an index
 published by a conforming external builder.
 

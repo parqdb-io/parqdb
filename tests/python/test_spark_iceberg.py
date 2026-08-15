@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 from support.config import SparkConfig
-from support.indexes import write_shared_ivf_metadata
+from support.indexes import write_ivf_centroids_metadata
 
 pytestmark = pytest.mark.requires("spark")
 
@@ -239,7 +239,7 @@ def test_spark_queries_published_index_and_repository_reopens_with_real_iceberg(
             catalog.load_table(("relify", "documents_embedding_centroids")),
             ("relify", "documents_embedding_centroids"),
         )
-        shared = write_shared_ivf_metadata(
+        centroid_parameters = write_ivf_centroids_metadata(
             metadata_root,
             source=source,
             centroids=centroids,
@@ -256,7 +256,7 @@ def test_spark_queries_published_index_and_repository_reopens_with_real_iceberg(
                 "nlist": "2",
                 "ntotal": "3",
                 "posting_encoding": "source",
-                **shared,
+                **centroid_parameters,
             },
             index_relations={
                 "ivf_centroids": json.dumps(centroids, separators=(",", ":")),

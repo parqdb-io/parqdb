@@ -17,8 +17,8 @@ INVALID = ROOT / "invalid"
 
 INDEX_UUID = "2f1c7f5e-3c43-4a44-8f2a-cf560c4db8d1"
 COMPOSITE_INDEX_UUID = "8e51cf0a-c749-4894-83e7-5e9be2c373b7"
-SHARED_IVF_UUID = "fe985f6d-3592-4385-a1ca-71347057a210"
-COMPOSITE_SHARED_IVF_UUID = "6f084127-25b1-43f1-a676-b8c055e37fae"
+IVF_CENTROIDS_UUID = "fe985f6d-3592-4385-a1ca-71347057a210"
+COMPOSITE_IVF_CENTROIDS_UUID = "6f084127-25b1-43f1-a676-b8c055e37fae"
 FINGERPRINT_NAMESPACE = uuid.UUID("2fb71e63-a27c-4fc5-9d6d-5070698dc398")
 SNAPSHOT_ID = 701
 NEXT_SNAPSHOT_ID = 702
@@ -45,7 +45,7 @@ def write_postings(directory: Path, table: pa.Table) -> None:
     )
 
 
-def shared_descriptor(
+def ivf_centroids_descriptor(
     source_uri: str,
     *,
     dimension: int = 2,
@@ -86,7 +86,7 @@ def fingerprint(descriptor: dict[str, object]) -> str:
 
 def metadata() -> dict[str, object]:
     source_uri = "s3://relify-fixtures/v1/valid/source/"
-    descriptor = shared_descriptor(source_uri)
+    descriptor = ivf_centroids_descriptor(source_uri)
     return {
         "format-version": 1,
         "index-uuid": INDEX_UUID,
@@ -114,10 +114,10 @@ def metadata() -> dict[str, object]:
                     "nlist": "2",
                     "ntotal": "3",
                     "posting_encoding": "source",
-                    "shared_ivf_fingerprint": fingerprint(descriptor),
-                    "shared_ivf_uuid": SHARED_IVF_UUID,
-                    "shared_ivf_metadata_location": (
-                        "s3://relify-fixtures/v1/valid/shared-ivf.metadata.json"
+                    "ivf_centroids_fingerprint": fingerprint(descriptor),
+                    "ivf_centroids_uuid": IVF_CENTROIDS_UUID,
+                    "ivf_centroids_metadata_location": (
+                        "s3://relify-fixtures/v1/valid/ivf-centroids.metadata.json"
                     ),
                 },
                 "index-relations": {
@@ -142,7 +142,7 @@ def metadata() -> dict[str, object]:
     }
 
 
-def shared_metadata(
+def ivf_centroids_metadata(
     directory_uri: str,
     artifact_uuid: str,
     descriptor: dict[str, object],
@@ -151,7 +151,7 @@ def shared_metadata(
         "format-version": 1,
         "artifact-uuid": artifact_uuid,
         "fingerprint": fingerprint(descriptor),
-        "location": f"{directory_uri}/shared/{artifact_uuid}/",
+        "location": f"{directory_uri}/centroid-artifacts/{artifact_uuid}/",
         "created-at-ms": 1_750_000_000_000,
         "descriptor": descriptor,
         "centroids": {
@@ -323,11 +323,11 @@ def composite_metadata() -> dict[str, object]:
         "uri": "s3://relify-fixtures/v1/valid/composite/source/",
     }
     snapshot["source-key-fields"] = ["tenant_id", "document_id"]
-    descriptor = shared_descriptor(snapshot["source"]["uri"])
-    snapshot["parameters"]["shared_ivf_fingerprint"] = fingerprint(descriptor)
-    snapshot["parameters"]["shared_ivf_uuid"] = COMPOSITE_SHARED_IVF_UUID
-    snapshot["parameters"]["shared_ivf_metadata_location"] = (
-        "s3://relify-fixtures/v1/valid/composite/shared-ivf.metadata.json"
+    descriptor = ivf_centroids_descriptor(snapshot["source"]["uri"])
+    snapshot["parameters"]["ivf_centroids_fingerprint"] = fingerprint(descriptor)
+    snapshot["parameters"]["ivf_centroids_uuid"] = COMPOSITE_IVF_CENTROIDS_UUID
+    snapshot["parameters"]["ivf_centroids_metadata_location"] = (
+        "s3://relify-fixtures/v1/valid/composite/ivf-centroids.metadata.json"
     )
     snapshot["index-relations"] = {
         "ivf_centroids": {
@@ -602,12 +602,14 @@ def main() -> None:
     base = metadata()
     write_json(VALID / "metadata.json", base)
     write_json(VALID / "metadata-next.json", next_metadata(base))
-    source_descriptor = shared_descriptor("s3://relify-fixtures/v1/valid/source/")
+    source_descriptor = ivf_centroids_descriptor(
+        "s3://relify-fixtures/v1/valid/source/"
+    )
     write_json(
-        VALID / "shared-ivf.metadata.json",
-        shared_metadata(
+        VALID / "ivf-centroids.metadata.json",
+        ivf_centroids_metadata(
             "s3://relify-fixtures/v1/valid",
-            SHARED_IVF_UUID,
+            IVF_CENTROIDS_UUID,
             source_descriptor,
         ),
     )
@@ -686,14 +688,14 @@ def main() -> None:
         ],
     )
     write_json(COMPOSITE / "metadata.json", composite_metadata())
-    composite_descriptor = shared_descriptor(
+    composite_descriptor = ivf_centroids_descriptor(
         "s3://relify-fixtures/v1/valid/composite/source/"
     )
     write_json(
-        COMPOSITE / "shared-ivf.metadata.json",
-        shared_metadata(
+        COMPOSITE / "ivf-centroids.metadata.json",
+        ivf_centroids_metadata(
             "s3://relify-fixtures/v1/valid/composite",
-            COMPOSITE_SHARED_IVF_UUID,
+            COMPOSITE_IVF_CENTROIDS_UUID,
             composite_descriptor,
         ),
     )

@@ -118,10 +118,12 @@ def test_coordinator_discards_output_that_violates_the_builder_profile(
                     "nlist": "1",
                     "ntotal": "1",
                     "posting_encoding": "source",
-                    "shared_ivf_fingerprint": ("33333333-3333-3333-3333-333333333333"),
-                    "shared_ivf_uuid": "44444444-4444-4444-4444-444444444444",
-                    "shared_ivf_metadata_location": (
-                        "file:///tmp/shared-ivf/v1.metadata.json"
+                    "ivf_centroids_fingerprint": (
+                        "33333333-3333-3333-3333-333333333333"
+                    ),
+                    "ivf_centroids_uuid": "44444444-4444-4444-4444-444444444444",
+                    "ivf_centroids_metadata_location": (
+                        "file:///tmp/ivf-centroids/v1.metadata.json"
                     ),
                 },
                 index_relations={

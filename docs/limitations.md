@@ -28,7 +28,7 @@ matrix.
   `float64` elements. Computation canonicalizes them to `float32`.
 - The current API accepts SQL-string source filters; it does not expose a
   backend-neutral expression object for filters.
-- Ready shared-IVF centroid artifacts are retained conservatively; automatic
+- Ready IVF centroid artifacts are retained conservatively; automatic
   reclamation after the last logical index is dropped is not implemented.
 
 ## Catalog and Coordination

@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
-use relify_meta::{IndexMetadata, SharedIvfMetadata};
+use relify_meta::{IndexMetadata, IvfCentroidsMetadata};
 use relify_storage::Warehouse;
 use uuid::Uuid;
 
@@ -81,7 +81,7 @@ struct CachedMetadata {
 #[derive(Debug)]
 enum CachedDocument {
     Index(Arc<IndexMetadata>),
-    SharedIvf(Arc<SharedIvfMetadata>),
+    IvfCentroids(Arc<IvfCentroidsMetadata>),
 }
 
 impl MetadataStore {
@@ -129,8 +129,8 @@ impl MetadataStore {
             .location(&format!("metadata/{index_uuid}"), true)?)
     }
 
-    /// Returns the stable root recorded in shared-IVF metadata.
-    pub fn shared_ivf_location(&self, artifact_uuid: Uuid) -> Result<String> {
+    /// Returns the stable root recorded in IVF centroid metadata.
+    pub fn ivf_centroids_location(&self, artifact_uuid: Uuid) -> Result<String> {
         self.index_location(artifact_uuid)
     }
 
@@ -157,13 +157,13 @@ impl MetadataStore {
         .await
     }
 
-    /// Validates and writes one immutable shared-IVF metadata document.
-    pub async fn write_shared_ivf(&self, metadata: &SharedIvfMetadata) -> Result<String> {
+    /// Validates and writes one immutable IVF centroid metadata document.
+    pub async fn write_ivf_centroids(&self, metadata: &IvfCentroidsMetadata) -> Result<String> {
         metadata.validate()?;
-        let expected_location = self.shared_ivf_location(metadata.artifact_uuid)?;
+        let expected_location = self.ivf_centroids_location(metadata.artifact_uuid)?;
         if metadata.location != expected_location {
             return Err(Error::InvalidMetadata(
-                "shared IVF metadata location does not match the configured warehouse".into(),
+                "IVF centroid metadata location does not match the configured warehouse".into(),
             ));
         }
         let destination = self.warehouse.location(
@@ -178,23 +178,23 @@ impl MetadataStore {
             .await?;
         self.cache().insert(
             &destination,
-            CachedDocument::SharedIvf(Arc::new(metadata.clone())),
+            CachedDocument::IvfCentroids(Arc::new(metadata.clone())),
             serialized_bytes,
         );
         Ok(destination)
     }
 
-    /// Loads and validates one immutable shared-IVF metadata document.
-    pub async fn load_shared_ivf(&self, location: &str) -> Result<SharedIvfMetadata> {
-        if let Some(metadata) = self.cache().get_shared_ivf(location) {
+    /// Loads and validates one immutable IVF centroid metadata document.
+    pub async fn load_ivf_centroids(&self, location: &str) -> Result<IvfCentroidsMetadata> {
+        if let Some(metadata) = self.cache().get_ivf_centroids(location) {
             return Ok(metadata.as_ref().clone());
         }
         let bytes = self.warehouse.read(location).await?;
         let serialized_bytes = bytes.len();
-        let metadata = Arc::new(SharedIvfMetadata::from_json_slice(&bytes)?);
+        let metadata = Arc::new(IvfCentroidsMetadata::from_json_slice(&bytes)?);
         self.cache().insert(
             location,
-            CachedDocument::SharedIvf(Arc::clone(&metadata)),
+            CachedDocument::IvfCentroids(Arc::clone(&metadata)),
             serialized_bytes,
         );
         Ok(metadata.as_ref().clone())
@@ -276,15 +276,15 @@ impl MetadataCache {
     fn get_index(&mut self, location: &str) -> Option<Arc<IndexMetadata>> {
         let metadata = match &self.entries.get(location)?.document {
             CachedDocument::Index(metadata) => Arc::clone(metadata),
-            CachedDocument::SharedIvf(_) => return None,
+            CachedDocument::IvfCentroids(_) => return None,
         };
         self.touch(location);
         Some(metadata)
     }
 
-    fn get_shared_ivf(&mut self, location: &str) -> Option<Arc<SharedIvfMetadata>> {
+    fn get_ivf_centroids(&mut self, location: &str) -> Option<Arc<IvfCentroidsMetadata>> {
         let metadata = match &self.entries.get(location)?.document {
-            CachedDocument::SharedIvf(metadata) => Arc::clone(metadata),
+            CachedDocument::IvfCentroids(metadata) => Arc::clone(metadata),
             CachedDocument::Index(_) => return None,
         };
         self.touch(location);
