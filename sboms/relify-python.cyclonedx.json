@@ -5554,6 +5554,32 @@
       "version": "0.11.1"
     },
     {
+      "bom-ref": "pkg:cargo/hashlink@0.12.1",
+      "description": "HashMap-like containers that hold their key-value pairs in a user controllable order",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/djc/hashlink"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "32069d97bb81e38fa67eab65e3393bf804bb85969f2bc06bf13f64aef5aba248"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "hashlink",
+      "purl": "pkg:cargo/hashlink@0.12.1",
+      "scope": "required",
+      "type": "library",
+      "version": "0.12.1"
+    },
+    {
       "bom-ref": "pkg:cargo/hdfs-native@0.13.5",
       "description": "Native HDFS client implementation in Rust",
       "externalReferences": [
@@ -7174,7 +7200,7 @@
       "version": "0.1.18"
     },
     {
-      "bom-ref": "pkg:cargo/libsqlite3-sys@0.36.0",
+      "bom-ref": "pkg:cargo/libsqlite3-sys@0.38.1",
       "description": "Native bindings to the libsqlite3 library",
       "externalReferences": [
         {
@@ -7185,7 +7211,7 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "95b4103cffefa72eb8428cb6b47d6627161e51c2739fc5e3b734584157bc642a"
+          "content": "f6c19a05435c21ac299d71b6a9c13db3e3f47c520517d58990a462a1397a61db"
         }
       ],
       "licenses": [
@@ -7194,10 +7220,10 @@
         }
       ],
       "name": "libsqlite3-sys",
-      "purl": "pkg:cargo/libsqlite3-sys@0.36.0",
+      "purl": "pkg:cargo/libsqlite3-sys@0.38.1",
       "scope": "required",
       "type": "library",
-      "version": "0.36.0"
+      "version": "0.38.1"
     },
     {
       "bom-ref": "pkg:cargo/link-section@0.19.2",
@@ -10469,7 +10495,7 @@
       "version": "0.1.1"
     },
     {
-      "bom-ref": "pkg:cargo/rusqlite@0.38.0",
+      "bom-ref": "pkg:cargo/rusqlite@0.40.1",
       "description": "Ergonomic wrapper for SQLite",
       "externalReferences": [
         {
@@ -10480,7 +10506,7 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "f1c93dd1c9683b438c392c492109cb702b8090b2bfc8fed6f6e4eb4523f17af3"
+          "content": "11438310b19e3109b6446c33d1ed5e889428cf2e278407bc7896bc4aaea43323"
         }
       ],
       "licenses": [
@@ -10489,10 +10515,10 @@
         }
       ],
       "name": "rusqlite",
-      "purl": "pkg:cargo/rusqlite@0.38.0",
+      "purl": "pkg:cargo/rusqlite@0.40.1",
       "scope": "required",
       "type": "library",
-      "version": "0.38.0"
+      "version": "0.40.1"
     },
     {
       "bom-ref": "pkg:cargo/rust-ini@0.21.3",
@@ -17179,6 +17205,12 @@
     },
     {
       "dependsOn": [
+        "pkg:cargo/hashbrown@0.17.1"
+      ],
+      "ref": "pkg:cargo/hashlink@0.12.1"
+    },
+    {
+      "dependsOn": [
         "pkg:cargo/async-trait@0.1.91",
         "pkg:cargo/bytes@1.12.1",
         "pkg:cargo/chrono@0.4.45",
@@ -17757,7 +17789,7 @@
         "pkg:cargo/pkg-config@0.3.33",
         "pkg:cargo/vcpkg@0.2.15"
       ],
-      "ref": "pkg:cargo/libsqlite3-sys@0.36.0"
+      "ref": "pkg:cargo/libsqlite3-sys@0.38.1"
     },
     {
       "dependsOn": [],
@@ -18605,7 +18637,7 @@
     {
       "dependsOn": [
         "pkg:cargo/relify-meta@0.1.0-rc.2",
-        "pkg:cargo/rusqlite@0.38.0",
+        "pkg:cargo/rusqlite@0.40.1",
         "pkg:cargo/serde_json@1.0.151",
         "pkg:cargo/tempfile@3.27.0",
         "pkg:cargo/thiserror@2.0.19",
@@ -18687,7 +18719,7 @@
         "pkg:cargo/relify-kmeans@0.1.0-rc.2",
         "pkg:cargo/relify-meta@0.1.0-rc.2",
         "pkg:cargo/relify-storage@0.1.0-rc.2",
-        "pkg:cargo/rusqlite@0.38.0",
+        "pkg:cargo/rusqlite@0.40.1",
         "pkg:cargo/serde_json@1.0.151",
         "pkg:cargo/tempfile@3.27.0",
         "pkg:cargo/thiserror@2.0.19",
@@ -18891,12 +18923,12 @@
         "pkg:cargo/bitflags@2.13.1",
         "pkg:cargo/fallible-iterator@0.3.0",
         "pkg:cargo/fallible-streaming-iterator@0.1.9",
-        "pkg:cargo/hashlink@0.11.1",
-        "pkg:cargo/libsqlite3-sys@0.36.0",
+        "pkg:cargo/hashlink@0.12.1",
+        "pkg:cargo/libsqlite3-sys@0.38.1",
         "pkg:cargo/smallvec@1.15.2",
         "pkg:cargo/sqlite-wasm-rs@0.5.5"
       ],
-      "ref": "pkg:cargo/rusqlite@0.38.0"
+      "ref": "pkg:cargo/rusqlite@0.40.1"
     },
     {
       "dependsOn": [
@@ -20170,7 +20202,7 @@
     "properties": [
       {
         "name": "relify:cargo-lock-sha256",
-        "value": "4072dd8a0a3c067a5af3b7490819169f6e3a38bc8bbd5e854c41fb6b76164986"
+        "value": "2a6b297d93e007d2b6b349ff1129c24227c7e70690fe4248f7cc1019259bba5e"
       }
     ]
   },
