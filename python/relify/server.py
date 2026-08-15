@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Mapping
+from collections.abc import Awaitable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -25,8 +25,9 @@ def create_app(
     storage_options: Mapping[str, str] | None = None,
     config: DataFusionSessionConfig | None = None,
     runtime: RuntimeEnvBuilder | None = None,
+    allowed_source_prefixes: Sequence[str | Path] = (),
 ) -> ASGIApp:
-    """Create the optional ASGI server for one Relify catalog."""
+    """Create an ASGI server with explicit server-visible source prefixes."""
     try:
         from ._http_server import create_http_app
     except ModuleNotFoundError as error:
@@ -42,6 +43,7 @@ def create_app(
         storage_options=storage_options,
         config=config,
         runtime=runtime,
+        allowed_source_prefixes=allowed_source_prefixes,
     )
 
 

@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 from starlette.applications import Starlette
 from starlette.background import BackgroundTask
@@ -20,15 +21,24 @@ from ._http_models import (
     MAX_JSON_BODY_BYTES,
     MAX_LIST_TABLES_PAGE_SIZE,
     decode_identifier_path,
+    identifier_from_json,
     identifier_matches_path,
     identifier_to_json,
+    index_info_to_json,
+    index_status_to_json,
+    ivf_from_json,
+    registration_from_json,
     table_descriptor_to_json,
     vector_query_from_json,
+    writer_options_from_json,
 )
+from ._http_openapi import openapi_document
 from ._ipc import encode_ipc_stream
 from ._service import AsyncBatchStream, SessionService
+from ._source_policy import SourceUriPolicy
 from .datafusion import RuntimeEnvBuilder
 from .datafusion import SessionConfig as DataFusionSessionConfig
+from .identifier import TableIdentifier
 
 
 def create_http_app(
@@ -39,7 +49,10 @@ def create_http_app(
     storage_options: Mapping[str, str] | None = None,
     config: DataFusionSessionConfig | None = None,
     runtime: RuntimeEnvBuilder | None = None,
+    allowed_source_prefixes: Sequence[str | Path] = (),
 ) -> Starlette:
+    source_policy = SourceUriPolicy(allowed_source_prefixes)
+
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
         service = await SessionService.open(
@@ -57,23 +70,32 @@ def create_http_app(
         finally:
             await service.close()
 
-    return _application(lifespan=lifespan)
+    return _application(lifespan=lifespan, source_policy=source_policy)
 
 
-def create_http_app_for_service(service: SessionService) -> Starlette:
-    app = _application()
+def create_http_app_for_service(
+    service: SessionService,
+    *,
+    allowed_source_prefixes: Sequence[str | Path] = (),
+) -> Starlette:
+    app = _application(source_policy=SourceUriPolicy(allowed_source_prefixes))
     app.state.relify_service = service
     return app
 
 
-def _application(*, lifespan: Any = None) -> Starlette:
-    return Starlette(
+def _application(*, lifespan: Any = None, source_policy: SourceUriPolicy) -> Starlette:
+    app = Starlette(
         debug=False,
         lifespan=lifespan,
         routes=[
             Route("/health", _health, methods=["GET"]),
             Route("/openapi.json", _openapi, methods=["GET"]),
             Route("/v1/table", _list_tables, methods=["GET"]),
+            Route(
+                "/v1/table/{table_id:path}/register",
+                _register_table,
+                methods=["POST"],
+            ),
             Route(
                 "/v1/table/{table_id:path}/describe",
                 _describe_table,
@@ -94,10 +116,42 @@ def _application(*, lifespan: Any = None) -> Starlette:
                 _to_sql,
                 methods=["POST"],
             ),
+            Route(
+                "/v1/table/{table_id:path}/deregister",
+                _deregister_table,
+                methods=["POST"],
+            ),
+            Route(
+                "/v1/table/{table_id:path}/create_index",
+                _create_index,
+                methods=["POST"],
+            ),
+            Route(
+                "/v1/table/{table_id:path}/index/list",
+                _list_indexes,
+                methods=["POST"],
+            ),
+            Route(
+                "/v1/table/{table_id:path}/index/{index_name:path}/stats",
+                _index_status,
+                methods=["POST"],
+            ),
+            Route(
+                "/v1/table/{table_id:path}/index/{index_name:path}/refresh",
+                _refresh_index,
+                methods=["POST"],
+            ),
+            Route(
+                "/v1/table/{table_id:path}/index/{index_name:path}/drop",
+                _drop_index,
+                methods=["POST"],
+            ),
             Route("/v1/sql", _query_sql, methods=["POST"]),
             Route("/v1/sql/explain", _explain_sql, methods=["POST"]),
         ],
     )
+    app.state.relify_source_policy = source_policy
+    return app
 
 
 async def _health(request: Request) -> Response:
@@ -105,7 +159,7 @@ async def _health(request: Request) -> Response:
 
 
 async def _openapi(request: Request) -> Response:
-    return _json_response(request, _openapi_document())
+    return _json_response(request, openapi_document())
 
 
 async def _list_tables(request: Request) -> Response:
@@ -137,6 +191,23 @@ async def _list_tables(request: Request) -> Response:
     return await _handle(request, operation)
 
 
+async def _register_table(request: Request) -> Response:
+    async def operation() -> Response:
+        values = registration_from_json(await _json_body(request))
+        name = values.pop("name")
+        source = values.pop("source")
+        _validate_registration_route(request, name)
+        values["path"] = _source_policy(request).authorize(source)
+        await _service(request).register_parquet(name, **values)
+        descriptor = await _service(request).table(name)
+        return _json_response(
+            request,
+            table_descriptor_to_json(descriptor.identifier, descriptor.schema),
+        )
+
+    return await _handle(request, operation)
+
+
 async def _describe_table(request: Request) -> Response:
     async def operation() -> Response:
         body = await _json_body(request)
@@ -149,6 +220,98 @@ async def _describe_table(request: Request) -> Response:
             request,
             table_descriptor_to_json(descriptor.identifier, descriptor.schema),
         )
+
+    return await _handle(request, operation)
+
+
+async def _deregister_table(request: Request) -> Response:
+    async def operation() -> Response:
+        body = await _json_body(request)
+        _only_fields(body, {"identifier"})
+        identifier = _scoped_identifier(request, body, field="identifier")
+        await _service(request).deregister_table(identifier)
+        return _json_response(request, {"deregistered": True})
+
+    return await _handle(request, operation)
+
+
+async def _create_index(request: Request) -> Response:
+    async def operation() -> Response:
+        body = await _json_body(request)
+        _only_fields(
+            body,
+            {"source", "index", "column", "key", "config", "writer_options"},
+        )
+        identifier = _scoped_identifier(request, body)
+        index = _required_string(body.get("index"), "index")
+        key = _string_array(body.get("key"), "key", allow_empty=False)
+        await _service(request).create_index(
+            identifier,
+            index,
+            column=_required_string(body.get("column"), "column"),
+            key=key,
+            config=ivf_from_json(body.get("config")),
+            writer_options=writer_options_from_json(body.get("writer_options")),
+            wait_timeout=None,
+        )
+        return _json_response(request, {"accepted": True}, status_code=202)
+
+    return await _handle(request, operation)
+
+
+async def _list_indexes(request: Request) -> Response:
+    async def operation() -> Response:
+        body = await _json_body(request)
+        _only_fields(body, {"source"})
+        identifier = _scoped_identifier(request, body)
+        indexes = await _service(request).list_indexes(identifier)
+        return _json_response(
+            request,
+            {"indexes": [index_info_to_json(index) for index in indexes]},
+        )
+
+    return await _handle(request, operation)
+
+
+async def _index_status(request: Request) -> Response:
+    async def operation() -> Response:
+        body = await _json_body(request)
+        _only_fields(body, {"source", "index"})
+        identifier = _scoped_identifier(request, body)
+        index = _scoped_index(request, body)
+        status = await _service(request).index_status(identifier, index)
+        return _json_response(request, index_status_to_json(status))
+
+    return await _handle(request, operation)
+
+
+async def _refresh_index(request: Request) -> Response:
+    async def operation() -> Response:
+        body = await _json_body(request)
+        _only_fields(body, {"source", "index", "config", "writer_options"})
+        identifier = _scoped_identifier(request, body)
+        index = _scoped_index(request, body)
+        config_value = body.get("config")
+        await _service(request).refresh_index(
+            identifier,
+            index,
+            config=None if config_value is None else ivf_from_json(config_value),
+            writer_options=writer_options_from_json(body.get("writer_options")),
+            wait_timeout=None,
+        )
+        return _json_response(request, {"accepted": True}, status_code=202)
+
+    return await _handle(request, operation)
+
+
+async def _drop_index(request: Request) -> Response:
+    async def operation() -> Response:
+        body = await _json_body(request)
+        _only_fields(body, {"source", "index"})
+        identifier = _scoped_identifier(request, body)
+        index = _scoped_index(request, body)
+        await _service(request).drop_index(identifier, index)
+        return _json_response(request, {"dropped": True})
 
     return await _handle(request, operation)
 
@@ -283,11 +446,39 @@ async def _json_body(request: Request) -> dict[str, Any]:
     return value
 
 
-def _validate_route_identifier(request: Request, identifier: Any) -> None:
+def _validate_route_identifier(
+    request: Request,
+    identifier: TableIdentifier,
+) -> None:
     delimiter = request.query_params.get("delimiter", DEFAULT_IDENTIFIER_DELIMITER)
     path = decode_identifier_path(request.path_params["table_id"], delimiter=delimiter)
     if not identifier_matches_path(identifier, path):
         raise ValueError("route and request table identifiers do not match")
+
+
+def _validate_registration_route(request: Request, name: str) -> None:
+    delimiter = request.query_params.get("delimiter", DEFAULT_IDENTIFIER_DELIMITER)
+    path = decode_identifier_path(request.path_params["table_id"], delimiter=delimiter)
+    if path != (name,):
+        raise ValueError("route and request table names do not match")
+
+
+def _scoped_identifier(
+    request: Request,
+    body: Mapping[str, Any],
+    *,
+    field: str = "source",
+) -> TableIdentifier:
+    identifier = identifier_from_json(body.get(field))
+    _validate_route_identifier(request, identifier)
+    return identifier
+
+
+def _scoped_index(request: Request, body: Mapping[str, Any]) -> str:
+    index = _required_string(body.get("index"), "index")
+    if unquote(request.path_params["index_name"]) != index:
+        raise ValueError("route and request index names do not match")
+    return index
 
 
 def _request_id(request: Request) -> str:
@@ -305,8 +496,17 @@ def _request_id(request: Request) -> str:
     return value
 
 
-def _json_response(request: Request, value: object) -> JSONResponse:
-    return JSONResponse(value, headers={"x-request-id": _request_id(request)})
+def _json_response(
+    request: Request,
+    value: object,
+    *,
+    status_code: int = 200,
+) -> JSONResponse:
+    return JSONResponse(
+        value,
+        status_code=status_code,
+        headers={"x-request-id": _request_id(request)},
+    )
 
 
 def _service(request: Request) -> SessionService:
@@ -314,6 +514,13 @@ def _service(request: Request) -> SessionService:
     if not isinstance(service, SessionService):
         raise RuntimeError("Relify server has not completed startup")
     return service
+
+
+def _source_policy(request: Request) -> SourceUriPolicy:
+    policy = getattr(request.app.state, "relify_source_policy", None)
+    if not isinstance(policy, SourceUriPolicy):
+        raise RuntimeError("Relify server source policy is not configured")
+    return policy
 
 
 def _only_fields(body: Mapping[str, Any], allowed: set[str]) -> None:
@@ -328,259 +535,14 @@ def _boolean(value: object, name: str) -> bool:
     return value
 
 
-def _openapi_document() -> dict[str, Any]:
-    def json_content(schema: dict[str, Any]) -> dict[str, Any]:
-        return {"application/json": {"schema": schema}}
+def _required_string(value: object, name: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{name} must be a non-empty string")
+    return value
 
-    error_response = {
-        "description": "Relify error",
-        "content": json_content({"$ref": "#/components/schemas/ErrorResponse"}),
-    }
-    arrow_response = {
-        "description": "Arrow IPC stream",
-        "content": {
-            ARROW_STREAM_MEDIA_TYPE: {"schema": {"type": "string", "format": "binary"}}
-        },
-    }
-    table_parameters = [
-        {
-            "name": "id",
-            "in": "path",
-            "required": True,
-            "schema": {"type": "string"},
-        },
-        {
-            "name": "delimiter",
-            "in": "query",
-            "required": False,
-            "schema": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 1,
-                "default": DEFAULT_IDENTIFIER_DELIMITER,
-            },
-        },
-    ]
-    vector_body = {
-        "required": True,
-        "content": json_content({"$ref": "#/components/schemas/VectorQuery"}),
-    }
-    sql_body = {
-        "required": True,
-        "content": json_content({"$ref": "#/components/schemas/SqlQuery"}),
-    }
 
-    def json_ok(schema: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "200": {"description": "Success", "content": json_content(schema)},
-            "default": error_response,
-        }
-
-    return {
-        "openapi": "3.1.0",
-        "info": {"title": "Relify API", "version": "v1"},
-        "paths": {
-            "/v1/table": {
-                "get": {
-                    "operationId": "listTables",
-                    "parameters": [
-                        {
-                            "name": "limit",
-                            "in": "query",
-                            "schema": {
-                                "type": "integer",
-                                "minimum": 1,
-                                "maximum": MAX_LIST_TABLES_PAGE_SIZE,
-                                "default": 100,
-                            },
-                        },
-                        {
-                            "name": "page_token",
-                            "in": "query",
-                            "schema": {"type": "string"},
-                        },
-                    ],
-                    "responses": json_ok(
-                        {"$ref": "#/components/schemas/ListTablesResponse"}
-                    ),
-                }
-            },
-            "/v1/table/{id}/describe": {
-                "parameters": table_parameters,
-                "post": {
-                    "operationId": "describeTable",
-                    "requestBody": {
-                        "required": True,
-                        "content": json_content(
-                            {"$ref": "#/components/schemas/DescribeTableRequest"}
-                        ),
-                    },
-                    "responses": json_ok(
-                        {"$ref": "#/components/schemas/TableDescriptor"}
-                    ),
-                },
-            },
-            "/v1/table/{id}/query": {
-                "parameters": table_parameters,
-                "post": {
-                    "operationId": "queryTable",
-                    "requestBody": vector_body,
-                    "responses": {"200": arrow_response, "default": error_response},
-                },
-            },
-            "/v1/table/{id}/explain": {
-                "parameters": table_parameters,
-                "post": {
-                    "operationId": "explainTable",
-                    "requestBody": {
-                        "required": True,
-                        "content": json_content(
-                            {"$ref": "#/components/schemas/ExplainVectorQuery"}
-                        ),
-                    },
-                    "responses": json_ok({"$ref": "#/components/schemas/PlanResponse"}),
-                },
-            },
-            "/v1/table/{id}/to_sql": {
-                "parameters": table_parameters,
-                "post": {
-                    "operationId": "renderQuerySql",
-                    "requestBody": vector_body,
-                    "responses": json_ok({"$ref": "#/components/schemas/SqlQuery"}),
-                },
-            },
-            "/v1/sql": {
-                "post": {
-                    "operationId": "executeSql",
-                    "requestBody": sql_body,
-                    "responses": {"200": arrow_response, "default": error_response},
-                },
-            },
-            "/v1/sql/explain": {
-                "post": {
-                    "operationId": "explainSql",
-                    "requestBody": {
-                        "required": True,
-                        "content": json_content(
-                            {"$ref": "#/components/schemas/ExplainSqlQuery"}
-                        ),
-                    },
-                    "responses": json_ok({"$ref": "#/components/schemas/PlanResponse"}),
-                },
-            },
-        },
-        "components": {
-            "schemas": {
-                "TableIdentifier": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["catalog", "namespace", "name"],
-                    "properties": {
-                        "catalog": {"type": "string", "minLength": 1},
-                        "namespace": {
-                            "type": "array",
-                            "items": {"type": "string", "minLength": 1},
-                        },
-                        "name": {"type": "string", "minLength": 1},
-                    },
-                },
-                "VectorQuery": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["source", "query"],
-                    "properties": {
-                        "source": {"$ref": "#/components/schemas/TableIdentifier"},
-                        "query": {
-                            "type": "array",
-                            "minItems": 1,
-                            "items": {"type": "number"},
-                        },
-                        "column": {"type": ["string", "null"]},
-                        "index": {"type": ["string", "null"]},
-                        "projection": {
-                            "type": ["array", "null"],
-                            "items": {"type": "string", "minLength": 1},
-                        },
-                        "result_limit": {"type": "integer", "minimum": 1},
-                        "probe_count": {
-                            "type": ["integer", "null"],
-                            "minimum": 1,
-                        },
-                        "predicate": {"type": ["string", "null"]},
-                        "bypass_index": {"type": "boolean"},
-                    },
-                },
-                "SqlQuery": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["sql"],
-                    "properties": {"sql": {"type": "string", "minLength": 1}},
-                },
-                "ExplainVectorQuery": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["query"],
-                    "properties": {
-                        "query": {"$ref": "#/components/schemas/VectorQuery"},
-                        "verbose": {"type": "boolean", "default": False},
-                        "analyze": {"type": "boolean", "default": False},
-                    },
-                },
-                "ExplainSqlQuery": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["sql"],
-                    "properties": {
-                        "sql": {"type": "string", "minLength": 1},
-                        "verbose": {"type": "boolean", "default": False},
-                        "analyze": {"type": "boolean", "default": False},
-                    },
-                },
-                "DescribeTableRequest": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["reference"],
-                    "properties": {"reference": {"type": "string", "minLength": 1}},
-                },
-                "TableDescriptor": {
-                    "type": "object",
-                    "required": ["identifier", "schema"],
-                    "properties": {
-                        "identifier": {"$ref": "#/components/schemas/TableIdentifier"},
-                        "schema": {"type": "string", "format": "byte"},
-                    },
-                },
-                "ListTablesResponse": {
-                    "type": "object",
-                    "required": ["tables", "next_page_token"],
-                    "properties": {
-                        "tables": {
-                            "type": "array",
-                            "items": {"$ref": "#/components/schemas/TableIdentifier"},
-                        },
-                        "next_page_token": {"type": ["string", "null"]},
-                    },
-                },
-                "PlanResponse": {
-                    "type": "object",
-                    "required": ["plan"],
-                    "properties": {"plan": {"type": "string"}},
-                },
-                "ErrorResponse": {
-                    "type": "object",
-                    "required": ["error"],
-                    "properties": {
-                        "error": {
-                            "type": "object",
-                            "required": ["code", "message", "request_id"],
-                            "properties": {
-                                "code": {"type": "string"},
-                                "message": {"type": "string"},
-                                "request_id": {"type": "string"},
-                            },
-                        }
-                    },
-                },
-            },
-        },
-    }
+def _string_array(value: object, name: str, *, allow_empty: bool) -> list[str]:
+    if not isinstance(value, list) or (not value and not allow_empty):
+        qualifier = "" if allow_empty else " non-empty"
+        raise ValueError(f"{name} must be a{qualifier} array of strings")
+    return [_required_string(item, f"{name} item") for item in value]

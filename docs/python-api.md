@@ -1,8 +1,8 @@
 # Python API
 
 Relify exposes synchronous and asynchronous facades over one service contract.
-It selects embedded execution or the query-only HTTP transport from the
-connection location.
+It selects embedded execution or the HTTP transport from the connection
+location.
 
 ## Connect
 
@@ -34,7 +34,7 @@ session = relify.connect(
 `session.datafusion_context()` only when an embedded-only DataFusion operation
 is intentionally required.
 
-### Query an Existing Remote Catalog
+### Connect to a Relify Server
 
 Install the optional server dependencies in the server environment:
 
@@ -42,13 +42,21 @@ Install the optional server dependencies in the server environment:
 python -m pip install "relify[server]"
 ```
 
-Create an ASGI application over an existing catalog:
+Create an ASGI application over a catalog. Remote source registration is denied
+by default; expose only the server-visible file roots or object-store prefixes
+that clients may register:
 
 ```python
 # service.py
 from relify.server import create_app
 
-app = create_app("/srv/relify")
+app = create_app(
+    "/srv/relify",
+    allowed_source_prefixes=[
+        "/srv/lakehouse",
+        "s3://company-data/documents",
+    ],
+)
 ```
 
 Run that application with one ASGI worker, then use the same session facade:
@@ -63,11 +71,11 @@ documents = session.table("documents")
 hits = session.collect(documents.search(vector).limit(10))
 ```
 
-The first HTTP milestone is query-only and unstable. It can list and describe
-registered tables, run vector queries and read-only SQL, stream Arrow results,
-and inspect plans. Source registration and index lifecycle remain embedded-only
-until remote URI authorization and durable lifecycle conformance are complete.
-`datafusion_context()` is intentionally unavailable remotely.
+The same table and index lifecycle API is available remotely. Paths passed to
+`register_parquet` are resolved by the server; the operation does not upload
+client files or credentials. Index builds are accepted asynchronously, and
+`wait_for_index` polls their server-side status. `datafusion_context()` remains
+embedded-only.
 
 ## Register and Discover Tables
 

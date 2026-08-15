@@ -1,23 +1,32 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import os
+import time
 from collections.abc import Mapping, Sequence
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Self
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpx
 import pyarrow
 
-from ._http_errors import raise_remote_error, unavailable
+from ._http_errors import raise_remote_build_error, raise_remote_error, unavailable
 from ._http_models import (
     ARROW_STREAM_MEDIA_TYPE,
     DEFAULT_IDENTIFIER_DELIMITER,
     encode_identifier_path,
     identifier_from_json,
+    identifier_to_json,
+    index_info_from_json,
+    index_status_from_json,
+    ivf_to_json,
+    registration_to_json,
     schema_from_base64,
     vector_query_to_json,
+    writer_options_to_json,
 )
 from ._ipc import decode_ipc_stream
 from ._service import AsyncBatchStream, TableDescriptor
@@ -80,7 +89,23 @@ class HttpTransport:
         schema: pyarrow.Schema | None,
         file_sort_order: Sequence[Sequence[SortKey]] | None,
     ) -> None:
-        raise _query_only("register_parquet")
+        self._ensure_open()
+        if not isinstance(path, (str, os.PathLike)):
+            raise TypeError(
+                "persistent Parquet tables require one path or wildcard pattern"
+            )
+        table_path, params = _registration_path(name)
+        body = registration_to_json(
+            name,
+            os.fspath(path),
+            table_partition_cols=table_partition_cols,
+            parquet_pruning=parquet_pruning,
+            file_extension=file_extension,
+            skip_metadata=skip_metadata,
+            schema=schema,
+            file_sort_order=file_sort_order,
+        )
+        await self._request_json("POST", table_path, params=params, json_body=body)
 
     async def list_tables(self) -> list[TableIdentifier]:
         self._ensure_open()
@@ -126,7 +151,15 @@ class HttpTransport:
         )
 
     async def deregister_table(self, identifier: str | TableIdentifier) -> None:
-        raise _query_only("deregister_table")
+        self._ensure_open()
+        resolved = await self._resolve_identifier(identifier)
+        path, params = _table_path(resolved, "deregister")
+        await self._request_json(
+            "POST",
+            path,
+            params=params,
+            json_body={"identifier": identifier_to_json(resolved)},
+        )
 
     async def stream(self, query: VectorQuery | str) -> AsyncBatchStream:
         self._ensure_open()
@@ -195,7 +228,23 @@ class HttpTransport:
         writer_options: WriteOptions | None,
         wait_timeout: timedelta | None,
     ) -> None:
-        raise _query_only("create_index")
+        self._ensure_open()
+        path, params = _table_path(identifier, "create_index")
+        await self._request_json(
+            "POST",
+            path,
+            params=params,
+            json_body={
+                "source": identifier_to_json(identifier),
+                "index": index,
+                "column": column,
+                "key": key,
+                "config": ivf_to_json(config),
+                "writer_options": writer_options_to_json(writer_options),
+            },
+        )
+        if wait_timeout is not None:
+            await self.wait_for_index(identifier, index, wait_timeout)
 
     async def refresh_index(
         self,
@@ -206,12 +255,42 @@ class HttpTransport:
         writer_options: WriteOptions | None,
         wait_timeout: timedelta | None,
     ) -> None:
-        raise _query_only("refresh_index")
+        self._ensure_open()
+        path, params = _index_path(identifier, index, "refresh")
+        await self._request_json(
+            "POST",
+            path,
+            params=params,
+            json_body={
+                "source": identifier_to_json(identifier),
+                "index": index,
+                "config": None if config is None else ivf_to_json(config),
+                "writer_options": writer_options_to_json(writer_options),
+            },
+        )
+        if wait_timeout is not None:
+            await self.wait_for_index(identifier, index, wait_timeout)
 
     async def index_status(
         self, identifier: TableIdentifier, index: str
     ) -> IndexStatus:
-        raise _query_only("index_status")
+        self._ensure_open()
+        path, params = _index_path(identifier, index, "stats")
+        body = await self._request_json(
+            "POST",
+            path,
+            params=params,
+            json_body={
+                "source": identifier_to_json(identifier),
+                "index": index,
+            },
+        )
+        try:
+            return index_status_from_json(body)
+        except ValueError as error:
+            raise StreamExecutionError(
+                "Relify server returned invalid index status"
+            ) from error
 
     async def wait_for_index(
         self,
@@ -219,13 +298,64 @@ class HttpTransport:
         index: str,
         timeout: timedelta,
     ) -> None:
-        raise _query_only("wait_for_index")
+        seconds = _timeout_seconds(timeout)
+        deadline = time.monotonic() + seconds
+        delay = 0.05
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"timed out waiting for index: {index}")
+            try:
+                async with asyncio.timeout(remaining):
+                    status = await self.index_status(identifier, index)
+            except TimeoutError as error:
+                raise TimeoutError(f"timed out waiting for index: {index}") from error
+            if status.error is not None:
+                raise_remote_build_error(status.error_code, status.error)
+            if status.state == "ready":
+                return
+            if status.state == "failed":
+                raise_remote_build_error(
+                    status.error_code,
+                    f"index build failed: {index}",
+                )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"timed out waiting for index: {index}")
+            await asyncio.sleep(min(delay, remaining))
+            delay = min(delay * 1.5, 1.0)
 
     async def list_indexes(self, identifier: TableIdentifier) -> list[IndexInfo]:
-        raise _query_only("list_indexes")
+        self._ensure_open()
+        path, params = _table_path(identifier, "index/list")
+        body = await self._request_json(
+            "POST",
+            path,
+            params=params,
+            json_body={"source": identifier_to_json(identifier)},
+        )
+        values = body.get("indexes")
+        if not isinstance(values, list):
+            raise StreamExecutionError("Relify server returned invalid index metadata")
+        try:
+            return [index_info_from_json(value) for value in values]
+        except ValueError as error:
+            raise StreamExecutionError(
+                "Relify server returned invalid index metadata"
+            ) from error
 
     async def drop_index(self, identifier: TableIdentifier, index: str) -> None:
-        raise _query_only("drop_index")
+        self._ensure_open()
+        path, params = _index_path(identifier, index, "drop")
+        await self._request_json(
+            "POST",
+            path,
+            params=params,
+            json_body={
+                "source": identifier_to_json(identifier),
+                "index": index,
+            },
+        )
 
     def datafusion_context(self) -> Any:
         raise UnsupportedOperationError(
@@ -402,8 +532,33 @@ def _table_path(
     return f"v1/table/{path}/{operation}", {"delimiter": delimiter}
 
 
+def _registration_path(name: str) -> tuple[str, dict[str, str]]:
+    if not isinstance(name, str):
+        raise TypeError("table name must be a string")
+    if not name:
+        raise ValueError("table name must not be empty")
+    delimiter = _choose_delimiter_for_segments((name,))
+    return f"v1/table/{quote(name, safe='')}/register", {"delimiter": delimiter}
+
+
+def _index_path(
+    identifier: TableIdentifier,
+    index: str,
+    operation: str,
+) -> tuple[str, dict[str, str]]:
+    if not isinstance(index, str):
+        raise TypeError("index name must be a string")
+    if not index.strip():
+        raise ValueError("index name must not be empty")
+    path, params = _table_path(identifier, f"index/{quote(index, safe='')}/{operation}")
+    return path, params
+
+
 def _choose_delimiter(identifier: TableIdentifier) -> str:
-    segments = (*identifier.namespace, identifier.name)
+    return _choose_delimiter_for_segments((*identifier.namespace, identifier.name))
+
+
+def _choose_delimiter_for_segments(segments: Sequence[str]) -> str:
     for candidate in (DEFAULT_IDENTIFIER_DELIMITER, "~", "!", "^", "|"):
         if all(candidate not in segment for segment in segments):
             return candidate
@@ -468,9 +623,3 @@ async def _read_limited(response: httpx.Response, limit: int) -> bytes:
         if len(payload) > limit:
             return b""
     return bytes(payload)
-
-
-def _query_only(operation: str) -> UnsupportedOperationError:
-    return UnsupportedOperationError(
-        f"{operation} is not available in query-only client/server mode"
-    )
