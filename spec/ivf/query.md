@@ -58,8 +58,10 @@ canonical `float` elements. Zero norm means every canonical element is zero;
 no epsilon threshold is applied. Normalization must produce finite canonical
 `float` elements or the build or query fails.
 
-Centroids are used as persisted for routing and are not normalized again. LVQ
-reconstructs `x_hat` from normalized source data and reports
+Centroids are trained from normalized source vectors but are not guaranteed to
+have unit norm. Routing uses squared-L2 distance to each persisted centroid
+without normalizing it again. LVQ reconstructs `x_hat` from normalized source
+data and reports
 `squared_l2(normalize(q), x_hat) / 2`; `x_hat` is not normalized again and its
 approximate distance is not required to remain in `[0, 2]`.
 

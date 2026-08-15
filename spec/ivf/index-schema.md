@@ -119,7 +119,10 @@ specific. A source row is assigned to the centroid with the smallest squared
 Euclidean distance; equal distances select the smaller `cid`.
 
 For `cosine`, source vectors are normalized before training and assignment.
-Persisted centroids are used as written and are not normalized again.
+Training persists the centroids produced from those normalized inputs. A
+centroid is generally their arithmetic mean and is not required to have unit
+norm. Assignment and query routing use squared-L2 distance to the persisted
+centroid as written; implementations must not normalize it again.
 
 ## 6. Postings
 
@@ -152,20 +155,25 @@ LVQ encodes each canonical source vector independently. For vector `x`:
 ```text
 offset = min(x_i)
 upper  = max(x_i)
-levels = 15 for lvq4, otherwise 255
-scale  = (upper - offset) / levels
+max_code = 15 for lvq4, otherwise 255
+scale    = (upper - offset) / max_code
 ```
 
 When `upper > offset`:
 
 ```text
-code_i = clamp(round(levels * (x_i - offset) / (upper - offset)), 0, levels)
+code_i = clamp(
+    round(max_code * (x_i - offset) / (upper - offset)),
+    0,
+    max_code
+)
 ```
 
 `round` selects the nearest integer and resolves an exact half toward the
 larger integer. Implementations use sufficient intermediate precision to
 apply this rule before storing the code. When `upper = offset`, every code is
-zero.
+zero. The inclusive range `[0, max_code]` intentionally provides 16 distinct
+codes for LVQ4 and 256 for LVQ8.
 
 LVQ8 stores `code_i` in byte `i`. LVQ4 stores even dimension `i` in the low
 nibble of byte `i / 2` and the following odd dimension in its high nibble. An
