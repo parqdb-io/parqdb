@@ -119,8 +119,8 @@ requirements.
 | Engine | Model | Current capability | Status |
 | --- | --- | --- | --- |
 | DataFusion | Embedded | Build and query Parquet indexes in one Python process | Supported |
-| Spark Classic | Batch | Build Iceberg indexes; query Parquet and Iceberg | Experimental |
-| StarRocks | OLAP | Query Spark-built Iceberg indexes over Arrow Flight SQL | Experimental |
+| Spark Classic | Batch | Query published Parquet and Iceberg indexes | Experimental |
+| StarRocks | OLAP | Query published Iceberg indexes over Arrow Flight SQL | Experimental |
 
 DataFusion is the default backend. Spark and StarRocks live under
 `relify.experimental` and require caller-managed engines and catalog

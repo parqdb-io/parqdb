@@ -34,13 +34,10 @@ matrix.
 - The Python catalog facade exposes one root index namespace.
 - There is no remote catalog service or multi-node transaction coordinator.
 - Local builds coordinate through the local catalog and filesystem state.
-- The Spark development catalog assumes one coordinating driver; cross-driver
-  build coordination is not implemented.
 
 ## Storage
 
 - Local index construction writes Parquet.
-- Spark index construction writes Iceberg.
 - Local storage access supports `file`, S3, and HDFS.
 - Parquet locations have no snapshot isolation. Replacing files under a
   registered path is the application's consistency responsibility.
@@ -55,13 +52,12 @@ removal. The local builder does not write Iceberg indexes.
 
 ## Spark
 
-The experimental backend supports Spark Classic 4.0 and 4.1, initial Iceberg
-index construction, native PySpark DataFrame queries, and queries over
-compatible Parquet indexes. It does not support:
+The experimental backend supports Spark Classic 4.0 and 4.1 and native
+PySpark DataFrame queries over compatible Parquet and Iceberg indexes. It does
+not support:
 
 - Spark Connect;
-- index refresh;
-- cross-driver build coordination;
+- index construction or refresh;
 - Iceberg maintenance;
 - a remote Relify index catalog; or
 - production distributed benchmarks and conformance guarantees.
@@ -78,7 +74,7 @@ It does not:
 - create or configure the StarRocks Iceberg catalog; or
 - expose a DataFrame facade.
 
-Construction can be delegated explicitly to a compatible Spark builder.
+Construction may be delegated explicitly to a compatible third-party builder.
 
 ## Operational Scope
 

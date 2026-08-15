@@ -1,7 +1,7 @@
 # Spark and Iceberg
 
-The experimental Spark backend builds IVF-Flat indexes as Iceberg tables and
-queries them with native PySpark DataFrame plans. It accepts a caller-owned
+The experimental Spark backend queries compatible Parquet and Iceberg indexes
+with native PySpark DataFrame plans. It accepts a caller-owned
 Spark Classic session; Relify does not create or configure the Spark cluster or
 Iceberg catalog.
 
@@ -14,8 +14,8 @@ Iceberg catalog.
   and
 - a SQLite Relify index catalog accessible to the driver.
 
-Spark Connect, remote Relify catalogs, refresh, and cross-driver build
-coordination are not implemented in 0.1.
+Spark Connect, index construction, refresh, and remote Relify catalogs are not
+implemented in 0.1.
 
 ## Install
 
@@ -49,36 +49,7 @@ session = relify.experimental.spark.connect(
 The PyIceberg catalog name must match the name configured in Spark. Pass
 `catalog_name="lakehouse"` only when the catalog object does not expose its
 name. Relify validates table identity and snapshots through PyIceberg while
-Spark performs the distributed reads and writes.
-
-## Build an Iceberg Index
-
-Spark table identifiers omit the already-bound catalog name:
-
-```python
-documents = session.table("analytics.documents")
-documents.create_index(
-    "documents_embedding",
-    column="embedding",
-    key=["document_id"],
-    config=relify.IVF(nlist=4096),
-    writer_options=relify.WriteOptions(partitions=128),
-)
-documents.wait_for_index("documents_embedding")
-```
-
-Relify trains centroids with MLlib, computes final assignments against the
-published centroids, writes canonical Iceberg centroid and posting tables, and
-publishes index metadata only after both table snapshots commit. When
-`partitions` is omitted, the active Spark context's parallelism is used.
-
-The default index namespace is `relify`. For the example above, the catalog
-contains tables similar to:
-
-```text
-lakehouse.relify.documents_embedding_centroids
-lakehouse.relify.documents_embedding_postings
-```
+Spark performs the distributed reads.
 
 ## Query with a Native DataFrame
 
@@ -123,7 +94,7 @@ documents = session.register_parquet(
 ```
 
 The source URI must exactly match the canonical URI recorded when the local
-index was built. Spark construction remains Iceberg-only.
+index was built.
 
 ## Query the Same Index with DataFusion
 
@@ -147,11 +118,11 @@ hits = local.to_arrow(
 
 ## Run the Maintained Example
 
-From a source checkout, the maintained command-line example uses an already
-configured Spark and PyIceberg environment:
+From a source checkout, the maintained query example uses an already published
+index and a configured Spark and PyIceberg environment:
 
 ```bash
-uv run --extra spark python -m examples.python.spark.build_and_query \
+uv run --extra spark python -m examples.python.spark.query \
   --index-catalog sqlite:///data/relify/catalog.sqlite \
   --iceberg-catalog lakehouse \
   --table analytics.documents \

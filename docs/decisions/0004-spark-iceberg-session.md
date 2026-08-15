@@ -1,6 +1,6 @@
 # Spark Iceberg Session
 
-- Status: Accepted
+- Status: Superseded by [Shared IVF and Cosine Support](../rfcs/20260815-shared-ivf-cosine.md)
 - Date: 2026-07-30
 
 ## Context

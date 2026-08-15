@@ -15,7 +15,6 @@ from ...catalog import IndexCatalog, IndexInfo
 from ...identifier import TableIdentifier
 from ...query import VectorQuery
 from ._backend import SPARK_INFO, spark_report
-from .config import Spark
 from .iceberg import IcebergTableState, load_table_state, spark_identifier
 from .parquet import ParquetTableState, validate_parquet_uri
 from .planner import plan_query
@@ -74,7 +73,7 @@ class Session:
         self._indexes = IndexCatalog(self._native)
         self._builds = BuildCoordinator(
             self,
-            default_builder=Spark(self.spark),
+            default_builder=None,
         )
         self._parquet_tables: dict[TableIdentifier, ParquetTableState] = {}
         self._parquet_names: dict[str, TableIdentifier] = {}
@@ -84,10 +83,8 @@ class Session:
         return self._indexes
 
     @property
-    def default_builder(self) -> IndexBuilder:
-        builder = self._builds.default_builder
-        assert builder is not None
-        return builder
+    def default_builder(self) -> IndexBuilder | None:
+        return self._builds.default_builder
 
     @property
     def backend(self) -> BackendInfo:

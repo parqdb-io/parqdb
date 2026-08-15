@@ -9,7 +9,7 @@ behavior and return types, use the [Python API](python-api.md).
 | Install | Adds |
 | --- | --- |
 | `relify` | Local DataFusion, native builder, Parquet, SQLite catalog |
-| `relify[iceberg]` | PyIceberg support for querying Spark-built indexes locally |
+| `relify[iceberg]` | PyIceberg support for querying Iceberg sources and indexes locally |
 | `relify[spark]` | Experimental Spark Classic and Iceberg integration |
 | `relify[starrocks]` | Experimental StarRocks Arrow Flight SQL integration |
 

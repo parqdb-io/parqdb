@@ -152,8 +152,8 @@ snapshots recorded in Relify metadata. The local builder remains Parquet-only.
 ### Experimental Spark Session
 
 The experimental Spark integration accepts a caller-owned Spark Classic
-session and, for Iceberg sources and construction, a PyIceberg catalog that
-points to the same catalog configured in Spark:
+session and, for Iceberg sources, a PyIceberg catalog that points to the same
+catalog configured in Spark:
 
 ```python
 from pyiceberg.catalog import load_catalog
@@ -195,34 +195,9 @@ hits = session.to_dataframe(
 )
 ```
 
-The Parquet source URI must be the same canonical URI recorded by the local
-builder. The first Spark builder still requires an Iceberg source and writes
-Iceberg index tables.
-
-Spark construction retains the ordinary table API. The Spark session supplies
-`relify.experimental.Spark(spark)` as its default builder:
-
-```python
-documents.create_index(
-    "documents_embedding",
-    column="embedding",
-    key=["document_id"],
-    config=relify.IVF(nlist=4096),
-    writer_options=relify.WriteOptions(partitions=128),
-)
-documents.wait_for_index("documents_embedding")
-```
-
-MLlib trains centroids in Spark. Relify converts them to canonical `float`,
-recomputes final assignments in Arrow batches against those exact centroids,
-range partitions and locally sorts postings by `(cid, key...)`, uses PyIceberg
-to create the canonical required-field schemas, and asks Spark to append the
-distributed data to
-`lakehouse.relify.documents_embedding_centroids` and
-`lakehouse.relify.documents_embedding_postings`. Metadata is published only
-after both table snapshots are committed. `WriteOptions.partitions` is optional
-and defaults to the active Spark context's parallelism. A large cluster can
-span adjacent partitions at key boundaries.
+The Parquet source URI must be the same canonical URI recorded by the selected
+index. Spark construction is not implemented, so the session consumes an
+already published compatible index.
 
 Search returns a native PySpark DataFrame:
 
@@ -320,24 +295,9 @@ result schema and finite `float32` distances. Empty results retain the expected
 schema. `session.to_sql(query)` exposes the generated StarRocks SQL for
 inspection.
 
-StarRocks has no implicit index builder. The same table can explicitly use a
-caller-owned Spark session for construction:
-
-```python
-documents.create_index(
-    "documents_embedding",
-    column="embedding",
-    key=["document_id"],
-    config=relify.IVF(nlist=4096),
-    builder=relify.experimental.Spark(spark),
-    writer_options=relify.WriteOptions(partitions=128),
-)
-documents.wait_for_index("documents_embedding")
-```
-
-The StarRocks session pins the source Iceberg snapshot and publishes the
-resulting metadata; Spark trains and writes the Iceberg index tables. Spark,
-StarRocks, and PyIceberg must use the same logical catalog name.
+StarRocks has no index builder. The selected index must already be published in
+the Relify catalog, and StarRocks and PyIceberg must use the same logical
+Iceberg catalog name recorded by its relation references.
 
 The first implementation supports Iceberg source and index tables only. It
 does not create the StarRocks external catalog, build indexes with StarRocks
@@ -406,10 +366,10 @@ LVQ stores compact per-vector codes and evaluates approximate distance directly
 from the postings table. `source` stores only keys and resolves candidate
 vectors from the source. Omitting `encoding` selects `flat`.
 
-The same table method is implemented by every backend. Local and Spark
-sessions expose `session.default_builder` and use it when `builder` is omitted;
-StarRocks has no default and requires an explicit compatible builder. On the
-local session, the call above starts an asynchronous `Local()` build. Omitting
+The same table method is implemented by every backend, but only the local
+session has a default builder. Spark and StarRocks callers must pass a
+compatible third-party builder explicitly. On the local session, the call
+above starts an asynchronous `Local()` build. Omitting
 `wait_timeout` returns after submission. Build state can be inspected or
 awaited:
 
@@ -727,8 +687,8 @@ supports:
 - one local Rust builder; and
 - one native DataFusion session for build, query, and relational composition.
 
-The experimental Spark implementation supports one Iceberg catalog, initial
-IVF construction, and native DataFrame queries on Spark Classic. The
+The experimental Spark implementation supports one Iceberg catalog and native
+DataFrame queries on Spark Classic. The
 experimental StarRocks implementation supports query-only Iceberg reads over
 Arrow Flight SQL.
 Portable standalone SQL compilation, Spark Connect, remote index catalogs,

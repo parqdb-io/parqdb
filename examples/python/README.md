@@ -36,15 +36,15 @@ uv run python -m examples.python.local.index_lifecycle
 
 ## Spark
 
-[`spark/build_and_query.py`](spark/build_and_query.py) binds a caller-configured
-Spark Classic session and matching PyIceberg catalog, creates an IVF index when
-needed, and queries it as a native PySpark DataFrame.
+[`spark/query.py`](spark/query.py) binds a caller-configured Spark Classic
+session and matching PyIceberg catalog, then queries an already published IVF
+index with a native PySpark DataFrame plan.
 
 The Spark process must already be configured with the named Iceberg catalog.
 PyIceberg must resolve the same catalog name from its configuration:
 
 ```bash
-uv run --extra spark python -m examples.python.spark.build_and_query \
+uv run --extra spark python -m examples.python.spark.query \
   --index-catalog sqlite:///data/relify/catalog.sqlite \
   --iceberg-catalog lakehouse \
   --table analytics.documents \
@@ -55,7 +55,7 @@ uv run --extra spark python -m examples.python.spark.build_and_query \
 ## StarRocks
 
 [`starrocks/query.py`](starrocks/query.py) connects to an existing Arrow Flight
-SQL endpoint and queries a Spark-built Iceberg index. StarRocks and PyIceberg
+SQL endpoint and queries a published Iceberg index. StarRocks and PyIceberg
 must expose the same logical Iceberg catalog. The Flight SQL password is read
 from `STARROCKS_PASSWORD` by default:
 
