@@ -39,12 +39,14 @@ References:
 | --- | --- |
 | How does an application select the mode? | `relify.connect` selects embedded or client/server execution from the URI. |
 | Does the mode change user operations? | No. Both modes return the same public `Session`, `SourceTable`, and query types. |
+| Is asynchronous I/O supported? | Yes. `connect_async` provides matching `AsyncSession` and `AsyncSourceTable` facades for both deployment modes. |
 | Is compute execution a public plugin point? | No. The supported engine is DataFusion. External engines may use the open specification or a reference SQL compiler. |
 | Where is query meaning defined? | A transport-neutral `VectorQuery` or SQL string describes the request. |
 | Where is a request executed? | Both transports invoke the same session-service contract backed by DataFusion. |
 | What is the remote protocol? | A versioned HTTP/HTTPS API described by OpenAPI. It follows the Lance REST Catalog operation and route model. |
 | How are results transferred? | Metadata uses JSON. Query results use Arrow IPC streams over HTTP and are never converted to JSON by the SDK. |
 | Is the DataFusion Python API part of the shared contract? | No. Engine-native objects are an explicit embedded-only escape hatch. |
+| Are inherited DataFusion APIs preserved? | No. Relify exposes its own table, SQL, vector-query, index-lifecycle, and Arrow-result APIs instead of forwarding `SessionContext` or `DataFrame` methods. |
 | Is a catalog object exposed to applications? | No. `Session` provides table registration and discovery; index lifecycle remains table-centered. |
 | What does a path mean in client/server mode? | The execution process resolves it. A server must be able to access every registered URI. |
 | Who owns runtime resources? | Embedded applications own them in process; in client/server mode the server owns them and shares bounded caches across requests. |
@@ -103,6 +105,7 @@ and server administration are not additional application objects.
 | API | Result |
 | --- | --- |
 | `relify.connect(location, ...)` | One public `Session` facade backed by an in-process or HTTP transport. |
+| `await relify.connect_async(location, ...)` | The corresponding `AsyncSession` facade. |
 | `session.close()` | Release client or embedded resources. |
 | `with relify.connect(...) as session` | Close the session when the context exits. |
 
@@ -200,6 +203,41 @@ The execution methods accept either `VectorQuery` or a SQL string. Empty results
 retain the same schema in both modes. Streaming prevents a remote client from
 materializing a large result before consuming it.
 
+### Asynchronous API
+
+Asynchronous I/O is independent of the deployment mode:
+
+```python
+session = await relify.connect_async("https://relify.example.com")
+try:
+    documents = await session.table("documents")
+    query = documents.search(vector, column="embedding").limit(10)
+
+    async for batch in session.stream(query):
+        consume(batch)
+finally:
+    await session.close()
+```
+
+`AsyncSession` and `AsyncSourceTable` use the same operation names, request
+models, result schemas, and exceptions as their synchronous counterparts.
+Methods that only construct immutable queries remain synchronous. Operations
+that access the catalog, submit work, wait for builds, or consume results are
+awaitable.
+
+`AsyncSession.stream` returns an asynchronous iterator of
+`pyarrow.RecordBatch` values rather than pretending that the synchronous
+`pyarrow.RecordBatchReader` is awaitable. Cancelling the consuming task or
+closing the iterator cancels the HTTP request and propagates cancellation to
+query execution.
+
+Index construction is asynchronous at the server as well. Calling
+`await table.create_index(...)` returns after the build has been durably
+accepted, not after it has completed. Calling
+`await table.wait_for_index(...)` polls the same index status operation used by
+the synchronous API without blocking the event loop. The first protocol does
+not require WebSocket or server-sent-event state.
+
 ### Reference SQL compiler
 
 Support for an external SQL engine does not require a Relify Session, plugin,
@@ -221,11 +259,25 @@ The common `Session` must no longer inherit DataFusion `SessionContext`, and
 DataFusion plans, Python callbacks, UDF objects, and process-local providers
 cannot be serialized with stable semantics.
 
-The embedded package may retain an explicit API for obtaining its underlying
-DataFusion context. That API is outside the portable Relify contract, is not
-available on a client/server connection, and must not be used by Relify's own
-table, index, or query implementations. The normal SQL surface remains
-portable and executes through the session service.
+This deliberately removes inherited DataFusion methods from the Relify API,
+including arbitrary UDF and `TableProvider` registration, direct runtime and
+plan manipulation, and DataFrame chaining after `session.sql`. Relify does not
+proxy these methods or maintain a compatibility forwarding layer. In
+particular, `session.sql(statement)` returns a `pyarrow.Table`; it does not
+return a DataFusion `DataFrame`.
+
+An embedded session may expose its underlying context explicitly:
+
+```python
+context = session.datafusion_context()
+```
+
+This method raises `UnsupportedOperationError` on a client/server session. The
+returned object follows the bundled DataFusion API and is outside Relify's API
+compatibility and embedded/remote parity guarantees. Relify's own table, index,
+and query implementations must not depend on applications using this escape
+hatch. The normal SQL surface remains portable and executes through the session
+service.
 
 ### URI and path semantics
 
@@ -429,6 +481,10 @@ filter, projection, empty-result, explain, cancellation, and failure cases. It
 compares Arrow schemas, ordered vector results, index states, and public
 exception types. Tests may inspect plans separately because physical plan text
 can contain deployment-specific details.
+
+The same cases run through `AsyncSession`. Async streaming tests consume results
+incrementally, stop before end of stream, cancel an active task, and verify that
+the server releases the corresponding query.
 
 The client/server suite also restarts the server after registration and index
 publication. The same table and index must remain queryable without preserving
