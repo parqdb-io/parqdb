@@ -80,7 +80,7 @@ directly from `main` without creating `release/X.Y`.
 
 The remote-storage gate requires Docker for the MinIO S3 test and Java plus
 Maven for the MiniDFS HDFS test. The experimental Spark gate starts a local
-Spark session with the configured Iceberg runtime and verifies that Spark-built
+Spark session with the configured Iceberg runtime and verifies that published
 Iceberg index tables are queryable through both Spark and DataFusion. The
 experimental StarRocks gate requires a maintained StarRocks 3.5.1 or later
 deployment and shared Iceberg catalog configured as described in

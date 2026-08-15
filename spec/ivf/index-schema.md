@@ -1,179 +1,210 @@
-# IVF Index Spec
+# IVF Index Schema
 
-## Metadata
+## 1. Scope
 
-This spec defines index family `ivf` at `index-schema-version = 1`.
-It supports metric `l2_squared`.
+This document defines index family `ivf` at `index-schema-version = 1`.
+Supported metrics are `l2_squared` and `cosine`. Supported postings encodings
+are `source`, `lvq4`, and `lvq8`.
 
-An IVF index snapshot must contain exactly the following semantic parameters:
+An IVF index consists of one immutable shared centroid artifact and one logical
+index postings relation. Logical indexes over the same source state, vector
+field, dimension, metric, cluster count, and clustering profile may reference
+the same centroid artifact.
 
-| Key | Symbol | Definition |
-|---|---|---|
-| `dimension` | `D` | Vector dimension. |
-| `nlist` | `C` | Number of IVF clusters. |
-| `ntotal` | `N` | Number of indexed points. |
-| `store_vectors` | `S` | Whether postings contain exact source vectors. |
+## 2. Logical Index Metadata
 
-`dimension`, `nlist`, and `ntotal` must use the canonical base-10
-representation of a positive integer: one or more ASCII digits with no sign or
-leading zero. `dimension` and `nlist` must be no greater than `2147483647`;
-`ntotal` must be no greater than `9223372036854775807`. `nlist` must not exceed
-`ntotal`.
+An IVF snapshot must contain exactly these parameters:
 
-`store_vectors` must be `true` or `false`.
-
-`K` is the number of fields in the index snapshot's `source-key-fields` list and
-must be positive.
-
-The index snapshot must contain these index-table roles:
-
-| Requirement | Role name | Description |
-|---|---|---|
-| required | `ivf_centroids` | Stores one centroid for each IVF cluster. |
-| required | `ivf_postings` | Associates each source-key tuple with one IVF cluster. |
-
-No other index-table role is defined for IVF schema version `1`. Every
-resolved index table must be scoped to the selected index snapshot and expose
-the corresponding schema below.
-
-## Schema
-
-IVF means IVF-Flat: IVF cluster pruning followed by exact distance evaluation
-over vectors assigned to the selected clusters. When `store_vectors` is
-`true`, the postings table contains an exact copy of each indexed source vector
-and can evaluate candidate distances without reading source vectors. When it is
-`false`, candidate vectors are read from the source table.
-
-The schema is independent of query syntax and execution strategy.
-
-## Types
-
-The index tables use the following canonical Iceberg types:
-
-| Type | Description |
+| Key | Definition |
 |---|---|
-| `int` | Iceberg signed 32-bit integer. |
-| `long` | Iceberg signed 64-bit integer. |
-| `float` | Iceberg IEEE 754 binary32 value. |
-| `list<float>` | Iceberg ordered list with required `float` elements. |
-| `T_i` | Type variable for source unique-key field `i`, as defined below. |
+| `dimension` | Vector dimension `D`. |
+| `nlist` | Number of IVF clusters `C`. |
+| `ntotal` | Number of indexed source rows `N`. |
+| `posting_encoding` | `source`, `lvq4`, or `lvq8`. |
+| `shared_ivf_fingerprint` | Deterministic UUID identifying the shared IVF descriptor. |
+| `shared_ivf_uuid` | UUID of the referenced shared IVF artifact. |
+| `shared_ivf_metadata_location` | Absolute URI of its immutable metadata file. |
 
-The `cid` values must be non-negative even though their type is signed. This
-restriction does not apply to integer-valued source unique keys.
+`dimension`, `nlist`, and `ntotal` use the canonical base-10 representation of
+a positive integer, without a sign or leading zero. `dimension` and `nlist`
+must not exceed `2147483647`; `ntotal` must not exceed
+`9223372036854775807`; and `nlist` must not exceed `ntotal`.
 
-### Source-Key Types
+The snapshot contains exactly these index relation roles:
 
-The columns `key_1` through `key_K` correspond, in order, to the source
-unique-key fields. The numeric suffix defines the field's position in a
-composite key.
+| Role | Definition |
+|---|---|
+| `ivf_centroids` | The centroid relation named by the shared IVF metadata. |
+| `ivf_postings` | The postings owned by this logical index. |
 
-`T_i` is a schema type variable, not a persisted datatype. It denotes the exact
-canonical Iceberg type of source unique-key field `i` as reported by the host
-engine or mapped by the applicable non-Iceberg relation profile.
+The snapshot's `ivf_centroids` reference must equal the shared metadata's
+centroid reference. Its source, vector field, dimension, metric, and `nlist`
+must equal the corresponding shared descriptor fields.
 
-The `ivf_postings` table copies the source unique key so that each posting can
-be joined directly to its source row. Each unique-key field must use one of the
-following canonical Iceberg types:
+## 3. Shared IVF Metadata
 
-- `boolean`;
-- `int` or `long`;
-- `binary` or `fixed(L)`;
-- `string`;
-- `date`.
+A shared IVF metadata document has these fields:
 
-Only signed integer keys are supported. Types not listed above must not be used
-as source unique-key fields. All type parameters are part of the column type.
+| Field | Definition |
+|---|---|
+| `format-version` | `1`. |
+| `artifact-uuid` | Non-nil lowercase UUID of this immutable artifact. |
+| `fingerprint` | Fingerprint of `descriptor`. |
+| `location` | Absolute base URI assigned to the artifact. |
+| `created-at-ms` | Non-negative Unix epoch time in milliseconds. |
+| `descriptor` | Semantic identity defined below. |
+| `centroids` | Relation reference for `ivf_centroids`. |
 
-Key values are compared exactly under their declared canonical type. `string`,
-`binary`, and `fixed(L)` values are compared byte-for-byte.
+The descriptor contains, in order, `source`, `vector-field`, `dimension`,
+`metric`, `nlist`, and `clustering-profile-version`. Version `1` is the only
+clustering profile defined here.
 
-## Construction
+The fingerprint is UUIDv5 using namespace
+`2fb71e63-a27c-4fc5-9d6d-5070698dc398`. The UUID name is a semantic descriptor
+encoded as compact UTF-8 JSON with fields in the order above and no
+insignificant whitespace. Its `source` contains `profile` followed by `uri` for
+Parquet, or `profile`, `table-uuid`, and `snapshot-id` for Iceberg. Iceberg
+locator fields do not affect the fingerprint. JSON strings leave non-ASCII
+characters unescaped and use the shortest RFC 8259 escape for characters that
+must be escaped.
 
-Centroid training is implementation-specific. A writer may use any training
-algorithm that produces `nlist` finite centroids with the required dimension.
+The fingerprint is a lookup key. Readers must still compare every semantic
+descriptor field before using the artifact. Source references are compared by
+profile-defined exact state, so Iceberg locator changes do not prevent reuse.
 
-Every source row is assigned to the centroid with the smallest squared
-Euclidean distance under the arithmetic defined in
-[`query.md`](query.md#distance). Equal distances are resolved by the smaller
-`cid`.
+For a Parquet source, the files resolved by the descriptor URI must remain
+unchanged for the lifetime of the shared artifact. Reuse from the same URI is
+valid only while the resolved file set and every file's bytes remain unchanged.
+Appending, deleting, or overwriting a file, including changing a wildcard
+expansion, makes reuse invalid. Changed data must be published at a different
+canonical URI, which produces a different fingerprint. A URI change also
+produces a different source state even when the bytes are identical. Relify
+cannot detect an overwrite behind the same URI; such a mutation violates the
+source contract.
 
-The writer copies the source row's unique-key fields into the corresponding
-`key_i` fields of `ivf_postings`. When `store_vectors` is `true`, it also copies
-the source vector into `ivf_postings.vector`. Table row order is not
-significant.
+## 4. Types
 
-## Index Tables
+Index relations use these canonical Iceberg types:
 
-### IVF Centroids (`ivf_centroids`)
+| Type | Definition |
+|---|---|
+| `int` | Signed 32-bit integer. |
+| `long` | Signed 64-bit integer. |
+| `float` | IEEE 754 binary32 value. |
+| `list<float>` | Ordered list with required `float` elements. |
+| `binary` | Byte sequence. |
+| `T_i` | Exact source-key type for field `i`. |
 
-Each row in this index table represents one IVF cluster and its centroid.
+Source vectors may use `list<float>` or `list<double>`. Implementations convert
+vector elements to finite `float` values before training, assignment, encoding,
+or distance evaluation; a value that is not representable as finite `float` is
+invalid. The source relation itself is not rewritten.
 
-| Requirement | Field name | Type | Description |
-|---|---|---|---|
-| required | `cid` | `int` | Cluster ID; primary key. |
-| required | `centroid` | `list<float>` | Cluster centroid. |
+Each `key_i` corresponds to source key field `i` and uses the same canonical
+type and value. Supported source-key types are `boolean`, `int`, `long`,
+`binary`, `fixed(L)`, `string`, and `date`. String, binary, and fixed values
+are compared byte-for-byte. Integer key types are signed.
 
-The table must satisfy the following requirements:
+## 5. Shared Centroids
 
-1. `cid` is in the range `[0, C)`.
-2. `centroid` contains exactly `D` values.
-3. Every value in `centroid` is finite.
-4. The table contains exactly `C` rows.
+`ivf_centroids` has this schema:
 
-### IVF Postings (`ivf_postings`)
+| Field | Type | Constraint |
+|---|---|---|
+| `cid` | `int` | Required; unique; in `[0, C)`. |
+| `centroid` | `list<float>` | Required; exactly `D` finite elements. |
 
-Each row in this index table represents one indexed point and its IVF cluster
-assignment.
+The relation contains exactly `C` rows. Centroid training is implementation
+specific. A source row is assigned to the centroid with the smallest squared
+Euclidean distance; equal distances select the smaller `cid`.
 
-| Requirement | Field name | Type | Description |
-|---|---|---|---|
-| required | `cid` | `int` | Cluster ID; references `ivf_centroids.cid`. |
-| required | `key_i`, `i = 1..K` | `T_i` | Source unique-key field `i`. |
-| required when `store_vectors = true` | `vector` | `list<float>` | Exact source vector. |
+For `cosine`, source vectors are normalized before training and assignment.
+Training persists the centroids produced from those normalized inputs. A
+centroid is generally their arithmetic mean and is not required to have unit
+norm. Assignment and query routing use squared-L2 distance to the persisted
+centroid as written; implementations must not normalize it again.
 
-The table must satisfy the following requirements:
+## 6. Postings
 
-1. Every `cid` resolves to exactly one row in `ivf_centroids`.
-2. The tuple `(key_1, ..., key_K)` is unique.
-3. Each `key_i` has the same canonical Iceberg type, type parameters, and value
-   as its corresponding source unique-key field.
-4. When `store_vectors` is `true`, `vector` has exactly the same value as the
-   corresponding source vector. When `store_vectors` is `false`, the `vector`
-   field must be absent.
-5. The table contains exactly `N` rows.
+Every `ivf_postings` row starts with:
 
-After cluster pruning, an execution path can evaluate exact candidate distances
-from `ivf_postings.vector` when vectors are stored. Otherwise it joins selected
-source-key tuples to the source table and reads source vectors there.
+| Field | Type | Constraint |
+|---|---|---|
+| `cid` | `int` | Required; references `ivf_centroids.cid`. |
+| `key_i`, `i = 1..K` | `T_i` | Required; source key field `i`. |
 
-## Source Table
+Additional fields depend on `posting_encoding`:
 
-The indexed source is the host-engine table bound by the selected index
-snapshot as defined by [`../metadata.md`](../metadata.md). The snapshot's
-`vector-field` names the source vector column, and its ordered
-`source-key-fields` list names the source unique key.
+| Encoding | Additional fields | Candidate vector |
+|---|---|---|
+| `source` | None | Canonical vector read from the source row. |
+| `lvq4` | `offset: float`, `scale: float`, `code: binary` | LVQ4 reconstruction. |
+| `lvq8` | `offset: float`, `scale: float`, `code: binary` | LVQ8 reconstruction. |
 
-IVF schema version 1 defines a full index over the selected source table:
+Fields not listed for the selected encoding must be absent. Every postings
+field is required. The relation contains exactly `N` rows, each source key
+tuple occurs exactly once, and every posting resolves to exactly one source
+row. Row position and physical file order have no semantic meaning.
 
-1. the source table contains exactly `N` rows;
-2. every source row has one unique, non-null source-key tuple;
-3. every source row corresponds to exactly one `ivf_postings` row; and
-4. every `ivf_postings` row resolves to exactly one source row.
+Full source vectors are never stored in postings.
 
-Writers may rely on source-key uniqueness and are not required to verify it
-while building an index.
+## 7. LVQ Encoding
 
-### Vector Column
+LVQ encodes each canonical source vector independently. For vector `x`:
 
-The vector field of every source row must:
+```text
+offset = min(x_i)
+upper  = max(x_i)
+max_code = 15 for lvq4, otherwise 255
+scale    = (upper - offset) / max_code
+```
 
-1. have canonical type `list<float>`; its schema may declare elements optional;
-2. be non-null;
-3. contain exactly `D` elements;
-4. contain only non-null, finite elements.
+When `upper > offset`:
 
-The source may contain additional payload or metadata columns. Those columns
-are not copied into the IVF index.
+```text
+code_i = clamp(
+    round(max_code * (x_i - offset) / (upper - offset)),
+    0,
+    max_code
+)
+```
 
-The source table must not contain a column named `_distance`, which is
-reserved by the IVF public query result.
+`round` selects the nearest integer and resolves an exact half toward the
+larger integer. Implementations use sufficient intermediate precision to
+apply this rule before storing the code. When `upper = offset`, every code is
+zero. The inclusive range `[0, max_code]` intentionally provides 16 distinct
+codes for LVQ4 and 256 for LVQ8.
+
+LVQ8 stores `code_i` in byte `i`. LVQ4 stores even dimension `i` in the low
+nibble of byte `i / 2` and the following odd dimension in its high nibble. An
+unused final high nibble is zero. Code lengths are `D` bytes for LVQ8 and
+`ceil(D / 2)` bytes for LVQ4.
+
+The reconstructed value is:
+
+```text
+x_hat_i = offset + scale * code_i
+```
+
+`offset`, `scale`, and reconstructed values are finite; `scale` is
+non-negative. For `cosine`, LVQ encodes the normalized source vector and the
+reconstruction is not normalized again.
+
+## 8. Source Contract
+
+The source relation contains exactly `N` rows. Its ordered source-key fields
+form a unique, non-null key. Its vector field is non-null; every vector has
+exactly `D` non-null elements that produce finite canonical `float` values.
+Cosine vectors additionally have a non-zero norm.
+
+The source may contain additional payload columns. They are not copied into
+the index. `_distance` is reserved and must not be a source field.
+
+Writers may rely on source-key uniqueness and are not required to verify it.
+
+## 9. Physical Layout
+
+The logical schema does not assign meaning to file boundaries, row groups,
+Parquet encodings, compression, or row order. Parquet LVQ `code` is stored as
+`BYTE_ARRAY`; PLAIN encoding without a dictionary is recommended. Writers may
+partition postings by `cid` without changing index semantics.

@@ -31,9 +31,9 @@ ROOT = Path(__file__).parents[2]
             "index lifecycle:",
         ),
         (
-            "examples.python.spark.build_and_query",
+            "examples.python.spark.query",
             ("--help",),
-            "existing Spark Iceberg catalog",
+            "Query a published Relify index",
         ),
         (
             "examples.python.starrocks.query",

@@ -202,24 +202,10 @@ an IVF query profile requires the complete semantics in
 
 ## Index Builders
 
-Construction is a separate extension boundary:
-
-```python
-documents.create_index(
-    "documents_embedding",
-    column="embedding",
-    key=["document_id"],
-    config=relify.IVF(nlist=4096),
-    builder=relify.experimental.Spark(spark),
-)
-```
-
-The query session resolves and pins the source relation, but the builder owns
-training, assignment, and physical writes. This permits a StarRocks table to
-use Spark for construction without making Spark a StarRocks backend feature.
-Local and Spark sessions provide `Local()` and `Spark(session.spark)` as
-defaults; query sessions without a natural builder require the explicit
-argument.
+Construction is a separate extension boundary. The query session resolves and
+pins the source relation, while the builder owns training, assignment, and
+physical writes. The local session provides `Local()` by default. Experimental
+query sessions have no default builder.
 
 Third-party builders implement `relify.builders.IndexBuilder`. Their
 `BuilderCapabilities` contain typed `BuildProfile` values:
