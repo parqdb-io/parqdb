@@ -13,9 +13,9 @@ pub enum Error {
     /// The requested index does not exist.
     #[error("index not found: {0}")]
     IndexNotFound(IndexIdentifier),
-    /// The requested shared IVF does not exist or is not ready.
-    #[error("shared IVF not found: {0}")]
-    SharedIvfNotFound(String),
+    /// The requested IVF centroid artifact does not exist or is not ready.
+    #[error("IVF centroid artifact not found: {0}")]
+    IvfCentroidsNotFound(String),
     /// An index with the same identifier already exists.
     #[error("index already exists: {0}")]
     AlreadyExists(IndexIdentifier),
@@ -34,9 +34,9 @@ pub enum Error {
     /// A compare-and-swap catalog commit lost a concurrent update.
     #[error("catalog commit conflict: {0}")]
     CommitConflict(IndexIdentifier),
-    /// A shared-IVF claim is no longer owned by the caller.
-    #[error("shared IVF claim was lost: {0}")]
-    SharedIvfClaimLost(String),
+    /// An IVF centroid claim is no longer owned by the caller.
+    #[error("IVF centroid claim was lost: {0}")]
+    IvfCentroidsClaimLost(String),
     /// An index metadata document is invalid.
     #[error("invalid index metadata: {0}")]
     InvalidMetadata(String),

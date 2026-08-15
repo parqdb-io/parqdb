@@ -146,7 +146,7 @@ impl PyNativeIndexRepository {
                         .select(&[], &source, identifier.as_ref(), column.as_deref())
                         .await?;
                     let snapshot = loaded.metadata.current_snapshot()?;
-                    repository.load_snapshot_shared_ivf(snapshot).await?;
+                    repository.load_snapshot_ivf_centroids(snapshot).await?;
                     Ok::<_, relify_index::Error>(loaded)
                 })
             })

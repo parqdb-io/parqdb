@@ -9,8 +9,8 @@ mod sqlite;
 mod table;
 
 pub use catalog::{
-    CatalogEntry, CatalogTombstone, IndexCatalog, SharedIvfCatalogEntry, SharedIvfClaim,
-    SharedIvfClaimResult,
+    CatalogEntry, CatalogTombstone, IndexCatalog, IvfCentroidsCatalogEntry, IvfCentroidsClaim,
+    IvfCentroidsClaimResult,
 };
 pub use error::{Error, Result};
 pub use identifier::{IndexIdentifier, TableIdentifier};

@@ -6,10 +6,10 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-_SHARED_IVF_FINGERPRINT_NAMESPACE = uuid.UUID("2fb71e63-a27c-4fc5-9d6d-5070698dc398")
+_IVF_CENTROIDS_FINGERPRINT_NAMESPACE = uuid.UUID("2fb71e63-a27c-4fc5-9d6d-5070698dc398")
 
 
-def write_shared_ivf_metadata(
+def write_ivf_centroids_metadata(
     metadata_root: Path,
     *,
     source: Mapping[str, Any],
@@ -19,7 +19,7 @@ def write_shared_ivf_metadata(
     metric: str = "l2_squared",
     nlist: int = 2,
 ) -> dict[str, str]:
-    """Write one valid managed shared-IVF document for backend tests."""
+    """Write one valid managed IVF centroid document for backend tests."""
     if source["profile"] == "parquet":
         fingerprint_source: dict[str, object] = {
             "profile": "parquet",
@@ -49,7 +49,7 @@ def write_shared_ivf_metadata(
     }
     fingerprint = str(
         uuid.uuid5(
-            _SHARED_IVF_FINGERPRINT_NAMESPACE,
+            _IVF_CENTROIDS_FINGERPRINT_NAMESPACE,
             json.dumps(
                 fingerprint_descriptor,
                 ensure_ascii=False,
@@ -78,7 +78,7 @@ def write_shared_ivf_metadata(
         encoding="utf-8",
     )
     return {
-        "shared_ivf_fingerprint": fingerprint,
-        "shared_ivf_uuid": str(artifact_uuid),
-        "shared_ivf_metadata_location": metadata_location.as_uri(),
+        "ivf_centroids_fingerprint": fingerprint,
+        "ivf_centroids_uuid": str(artifact_uuid),
+        "ivf_centroids_metadata_location": metadata_location.as_uri(),
     }

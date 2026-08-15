@@ -31,12 +31,12 @@
       "metric": "l2_squared",
       "parameters": {
         "dimension": "3",
+        "ivf_centroids_fingerprint": "58346df5-81a6-555f-92ee-b22579cf29a8",
+        "ivf_centroids_metadata_location": "s3://relify-fixtures/v1/valid/lvq4/ivf-centroids.metadata.json",
+        "ivf_centroids_uuid": "ac413538-8613-4ed5-8411-a9579eda38da",
         "nlist": "2",
         "ntotal": "3",
-        "posting_encoding": "lvq4",
-        "shared_ivf_fingerprint": "58346df5-81a6-555f-92ee-b22579cf29a8",
-        "shared_ivf_metadata_location": "s3://relify-fixtures/v1/valid/lvq4/shared-ivf.metadata.json",
-        "shared_ivf_uuid": "ac413538-8613-4ed5-8411-a9579eda38da"
+        "posting_encoding": "lvq4"
       },
       "sequence-number": 1,
       "snapshot-id": 901,

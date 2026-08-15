@@ -148,9 +148,12 @@ impl LocalSession {
             Error::InvalidMetadata(format!("unsupported IVF metric: {}", snapshot.metric))
         })?;
         let query = crate::vector::transform_query(&request.query, metric)?;
-        let shared = self.indexes.load_snapshot_shared_ivf(snapshot).await?;
+        let centroid_artifact = self.indexes.load_snapshot_ivf_centroids(snapshot).await?;
         let postings_relation_key = relation_key(index_relation(snapshot, "ivf_postings")?);
-        let centroid_cache_key = format!("{}\0ivf_centroids", shared.entry.metadata_location);
+        let centroid_cache_key = format!(
+            "{}\0ivf_centroids",
+            centroid_artifact.entry.metadata_location
+        );
         let (cluster_selection, nlist) = self
             .resolve_cluster_selection(snapshot, &centroid_cache_key, &query, request.nprobe)
             .await?;

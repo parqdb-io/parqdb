@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use object_store::ObjectMeta;
 use relify_catalog::{CatalogTombstone, IndexCatalog};
-use relify_meta::{RelationReference, shared_ivf_reference};
+use relify_meta::{RelationReference, ivf_centroids_reference};
 use relify_storage::Warehouse;
 use uuid::Uuid;
 
@@ -165,7 +165,7 @@ async fn tombstone_references(
             }
             Err(relify_index::Error::InvalidMetadata(_)) => {
                 let metadata = metadata_store
-                    .load_shared_ivf(&tombstone.metadata_location)
+                    .load_ivf_centroids(&tombstone.metadata_location)
                     .await?;
                 if let RelationReference::Parquet { uri } = &metadata.centroids
                     && let Some(root) = snapshot_root(warehouse, uri)?
@@ -200,9 +200,9 @@ async fn reachable_locations(
         }
         reachable.extend(index_metadata_references(warehouse, &metadata)?);
     }
-    for entry in catalog.list_shared_ivf()? {
+    for entry in catalog.list_ivf_centroids()? {
         let metadata = metadata_store
-            .load_shared_ivf(&entry.metadata_location)
+            .load_ivf_centroids(&entry.metadata_location)
             .await?;
         if warehouse.managed(&entry.metadata_location).is_ok() {
             reachable.insert(entry.metadata_location);
@@ -222,10 +222,10 @@ fn index_metadata_references(
 ) -> Result<HashSet<String>> {
     let mut references = HashSet::new();
     for snapshot in &metadata.snapshots {
-        if let Ok(shared) = shared_ivf_reference(snapshot)
-            && warehouse.managed(&shared.metadata_location).is_ok()
+        if let Ok(centroids) = ivf_centroids_reference(snapshot)
+            && warehouse.managed(&centroids.metadata_location).is_ok()
         {
-            references.insert(shared.metadata_location);
+            references.insert(centroids.metadata_location);
         }
         for reference in snapshot.index_relations.values() {
             let RelationReference::Parquet { uri } = reference else {

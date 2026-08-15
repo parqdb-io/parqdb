@@ -10,7 +10,7 @@ import relify
 from _support import WAIT, build_index, register_source, write_vectors
 
 
-def test_refresh_reuses_shared_ivf_for_the_same_immutable_source(
+def test_refresh_reuses_ivf_centroids_for_the_same_immutable_source(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "vectors.parquet"
@@ -37,9 +37,9 @@ def test_refresh_reuses_shared_ivf_for_the_same_immutable_source(
     assert snapshots[1]["parameters"]["nlist"] == "2"
     assert snapshots[1]["parameters"]["ntotal"] == "3"
     for field in (
-        "shared_ivf_fingerprint",
-        "shared_ivf_uuid",
-        "shared_ivf_metadata_location",
+        "ivf_centroids_fingerprint",
+        "ivf_centroids_uuid",
+        "ivf_centroids_metadata_location",
     ):
         assert snapshots[1]["parameters"][field] == snapshots[0]["parameters"][field]
     assert (
@@ -82,8 +82,8 @@ def test_refresh_can_change_ivf_configuration(tmp_path: Path) -> None:
     assert metadata["snapshots"][0]["parameters"]["posting_encoding"] == "source"
     assert metadata["snapshots"][1]["parameters"]["posting_encoding"] == "source"
     assert (
-        metadata["snapshots"][0]["parameters"]["shared_ivf_fingerprint"]
-        != metadata["snapshots"][1]["parameters"]["shared_ivf_fingerprint"]
+        metadata["snapshots"][0]["parameters"]["ivf_centroids_fingerprint"]
+        != metadata["snapshots"][1]["parameters"]["ivf_centroids_fingerprint"]
     )
 
 

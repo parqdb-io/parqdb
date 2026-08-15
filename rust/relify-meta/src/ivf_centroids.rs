@@ -49,7 +49,7 @@ impl DistanceMetric {
 /// Semantic identity of one reusable IVF centroid model.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
-pub struct SharedIvfDescriptor {
+pub struct IvfCentroidsDescriptor {
     /// Exact source-table state used for training.
     pub source: RelationReference,
     /// Source column containing vectors.
@@ -89,15 +89,15 @@ struct FingerprintDescriptor<'a> {
     clustering_profile_version: i32,
 }
 
-impl SharedIvfDescriptor {
+impl IvfCentroidsDescriptor {
     /// Validates the descriptor independently.
     pub fn validate(&self) -> Result<()> {
         self.source.validate()?;
         if self.vector_field.is_empty() {
-            return invalid("shared IVF vector-field must be non-empty");
+            return invalid("IVF centroids vector-field must be non-empty");
         }
         if self.dimension <= 0 || self.nlist <= 0 || self.clustering_profile_version <= 0 {
-            return invalid("shared IVF dimension, nlist, and profile version must be positive");
+            return invalid("IVF centroids dimension, nlist, and profile version must be positive");
         }
         Ok(())
     }
@@ -140,11 +140,11 @@ impl SharedIvfDescriptor {
     }
 }
 
-/// Immutable metadata document for one shared IVF centroid artifact.
+/// Immutable metadata document for one reusable IVF centroid artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
-pub struct SharedIvfMetadata {
-    /// Shared-IVF metadata format version.
+pub struct IvfCentroidsMetadata {
+    /// IVF-centroid metadata format version.
     pub format_version: i32,
     /// Stable artifact UUID.
     #[serde(with = "lowercase_uuid")]
@@ -156,13 +156,13 @@ pub struct SharedIvfMetadata {
     /// Artifact creation time as Unix epoch milliseconds.
     pub created_at_ms: i64,
     /// Semantic identity of the centroid model.
-    pub descriptor: SharedIvfDescriptor,
+    pub descriptor: IvfCentroidsDescriptor,
     /// Exact relation containing the centroid rows.
     pub centroids: RelationReference,
 }
 
-impl SharedIvfMetadata {
-    /// Parses and validates one shared-IVF metadata document.
+impl IvfCentroidsMetadata {
+    /// Parses and validates one IVF-centroids metadata document.
     pub fn from_json_slice(bytes: &[u8]) -> Result<Self> {
         let metadata: Self =
             serde_json::from_slice(bytes).map_err(|error| crate::Error(error.to_string()))?;
@@ -174,38 +174,38 @@ impl SharedIvfMetadata {
     pub fn validate(&self) -> Result<()> {
         if self.format_version != 1 {
             return invalid(format!(
-                "unsupported shared IVF format-version {}",
+                "unsupported IVF centroids format-version {}",
                 self.format_version
             ));
         }
         validate_metadata_location(&self.location)?;
         if self.artifact_uuid.is_nil() {
-            return invalid("shared IVF artifact UUID must not be nil");
+            return invalid("IVF centroid artifact UUID must not be nil");
         }
         if self.created_at_ms < 0 {
-            return invalid("shared IVF creation time must be non-negative");
+            return invalid("IVF centroids creation time must be non-negative");
         }
         self.descriptor.validate()?;
         if self.fingerprint != self.descriptor.fingerprint()? {
-            return invalid("shared IVF fingerprint does not match its descriptor");
+            return invalid("IVF centroid fingerprint does not match its descriptor");
         }
         self.centroids.validate()?;
         Ok(())
     }
 }
 
-/// Reference to a shared IVF artifact stored in logical-index parameters.
+/// Reference to an IVF centroid artifact stored in logical-index parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SharedIvfReference {
+pub struct IvfCentroidsReference {
     /// Deterministic descriptor fingerprint.
     pub fingerprint: String,
     /// Stable artifact UUID.
     pub artifact_uuid: Uuid,
-    /// Immutable shared-IVF metadata location.
+    /// Immutable IVF-centroids metadata location.
     pub metadata_location: String,
 }
 
-impl SharedIvfReference {
+impl IvfCentroidsReference {
     /// Creates and validates a reference.
     pub fn new(
         fingerprint: impl Into<String>,
@@ -224,12 +224,13 @@ impl SharedIvfReference {
     /// Validates canonical field encodings.
     pub fn validate(&self) -> Result<()> {
         if self.artifact_uuid.is_nil() {
-            return invalid("shared IVF artifact UUID must not be nil");
+            return invalid("IVF centroid artifact UUID must not be nil");
         }
-        let parsed = Uuid::parse_str(&self.fingerprint)
-            .map_err(|_| crate::Error("shared IVF fingerprint must be a lowercase UUID".into()))?;
+        let parsed = Uuid::parse_str(&self.fingerprint).map_err(|_| {
+            crate::Error("IVF centroid fingerprint must be a lowercase UUID".into())
+        })?;
         if parsed.to_string() != self.fingerprint {
-            return invalid("shared IVF fingerprint must be a lowercase UUID");
+            return invalid("IVF centroid fingerprint must be a lowercase UUID");
         }
         validate_metadata_location(&self.metadata_location)
     }
@@ -239,8 +240,8 @@ impl SharedIvfReference {
 mod tests {
     use super::*;
 
-    fn parquet_descriptor() -> SharedIvfDescriptor {
-        SharedIvfDescriptor {
+    fn parquet_descriptor() -> IvfCentroidsDescriptor {
+        IvfCentroidsDescriptor {
             source: RelationReference::Parquet {
                 uri: "s3://relify-fixtures/v1/valid/source/".into(),
             },
@@ -263,19 +264,19 @@ mod tests {
     }
 
     #[test]
-    fn shared_metadata_and_references_reject_mismatched_identity() {
+    fn metadata_and_references_reject_mismatched_identity() {
         let descriptor = parquet_descriptor();
         let artifact_uuid = Uuid::new_v4();
         let fingerprint = descriptor.fingerprint().unwrap();
-        let mut metadata = SharedIvfMetadata {
+        let mut metadata = IvfCentroidsMetadata {
             format_version: 1,
             artifact_uuid,
             fingerprint: fingerprint.clone(),
-            location: "s3://relify-fixtures/shared/".into(),
+            location: "s3://relify-fixtures/centroid-artifacts/".into(),
             created_at_ms: 1,
             descriptor,
             centroids: RelationReference::Parquet {
-                uri: "s3://relify-fixtures/shared/centroids/".into(),
+                uri: "s3://relify-fixtures/centroid-artifacts/centroids/".into(),
             },
         };
 
@@ -283,20 +284,20 @@ mod tests {
         metadata.fingerprint = Uuid::new_v4().to_string();
         assert!(metadata.validate().is_err());
         assert!(
-            SharedIvfReference::new(
+            IvfCentroidsReference::new(
                 fingerprint.to_uppercase(),
                 artifact_uuid,
                 &metadata.location
             )
             .is_err()
         );
-        assert!(SharedIvfReference::new(fingerprint, artifact_uuid, "relative.json").is_err());
+        assert!(IvfCentroidsReference::new(fingerprint, artifact_uuid, "relative.json").is_err());
     }
 
     #[test]
     fn iceberg_fingerprint_ignores_locator_changes() {
         let table_uuid = Uuid::new_v4();
-        let first = SharedIvfDescriptor {
+        let first = IvfCentroidsDescriptor {
             source: RelationReference::Iceberg {
                 catalog: "first".into(),
                 namespace: vec!["analytics".into()],

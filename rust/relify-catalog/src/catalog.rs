@@ -1,4 +1,4 @@
-use relify_meta::{IndexMetadata, RelationReference, SharedIvfDescriptor, SharedIvfMetadata};
+use relify_meta::{IndexMetadata, IvfCentroidsDescriptor, IvfCentroidsMetadata, RelationReference};
 use uuid::Uuid;
 
 use crate::{Error, IndexIdentifier, Result};
@@ -24,33 +24,33 @@ pub struct CatalogTombstone {
     pub unreachable_since_ms: i64,
 }
 
-/// One ready shared-IVF catalog entry.
+/// One ready reusable IVF centroid catalog entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SharedIvfCatalogEntry {
+pub struct IvfCentroidsCatalogEntry {
     /// Deterministic descriptor fingerprint.
     pub fingerprint: String,
     /// Stable artifact UUID.
     pub artifact_uuid: Uuid,
-    /// URI of the immutable shared-IVF metadata document.
+    /// URI of the immutable IVF-centroid metadata document.
     pub metadata_location: String,
 }
 
-/// Ownership token for one in-progress shared-IVF build.
+/// Ownership token for one in-progress IVF centroid build.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SharedIvfClaim {
+pub struct IvfCentroidsClaim {
     /// Deterministic descriptor fingerprint.
     pub fingerprint: String,
     /// Opaque build-owner UUID.
     pub owner: Uuid,
 }
 
-/// Result of attempting to claim one shared-IVF descriptor.
+/// Result of attempting to claim one IVF centroid descriptor.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SharedIvfClaimResult {
+pub enum IvfCentroidsClaimResult {
     /// A complete compatible artifact already exists.
-    Ready(SharedIvfCatalogEntry),
+    Ready(IvfCentroidsCatalogEntry),
     /// The caller owns construction for this fingerprint.
-    Claimed(SharedIvfClaim),
+    Claimed(IvfCentroidsClaim),
     /// Another live owner is constructing the artifact.
     Busy {
         /// Unix epoch milliseconds when the observed lease expires.
@@ -132,47 +132,47 @@ pub trait IndexCatalog: Send + Sync {
         Err(Error::UnsupportedOperation("purge_tombstone"))
     }
 
-    /// Loads one ready shared-IVF entry by deterministic fingerprint.
-    fn load_shared_ivf(&self, _fingerprint: &str) -> Result<SharedIvfCatalogEntry> {
-        Err(Error::UnsupportedOperation("load_shared_ivf"))
+    /// Loads one ready IVF centroid entry by deterministic fingerprint.
+    fn load_ivf_centroids(&self, _fingerprint: &str) -> Result<IvfCentroidsCatalogEntry> {
+        Err(Error::UnsupportedOperation("load_ivf_centroids"))
     }
 
     /// Claims construction or returns the current state for one descriptor.
-    fn claim_shared_ivf(
+    fn claim_ivf_centroids(
         &self,
-        _descriptor: &SharedIvfDescriptor,
+        _descriptor: &IvfCentroidsDescriptor,
         _owner: Uuid,
         _lease_duration_ms: i64,
-    ) -> Result<SharedIvfClaimResult> {
-        Err(Error::UnsupportedOperation("claim_shared_ivf"))
+    ) -> Result<IvfCentroidsClaimResult> {
+        Err(Error::UnsupportedOperation("claim_ivf_centroids"))
     }
 
-    /// Extends a live shared-IVF build lease.
-    fn renew_shared_ivf_claim(
+    /// Extends a live IVF centroid build lease.
+    fn renew_ivf_centroids_claim(
         &self,
-        _claim: &SharedIvfClaim,
+        _claim: &IvfCentroidsClaim,
         _lease_duration_ms: i64,
     ) -> Result<()> {
-        Err(Error::UnsupportedOperation("renew_shared_ivf_claim"))
+        Err(Error::UnsupportedOperation("renew_ivf_centroids_claim"))
     }
 
-    /// Publishes an immutable shared-IVF artifact owned by `claim`.
-    fn publish_shared_ivf(
+    /// Publishes an immutable IVF centroid artifact owned by `claim`.
+    fn publish_ivf_centroids(
         &self,
-        _claim: &SharedIvfClaim,
+        _claim: &IvfCentroidsClaim,
         _metadata_location: &str,
-        _metadata: &SharedIvfMetadata,
-    ) -> Result<SharedIvfCatalogEntry> {
-        Err(Error::UnsupportedOperation("publish_shared_ivf"))
+        _metadata: &IvfCentroidsMetadata,
+    ) -> Result<IvfCentroidsCatalogEntry> {
+        Err(Error::UnsupportedOperation("publish_ivf_centroids"))
     }
 
     /// Records a failed build and releases its claim for retry.
-    fn abandon_shared_ivf(&self, _claim: &SharedIvfClaim, _error: &str) -> Result<()> {
-        Err(Error::UnsupportedOperation("abandon_shared_ivf"))
+    fn abandon_ivf_centroids(&self, _claim: &IvfCentroidsClaim, _error: &str) -> Result<()> {
+        Err(Error::UnsupportedOperation("abandon_ivf_centroids"))
     }
 
-    /// Lists all ready shared-IVF artifacts.
-    fn list_shared_ivf(&self) -> Result<Vec<SharedIvfCatalogEntry>> {
-        Err(Error::UnsupportedOperation("list_shared_ivf"))
+    /// Lists all ready IVF centroid artifacts.
+    fn list_ivf_centroids(&self) -> Result<Vec<IvfCentroidsCatalogEntry>> {
+        Err(Error::UnsupportedOperation("list_ivf_centroids"))
     }
 }

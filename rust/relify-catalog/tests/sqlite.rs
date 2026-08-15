@@ -4,10 +4,12 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Barrier};
 
 use relify_catalog::{
-    CatalogTombstone, Error, IndexCatalog, IndexIdentifier, SharedIvfClaimResult, SqliteCatalog,
+    CatalogTombstone, Error, IndexCatalog, IndexIdentifier, IvfCentroidsClaimResult, SqliteCatalog,
     TableCatalog, TableDefinition, TableIdentifier,
 };
-use relify_meta::{DistanceMetric, RelationReference, SharedIvfDescriptor, SharedIvfMetadata};
+use relify_meta::{
+    DistanceMetric, IvfCentroidsDescriptor, IvfCentroidsMetadata, RelationReference,
+};
 use rusqlite::Connection;
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -24,212 +26,212 @@ fn sqlite_catalog_satisfies_index_catalog_contract() {
 }
 
 #[test]
-fn shared_ivf_claim_publish_and_lookup_are_atomic() {
+fn ivf_centroids_claim_publish_and_lookup_are_atomic() {
     let temporary = TempDir::new().unwrap();
     let catalog = SqliteCatalog::open(temporary.path().join("catalog.sqlite")).unwrap();
-    let descriptor = shared_ivf_descriptor(temporary.path());
+    let descriptor = ivf_centroids_descriptor(temporary.path());
     let first_owner = Uuid::new_v4();
     let second_owner = Uuid::new_v4();
     let claim = match catalog
-        .claim_shared_ivf(&descriptor, first_owner, 60_000)
+        .claim_ivf_centroids(&descriptor, first_owner, 60_000)
         .unwrap()
     {
-        SharedIvfClaimResult::Claimed(claim) => claim,
+        IvfCentroidsClaimResult::Claimed(claim) => claim,
         other => panic!("first caller must own the claim, received {other:?}"),
     };
     assert!(matches!(
         catalog
-            .claim_shared_ivf(&descriptor, second_owner, 60_000)
+            .claim_ivf_centroids(&descriptor, second_owner, 60_000)
             .unwrap(),
-        SharedIvfClaimResult::Busy { .. }
+        IvfCentroidsClaimResult::Busy { .. }
     ));
-    catalog.renew_shared_ivf_claim(&claim, 60_000).unwrap();
+    catalog.renew_ivf_centroids_claim(&claim, 60_000).unwrap();
 
-    let metadata = shared_ivf_metadata(temporary.path(), &descriptor);
-    let metadata_location = file_uri(&temporary.path().join("shared-v1.metadata.json"));
+    let metadata = ivf_centroids_metadata(temporary.path(), &descriptor);
+    let metadata_location = file_uri(&temporary.path().join("ivf-centroids-v1.metadata.json"));
     assert!(matches!(
-        catalog.publish_shared_ivf(&claim, "shared-v1.metadata.json", &metadata),
+        catalog.publish_ivf_centroids(&claim, "ivf-centroids-v1.metadata.json", &metadata),
         Err(Error::InvalidMetadata(_))
     ));
     let published = catalog
-        .publish_shared_ivf(&claim, &metadata_location, &metadata)
+        .publish_ivf_centroids(&claim, &metadata_location, &metadata)
         .unwrap();
 
     assert_eq!(
-        catalog.load_shared_ivf(&published.fingerprint).unwrap(),
+        catalog.load_ivf_centroids(&published.fingerprint).unwrap(),
         published
     );
     assert_eq!(
-        catalog.list_shared_ivf().unwrap(),
+        catalog.list_ivf_centroids().unwrap(),
         std::slice::from_ref(&published)
     );
     assert!(matches!(
         catalog
-            .claim_shared_ivf(&descriptor, second_owner, 60_000)
+            .claim_ivf_centroids(&descriptor, second_owner, 60_000)
             .unwrap(),
-        SharedIvfClaimResult::Ready(entry) if entry == published
+        IvfCentroidsClaimResult::Ready(entry) if entry == published
     ));
 }
 
 #[test]
-fn shared_ivf_listing_returns_multiple_ready_entries_in_fingerprint_order() {
+fn ivf_centroids_listing_returns_multiple_ready_entries_in_fingerprint_order() {
     let temporary = TempDir::new().unwrap();
     let catalog = SqliteCatalog::open(temporary.path().join("catalog.sqlite")).unwrap();
     let mut descriptors = [
-        shared_ivf_descriptor(temporary.path()),
-        shared_ivf_descriptor(temporary.path()),
+        ivf_centroids_descriptor(temporary.path()),
+        ivf_centroids_descriptor(temporary.path()),
     ];
     descriptors[1].vector_field = "other_embedding".into();
     let mut published = Vec::new();
 
     for (position, descriptor) in descriptors.iter().enumerate() {
         let claim = match catalog
-            .claim_shared_ivf(descriptor, Uuid::new_v4(), 60_000)
+            .claim_ivf_centroids(descriptor, Uuid::new_v4(), 60_000)
             .unwrap()
         {
-            SharedIvfClaimResult::Claimed(claim) => claim,
+            IvfCentroidsClaimResult::Claimed(claim) => claim,
             other => panic!("distinct descriptor must create a claim, received {other:?}"),
         };
-        let metadata = shared_ivf_metadata(temporary.path(), descriptor);
+        let metadata = ivf_centroids_metadata(temporary.path(), descriptor);
         let metadata_location = file_uri(
             &temporary
                 .path()
-                .join(format!("shared-{position}.metadata.json")),
+                .join(format!("ivf-centroids-{position}.metadata.json")),
         );
         published.push(
             catalog
-                .publish_shared_ivf(&claim, &metadata_location, &metadata)
+                .publish_ivf_centroids(&claim, &metadata_location, &metadata)
                 .unwrap(),
         );
     }
 
     published.sort_by(|left, right| left.fingerprint.cmp(&right.fingerprint));
-    assert_eq!(catalog.list_shared_ivf().unwrap(), published);
+    assert_eq!(catalog.list_ivf_centroids().unwrap(), published);
 }
 
 #[test]
-fn publishing_shared_ivf_with_a_mismatched_fingerprint_is_rejected() {
+fn publishing_ivf_centroids_with_a_mismatched_fingerprint_is_rejected() {
     let temporary = TempDir::new().unwrap();
     let catalog = SqliteCatalog::open(temporary.path().join("catalog.sqlite")).unwrap();
-    let descriptor = shared_ivf_descriptor(temporary.path());
+    let descriptor = ivf_centroids_descriptor(temporary.path());
     let claim = match catalog
-        .claim_shared_ivf(&descriptor, Uuid::new_v4(), 60_000)
+        .claim_ivf_centroids(&descriptor, Uuid::new_v4(), 60_000)
         .unwrap()
     {
-        SharedIvfClaimResult::Claimed(claim) => claim,
+        IvfCentroidsClaimResult::Claimed(claim) => claim,
         other => panic!("first caller must own the claim, received {other:?}"),
     };
     let mut other_descriptor = descriptor;
     other_descriptor.vector_field = "other_embedding".into();
-    let metadata = shared_ivf_metadata(temporary.path(), &other_descriptor);
-    let metadata_location = file_uri(&temporary.path().join("shared-v1.metadata.json"));
+    let metadata = ivf_centroids_metadata(temporary.path(), &other_descriptor);
+    let metadata_location = file_uri(&temporary.path().join("ivf-centroids-v1.metadata.json"));
 
     assert!(matches!(
-        catalog.publish_shared_ivf(&claim, &metadata_location, &metadata),
+        catalog.publish_ivf_centroids(&claim, &metadata_location, &metadata),
         Err(Error::InvalidMetadata(message))
-            if message.contains("published shared IVF fingerprint does not match claim")
+            if message.contains("published IVF centroid fingerprint does not match claim")
     ));
 }
 
 #[test]
-fn expired_shared_ivf_claim_cannot_be_renewed_or_published() {
+fn expired_ivf_centroids_claim_cannot_be_renewed_or_published() {
     let temporary = TempDir::new().unwrap();
     let database = temporary.path().join("catalog.sqlite");
     let catalog = SqliteCatalog::open(&database).unwrap();
-    let descriptor = shared_ivf_descriptor(temporary.path());
+    let descriptor = ivf_centroids_descriptor(temporary.path());
     let claim = match catalog
-        .claim_shared_ivf(&descriptor, Uuid::new_v4(), 60_000)
+        .claim_ivf_centroids(&descriptor, Uuid::new_v4(), 60_000)
         .unwrap()
     {
-        SharedIvfClaimResult::Claimed(claim) => claim,
+        IvfCentroidsClaimResult::Claimed(claim) => claim,
         other => panic!("first caller must own the claim, received {other:?}"),
     };
     Connection::open(&database)
         .unwrap()
-        .execute("UPDATE shared_ivf_artifacts SET lease_expires_ms = 0", [])
+        .execute("UPDATE ivf_centroid_artifacts SET lease_expires_ms = 0", [])
         .unwrap();
-    let metadata = shared_ivf_metadata(temporary.path(), &descriptor);
-    let metadata_location = file_uri(&temporary.path().join("shared-v1.metadata.json"));
+    let metadata = ivf_centroids_metadata(temporary.path(), &descriptor);
+    let metadata_location = file_uri(&temporary.path().join("ivf-centroids-v1.metadata.json"));
 
     assert!(matches!(
-        catalog.renew_shared_ivf_claim(&claim, 60_000),
-        Err(Error::SharedIvfClaimLost(_))
+        catalog.renew_ivf_centroids_claim(&claim, 60_000),
+        Err(Error::IvfCentroidsClaimLost(_))
     ));
     assert!(matches!(
-        catalog.publish_shared_ivf(&claim, &metadata_location, &metadata),
-        Err(Error::SharedIvfClaimLost(_))
+        catalog.publish_ivf_centroids(&claim, &metadata_location, &metadata),
+        Err(Error::IvfCentroidsClaimLost(_))
     ));
 }
 
 #[test]
-fn expired_shared_ivf_claim_uses_compare_and_swap_publication() {
+fn expired_ivf_centroids_claim_uses_compare_and_swap_publication() {
     let temporary = TempDir::new().unwrap();
     let database = temporary.path().join("catalog.sqlite");
     let catalog = SqliteCatalog::open(&database).unwrap();
-    let descriptor = shared_ivf_descriptor(temporary.path());
+    let descriptor = ivf_centroids_descriptor(temporary.path());
     let first = match catalog
-        .claim_shared_ivf(&descriptor, Uuid::new_v4(), 60_000)
+        .claim_ivf_centroids(&descriptor, Uuid::new_v4(), 60_000)
         .unwrap()
     {
-        SharedIvfClaimResult::Claimed(claim) => claim,
+        IvfCentroidsClaimResult::Claimed(claim) => claim,
         other => panic!("first caller must own the claim, received {other:?}"),
     };
     Connection::open(&database)
         .unwrap()
-        .execute("UPDATE shared_ivf_artifacts SET lease_expires_ms = 0", [])
+        .execute("UPDATE ivf_centroid_artifacts SET lease_expires_ms = 0", [])
         .unwrap();
     let second = match catalog
-        .claim_shared_ivf(&descriptor, Uuid::new_v4(), 60_000)
+        .claim_ivf_centroids(&descriptor, Uuid::new_v4(), 60_000)
         .unwrap()
     {
-        SharedIvfClaimResult::Claimed(claim) => claim,
+        IvfCentroidsClaimResult::Claimed(claim) => claim,
         other => panic!("expired claim must be replaced, received {other:?}"),
     };
-    let metadata = shared_ivf_metadata(temporary.path(), &descriptor);
-    let metadata_location = file_uri(&temporary.path().join("shared-v1.metadata.json"));
+    let metadata = ivf_centroids_metadata(temporary.path(), &descriptor);
+    let metadata_location = file_uri(&temporary.path().join("ivf-centroids-v1.metadata.json"));
 
     assert!(matches!(
-        catalog.publish_shared_ivf(&first, &metadata_location, &metadata),
-        Err(Error::SharedIvfClaimLost(_))
+        catalog.publish_ivf_centroids(&first, &metadata_location, &metadata),
+        Err(Error::IvfCentroidsClaimLost(_))
     ));
     catalog
-        .publish_shared_ivf(&second, &metadata_location, &metadata)
+        .publish_ivf_centroids(&second, &metadata_location, &metadata)
         .unwrap();
 }
 
 #[test]
-fn abandoned_shared_ivf_claim_can_be_retried() {
+fn abandoned_ivf_centroids_claim_can_be_retried() {
     let temporary = TempDir::new().unwrap();
     let catalog = SqliteCatalog::open(temporary.path().join("catalog.sqlite")).unwrap();
-    let descriptor = shared_ivf_descriptor(temporary.path());
+    let descriptor = ivf_centroids_descriptor(temporary.path());
     let claim = match catalog
-        .claim_shared_ivf(&descriptor, Uuid::new_v4(), 60_000)
+        .claim_ivf_centroids(&descriptor, Uuid::new_v4(), 60_000)
         .unwrap()
     {
-        SharedIvfClaimResult::Claimed(claim) => claim,
+        IvfCentroidsClaimResult::Claimed(claim) => claim,
         other => panic!("first caller must own the claim, received {other:?}"),
     };
 
     catalog
-        .abandon_shared_ivf(&claim, "fixture failure")
+        .abandon_ivf_centroids(&claim, "fixture failure")
         .unwrap();
     assert!(matches!(
-        catalog.load_shared_ivf(&claim.fingerprint),
-        Err(Error::SharedIvfNotFound(_))
+        catalog.load_ivf_centroids(&claim.fingerprint),
+        Err(Error::IvfCentroidsNotFound(_))
     ));
     assert!(matches!(
         catalog
-            .claim_shared_ivf(&descriptor, Uuid::new_v4(), 60_000)
+            .claim_ivf_centroids(&descriptor, Uuid::new_v4(), 60_000)
             .unwrap(),
-        SharedIvfClaimResult::Claimed(_)
+        IvfCentroidsClaimResult::Claimed(_)
     ));
 }
 
 #[test]
-fn concurrent_shared_ivf_claims_allow_exactly_one_builder() {
+fn concurrent_ivf_centroids_claims_allow_exactly_one_builder() {
     let temporary = TempDir::new().unwrap();
     let catalog = SqliteCatalog::open(temporary.path().join("catalog.sqlite")).unwrap();
-    let descriptor = shared_ivf_descriptor(temporary.path());
+    let descriptor = ivf_centroids_descriptor(temporary.path());
     let barrier = Arc::new(Barrier::new(3));
     let handles = [Uuid::new_v4(), Uuid::new_v4()].map(|owner| {
         let catalog = catalog.clone();
@@ -237,7 +239,7 @@ fn concurrent_shared_ivf_claims_allow_exactly_one_builder() {
         let barrier = Arc::clone(&barrier);
         std::thread::spawn(move || {
             barrier.wait();
-            catalog.claim_shared_ivf(&descriptor, owner, 60_000)
+            catalog.claim_ivf_centroids(&descriptor, owner, 60_000)
         })
     });
     barrier.wait();
@@ -246,25 +248,25 @@ fn concurrent_shared_ivf_claims_allow_exactly_one_builder() {
     assert_eq!(
         results
             .iter()
-            .filter(|result| matches!(result, SharedIvfClaimResult::Claimed(_)))
+            .filter(|result| matches!(result, IvfCentroidsClaimResult::Claimed(_)))
             .count(),
         1
     );
     assert_eq!(
         results
             .iter()
-            .filter(|result| matches!(result, SharedIvfClaimResult::Busy { .. }))
+            .filter(|result| matches!(result, IvfCentroidsClaimResult::Busy { .. }))
             .count(),
         1
     );
 }
 
 #[test]
-fn shared_ivf_reuse_follows_iceberg_exact_state_across_renames() {
+fn ivf_centroids_reuse_follows_iceberg_exact_state_across_renames() {
     let temporary = TempDir::new().unwrap();
     let catalog = SqliteCatalog::open(temporary.path().join("catalog.sqlite")).unwrap();
     let table_uuid = Uuid::new_v4();
-    let mut descriptor = shared_ivf_descriptor(temporary.path());
+    let mut descriptor = ivf_centroids_descriptor(temporary.path());
     descriptor.source = RelationReference::Iceberg {
         catalog: "first".into(),
         namespace: vec!["analytics".into()],
@@ -273,16 +275,16 @@ fn shared_ivf_reuse_follows_iceberg_exact_state_across_renames() {
         snapshot_id: 101,
     };
     let claim = match catalog
-        .claim_shared_ivf(&descriptor, Uuid::new_v4(), 60_000)
+        .claim_ivf_centroids(&descriptor, Uuid::new_v4(), 60_000)
         .unwrap()
     {
-        SharedIvfClaimResult::Claimed(claim) => claim,
+        IvfCentroidsClaimResult::Claimed(claim) => claim,
         other => panic!("first caller must own the claim, received {other:?}"),
     };
-    let metadata = shared_ivf_metadata(temporary.path(), &descriptor);
-    let metadata_location = file_uri(&temporary.path().join("shared-v1.metadata.json"));
+    let metadata = ivf_centroids_metadata(temporary.path(), &descriptor);
+    let metadata_location = file_uri(&temporary.path().join("ivf-centroids-v1.metadata.json"));
     let published = catalog
-        .publish_shared_ivf(&claim, &metadata_location, &metadata)
+        .publish_ivf_centroids(&claim, &metadata_location, &metadata)
         .unwrap();
 
     let mut renamed = descriptor;
@@ -295,9 +297,9 @@ fn shared_ivf_reuse_follows_iceberg_exact_state_across_renames() {
     };
     assert!(matches!(
         catalog
-            .claim_shared_ivf(&renamed, Uuid::new_v4(), 60_000)
+            .claim_ivf_centroids(&renamed, Uuid::new_v4(), 60_000)
             .unwrap(),
-        SharedIvfClaimResult::Ready(entry) if entry == published
+        IvfCentroidsClaimResult::Ready(entry) if entry == published
     ));
 }
 
@@ -316,7 +318,7 @@ fn root_namespace_exists_in_a_new_catalog() {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
     assert_eq!(application_id, 0x524c_4659);
-    assert_eq!(user_version, 4);
+    assert_eq!(user_version, 5);
 }
 
 #[test]
@@ -703,7 +705,7 @@ fn rejects_an_unrelated_unversioned_database_without_modifying_it() {
 
 #[test]
 fn rejects_catalogs_from_older_prerelease_schemas() {
-    for version in [1, 2, 3] {
+    for version in [1, 2, 3, 4] {
         let temporary = TempDir::new().unwrap();
         let database = temporary.path().join("catalog.sqlite");
         let connection = Connection::open(&database).unwrap();
@@ -730,7 +732,7 @@ fn rejects_the_current_schema_without_the_relify_application_id() {
     connection
         .execute_batch(
             "CREATE TABLE indexes (name TEXT PRIMARY KEY);
-             PRAGMA user_version=4;",
+             PRAGMA user_version=5;",
         )
         .unwrap();
     drop(connection);
@@ -741,8 +743,8 @@ fn rejects_the_current_schema_without_the_relify_application_id() {
     ));
 }
 
-fn shared_ivf_descriptor(root: &std::path::Path) -> SharedIvfDescriptor {
-    SharedIvfDescriptor {
+fn ivf_centroids_descriptor(root: &std::path::Path) -> IvfCentroidsDescriptor {
+    IvfCentroidsDescriptor {
         source: RelationReference::Parquet {
             uri: file_uri(&root.join("source.parquet")),
         },
@@ -754,15 +756,15 @@ fn shared_ivf_descriptor(root: &std::path::Path) -> SharedIvfDescriptor {
     }
 }
 
-fn shared_ivf_metadata(
+fn ivf_centroids_metadata(
     root: &std::path::Path,
-    descriptor: &SharedIvfDescriptor,
-) -> SharedIvfMetadata {
-    SharedIvfMetadata {
+    descriptor: &IvfCentroidsDescriptor,
+) -> IvfCentroidsMetadata {
+    IvfCentroidsMetadata {
         format_version: 1,
         artifact_uuid: Uuid::new_v4(),
         fingerprint: descriptor.fingerprint().unwrap(),
-        location: directory_uri(&root.join("shared")),
+        location: directory_uri(&root.join("centroid-artifacts")),
         created_at_ms: 1_750_000_000_000,
         descriptor: descriptor.clone(),
         centroids: RelationReference::Parquet {

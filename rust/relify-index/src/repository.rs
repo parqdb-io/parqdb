@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use relify_catalog::{
-    CatalogEntry, Error as CatalogError, IndexCatalog, IndexIdentifier, SharedIvfCatalogEntry,
+    CatalogEntry, Error as CatalogError, IndexCatalog, IndexIdentifier, IvfCentroidsCatalogEntry,
 };
 use relify_meta::{
-    DistanceMetric, IndexMetadata, IndexSnapshot, RelationReference, SharedIvfMetadata,
-    SharedIvfReference, shared_ivf_reference,
+    DistanceMetric, IndexMetadata, IndexSnapshot, IvfCentroidsMetadata, IvfCentroidsReference,
+    RelationReference, ivf_centroids_reference,
 };
 
 use crate::{Error, MetadataStore, Result};
@@ -19,13 +19,13 @@ pub struct LoadedIndex {
     pub metadata: IndexMetadata,
 }
 
-/// One cataloged and validated immutable shared-IVF artifact.
+/// One cataloged and validated immutable IVF centroid artifact.
 #[derive(Debug, Clone)]
-pub struct LoadedSharedIvf {
+pub struct LoadedIvfCentroids {
     /// Catalog pointer used to load this state.
-    pub entry: SharedIvfCatalogEntry,
+    pub entry: IvfCentroidsCatalogEntry,
     /// Validated metadata stored at the catalog pointer.
-    pub metadata: SharedIvfMetadata,
+    pub metadata: IvfCentroidsMetadata,
 }
 
 /// Backend-neutral access to one Relify index catalog and metadata store.
@@ -75,25 +75,29 @@ impl IndexRepository {
         Ok(LoadedIndex { entry, metadata })
     }
 
-    /// Loads one ready shared-IVF artifact by fingerprint.
-    pub async fn load_shared_ivf(&self, fingerprint: &str) -> Result<LoadedSharedIvf> {
-        let entry = self.catalog.load_shared_ivf(fingerprint)?;
-        self.load_shared_ivf_entry(entry).await
+    /// Loads one ready IVF centroid artifact by fingerprint.
+    pub async fn load_ivf_centroids(&self, fingerprint: &str) -> Result<LoadedIvfCentroids> {
+        let entry = self.catalog.load_ivf_centroids(fingerprint)?;
+        self.load_ivf_centroids_entry(entry).await
     }
 
-    /// Loads and validates the shared artifact referenced by a logical index.
-    pub async fn load_shared_ivf_reference(
+    /// Loads and validates the centroid artifact referenced by a logical index.
+    pub async fn load_ivf_centroids_reference(
         &self,
-        reference: &SharedIvfReference,
-    ) -> Result<LoadedSharedIvf> {
+        reference: &IvfCentroidsReference,
+    ) -> Result<LoadedIvfCentroids> {
         reference.validate()?;
         let metadata = self
             .metadata
-            .load_shared_ivf(&reference.metadata_location)
+            .load_ivf_centroids(&reference.metadata_location)
             .await?;
-        validate_shared_ivf_identity(&reference.fingerprint, reference.artifact_uuid, &metadata)?;
-        Ok(LoadedSharedIvf {
-            entry: SharedIvfCatalogEntry {
+        validate_ivf_centroids_identity(
+            &reference.fingerprint,
+            reference.artifact_uuid,
+            &metadata,
+        )?;
+        Ok(LoadedIvfCentroids {
+            entry: IvfCentroidsCatalogEntry {
                 fingerprint: reference.fingerprint.clone(),
                 artifact_uuid: reference.artifact_uuid,
                 metadata_location: reference.metadata_location.clone(),
@@ -102,13 +106,13 @@ impl IndexRepository {
         })
     }
 
-    /// Loads and validates the shared artifact required by one logical IVF snapshot.
-    pub async fn load_snapshot_shared_ivf(
+    /// Loads and validates the centroid artifact required by one logical IVF snapshot.
+    pub async fn load_snapshot_ivf_centroids(
         &self,
         snapshot: &IndexSnapshot,
-    ) -> Result<LoadedSharedIvf> {
-        let reference = shared_ivf_reference(snapshot)?;
-        let loaded = self.load_shared_ivf_reference(&reference).await?;
+    ) -> Result<LoadedIvfCentroids> {
+        let reference = ivf_centroids_reference(snapshot)?;
+        let loaded = self.load_ivf_centroids_reference(&reference).await?;
         let descriptor = &loaded.metadata.descriptor;
         let metric = DistanceMetric::from_metadata(&snapshot.metric).ok_or_else(|| {
             Error::InvalidMetadata(format!("unsupported IVF metric: {}", snapshot.metric))
@@ -126,7 +130,7 @@ impl IndexRepository {
             || loaded.metadata.centroids != *centroids
         {
             return Err(Error::InvalidMetadata(
-                "logical index does not match its shared IVF artifact".into(),
+                "logical index does not match its IVF centroid artifact".into(),
             ));
         }
         Ok(loaded)
@@ -206,24 +210,27 @@ impl IndexRepository {
         Ok(IndexCatalog::drop(self.catalog.as_ref(), identifier)?)
     }
 
-    async fn load_shared_ivf_entry(&self, entry: SharedIvfCatalogEntry) -> Result<LoadedSharedIvf> {
+    async fn load_ivf_centroids_entry(
+        &self,
+        entry: IvfCentroidsCatalogEntry,
+    ) -> Result<LoadedIvfCentroids> {
         let metadata = self
             .metadata
-            .load_shared_ivf(&entry.metadata_location)
+            .load_ivf_centroids(&entry.metadata_location)
             .await?;
-        validate_shared_ivf_identity(&entry.fingerprint, entry.artifact_uuid, &metadata)?;
-        Ok(LoadedSharedIvf { entry, metadata })
+        validate_ivf_centroids_identity(&entry.fingerprint, entry.artifact_uuid, &metadata)?;
+        Ok(LoadedIvfCentroids { entry, metadata })
     }
 }
 
-fn validate_shared_ivf_identity(
+fn validate_ivf_centroids_identity(
     fingerprint: &str,
     artifact_uuid: uuid::Uuid,
-    metadata: &SharedIvfMetadata,
+    metadata: &IvfCentroidsMetadata,
 ) -> Result<()> {
     if metadata.fingerprint != fingerprint || metadata.artifact_uuid != artifact_uuid {
         return Err(Error::InvalidMetadata(
-            "shared IVF identity does not match its metadata".into(),
+            "IVF centroid identity does not match its metadata".into(),
         ));
     }
     Ok(())

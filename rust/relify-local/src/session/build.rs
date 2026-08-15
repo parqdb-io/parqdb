@@ -7,13 +7,13 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parallite::ParalliteContext;
-use relify_catalog::{IndexCatalog, SharedIvfClaim, SharedIvfClaimResult};
+use relify_catalog::{IndexCatalog, IvfCentroidsClaim, IvfCentroidsClaimResult};
 use relify_index::{
     InitialIndex, RefreshedIndex, new_snapshot_id, publish_initial, publish_refresh,
 };
 use relify_meta::{
-    DistanceMetric, IVF_CLUSTERING_PROFILE_VERSION, PostingEncoding, RelationReference,
-    SharedIvfDescriptor, SharedIvfMetadata, SharedIvfReference,
+    DistanceMetric, IVF_CLUSTERING_PROFILE_VERSION, IvfCentroidsDescriptor, IvfCentroidsMetadata,
+    IvfCentroidsReference, PostingEncoding, RelationReference,
 };
 use uuid::Uuid;
 
@@ -28,17 +28,17 @@ use crate::parquet::{ParquetWriterOptions, child_location};
 use crate::progress::BuildPhase;
 use crate::{Error, IvfConfig, LocalBuildProgress, PublishedIndex, Result};
 
-const SHARED_IVF_LEASE_MS: i64 = 30_000;
-const SHARED_IVF_RENEW_INTERVAL: Duration = Duration::from_secs(10);
-const SHARED_IVF_WAIT_INTERVAL: Duration = Duration::from_millis(250);
+const IVF_CENTROIDS_LEASE_MS: i64 = 30_000;
+const IVF_CENTROIDS_RENEW_INTERVAL: Duration = Duration::from_secs(10);
+const IVF_CENTROIDS_WAIT_INTERVAL: Duration = Duration::from_millis(250);
 
-struct ResolvedSharedIvf {
-    reference: SharedIvfReference,
+struct ResolvedIvfCentroids {
+    reference: IvfCentroidsReference,
     centroids: RelationReference,
     trained: TrainedIvf,
 }
 
-struct SharedIvfBuildContext<'a> {
+struct IvfCentroidsBuildContext<'a> {
     prepared: &'a PreparedIvf,
     parallel: &'a ParalliteContext,
     writer_options: &'a ParquetWriterOptions,
@@ -129,15 +129,15 @@ impl LocalSession {
             &progress,
         )
         .await?;
-        let shared = {
-            let mut context = SharedIvfBuildContext {
+        let centroid_artifact = {
+            let mut context = IvfCentroidsBuildContext {
                 prepared: &prepared,
                 parallel: &parallel,
                 writer_options: &options.writer_options,
                 progress: &progress,
                 build_lease: &mut build_lease,
             };
-            self.resolve_shared_ivf(&source_reference, vector_field, config, &mut context)
+            self.resolve_ivf_centroids(&source_reference, vector_field, config, &mut context)
                 .await?
         };
         let build = build_ivf_postings(
@@ -146,9 +146,9 @@ impl LocalSession {
                 vector_field,
                 source_key_fields,
                 config,
-                trained: &shared.trained,
-                shared_ivf: &shared.reference,
-                centroids: shared.centroids,
+                trained: &centroid_artifact.trained,
+                ivf_centroids: &centroid_artifact.reference,
+                centroids: centroid_artifact.centroids,
             },
             IvfBuildContext {
                 parquet: &self.parquet,
@@ -220,15 +220,15 @@ impl LocalSession {
             &progress,
         )
         .await?;
-        let shared = {
-            let mut context = SharedIvfBuildContext {
+        let centroid_artifact = {
+            let mut context = IvfCentroidsBuildContext {
                 prepared: &prepared,
                 parallel: &parallel,
                 writer_options: &options.writer_options,
                 progress: &progress,
                 build_lease: &mut build_lease,
             };
-            self.resolve_shared_ivf(
+            self.resolve_ivf_centroids(
                 &source_reference,
                 &current.vector_field,
                 config,
@@ -242,9 +242,9 @@ impl LocalSession {
                 vector_field: &current.vector_field,
                 source_key_fields: &current.source_key_fields,
                 config,
-                trained: &shared.trained,
-                shared_ivf: &shared.reference,
-                centroids: shared.centroids,
+                trained: &centroid_artifact.trained,
+                ivf_centroids: &centroid_artifact.reference,
+                centroids: centroid_artifact.centroids,
             },
             IvfBuildContext {
                 parquet: &self.parquet,
@@ -276,14 +276,14 @@ impl LocalSession {
         Ok(result)
     }
 
-    async fn resolve_shared_ivf(
+    async fn resolve_ivf_centroids(
         &self,
         source: &RelationReference,
         vector_field: &str,
         config: IvfConfig,
-        context: &mut SharedIvfBuildContext<'_>,
-    ) -> Result<ResolvedSharedIvf> {
-        let descriptor = SharedIvfDescriptor {
+        context: &mut IvfCentroidsBuildContext<'_>,
+    ) -> Result<ResolvedIvfCentroids> {
+        let descriptor = IvfCentroidsDescriptor {
             source: source.clone(),
             vector_field: vector_field.to_owned(),
             dimension: i32::try_from(context.prepared.dimension)
@@ -298,68 +298,70 @@ impl LocalSession {
         loop {
             match self
                 .catalog
-                .claim_shared_ivf(&descriptor, owner, SHARED_IVF_LEASE_MS)?
+                .claim_ivf_centroids(&descriptor, owner, IVF_CENTROIDS_LEASE_MS)?
             {
-                SharedIvfClaimResult::Ready(_) => {
+                IvfCentroidsClaimResult::Ready(_) => {
                     return self
-                        .load_shared_ivf(&fingerprint, &descriptor, context.prepared)
+                        .load_ivf_centroids(&fingerprint, &descriptor, context.prepared)
                         .await;
                 }
-                SharedIvfClaimResult::Busy { .. } => {
-                    tokio::time::sleep(SHARED_IVF_WAIT_INTERVAL).await;
+                IvfCentroidsClaimResult::Busy { .. } => {
+                    tokio::time::sleep(IVF_CENTROIDS_WAIT_INTERVAL).await;
                 }
-                SharedIvfClaimResult::Claimed(claim) => {
-                    return self.build_shared_ivf(descriptor, claim, context).await;
+                IvfCentroidsClaimResult::Claimed(claim) => {
+                    return self.build_ivf_centroids(descriptor, claim, context).await;
                 }
             }
         }
     }
 
-    async fn load_shared_ivf(
+    async fn load_ivf_centroids(
         &self,
         fingerprint: &str,
-        descriptor: &SharedIvfDescriptor,
+        descriptor: &IvfCentroidsDescriptor,
         prepared: &PreparedIvf,
-    ) -> Result<ResolvedSharedIvf> {
-        let loaded = self.indexes.load_shared_ivf(fingerprint).await?;
+    ) -> Result<ResolvedIvfCentroids> {
+        let loaded = self.indexes.load_ivf_centroids(fingerprint).await?;
         if !loaded.metadata.descriptor.is_compatible_with(descriptor) {
             return Err(Error::InvalidMetadata(
-                "shared IVF descriptor does not match the requested build".into(),
+                "IVF centroids descriptor does not match the requested build".into(),
             ));
         }
         let RelationReference::Parquet { uri } = &loaded.metadata.centroids else {
             return Err(Error::InvalidMetadata(
-                "the local builder requires Parquet shared centroids".into(),
+                "the local builder requires Parquet IVF centroids".into(),
             ));
         };
         let batch = self.parquet.read(uri, None).await?;
         let centroids = crate::ivf::read_centroids(&batch, prepared.nlist, prepared.dimension)?;
-        let reference = SharedIvfReference::new(
+        let reference = IvfCentroidsReference::new(
             loaded.entry.fingerprint,
             loaded.entry.artifact_uuid,
             loaded.entry.metadata_location,
         )?;
-        Ok(ResolvedSharedIvf {
+        Ok(ResolvedIvfCentroids {
             reference,
             centroids: loaded.metadata.centroids,
             trained: reused_ivf(prepared, centroids)?,
         })
     }
 
-    async fn build_shared_ivf(
+    async fn build_ivf_centroids(
         &self,
-        descriptor: SharedIvfDescriptor,
-        claim: SharedIvfClaim,
-        context: &mut SharedIvfBuildContext<'_>,
-    ) -> Result<ResolvedSharedIvf> {
+        descriptor: IvfCentroidsDescriptor,
+        claim: IvfCentroidsClaim,
+        context: &mut IvfCentroidsBuildContext<'_>,
+    ) -> Result<ResolvedIvfCentroids> {
         let heartbeat = match ClaimHeartbeat::start(Arc::clone(&self.catalog), claim.clone()) {
             Ok(heartbeat) => heartbeat,
             Err(error) => {
-                let _ = self.catalog.abandon_shared_ivf(&claim, &error.to_string());
+                let _ = self
+                    .catalog
+                    .abandon_ivf_centroids(&claim, &error.to_string());
                 return Err(error);
             }
         };
-        let result: Result<ResolvedSharedIvf> = async {
+        let result: Result<ResolvedIvfCentroids> = async {
             let artifact_uuid = Uuid::new_v4();
             let artifact_root = self
                 .warehouse
@@ -375,14 +377,14 @@ impl LocalSession {
                 context.progress,
             )
             .await?;
-            let metadata = SharedIvfMetadata {
+            let metadata = IvfCentroidsMetadata {
                 format_version: 1,
                 artifact_uuid,
                 fingerprint: claim.fingerprint.clone(),
                 location: self
                     .indexes
                     .metadata_store()
-                    .shared_ivf_location(artifact_uuid)?,
+                    .ivf_centroids_location(artifact_uuid)?,
                 created_at_ms: now_ms()?,
                 descriptor: descriptor.clone(),
                 centroids: RelationReference::Parquet {
@@ -392,17 +394,17 @@ impl LocalSession {
             let metadata_location = self
                 .indexes
                 .metadata_store()
-                .write_shared_ivf(&metadata)
+                .write_ivf_centroids(&metadata)
                 .await?;
-            let entry = self
-                .catalog
-                .publish_shared_ivf(&claim, &metadata_location, &metadata)?;
-            let reference = SharedIvfReference::new(
+            let entry =
+                self.catalog
+                    .publish_ivf_centroids(&claim, &metadata_location, &metadata)?;
+            let reference = IvfCentroidsReference::new(
                 entry.fingerprint,
                 entry.artifact_uuid,
                 entry.metadata_location,
             )?;
-            Ok(ResolvedSharedIvf {
+            Ok(ResolvedIvfCentroids {
                 reference,
                 centroids: metadata.centroids,
                 trained,
@@ -411,27 +413,29 @@ impl LocalSession {
         .await;
         let heartbeat_result = heartbeat.stop();
         match result {
-            Ok(shared) => {
+            Ok(centroid_artifact) => {
                 // Publication clears the owner. A simultaneous heartbeat may
                 // observe that ready state after this owner has committed it.
                 if let Err(error) = heartbeat_result
                     && !matches!(
                         &error,
-                        Error::Catalog(relify_catalog::Error::SharedIvfClaimLost(fingerprint))
-                            if fingerprint == &shared.reference.fingerprint
+                        Error::Catalog(relify_catalog::Error::IvfCentroidsClaimLost(fingerprint))
+                            if fingerprint == &centroid_artifact.reference.fingerprint
                     )
                 {
                     return Err(error);
                 }
-                Ok(shared)
+                Ok(centroid_artifact)
             }
             Err(error) => {
-                let _ = self.catalog.abandon_shared_ivf(&claim, &error.to_string());
-                if let Ok(shared) = self
-                    .load_shared_ivf(&claim.fingerprint, &descriptor, context.prepared)
+                let _ = self
+                    .catalog
+                    .abandon_ivf_centroids(&claim, &error.to_string());
+                if let Ok(centroid_artifact) = self
+                    .load_ivf_centroids(&claim.fingerprint, &descriptor, context.prepared)
                     .await
                 {
-                    return Ok(shared);
+                    return Ok(centroid_artifact);
                 }
                 Err(error)
             }
@@ -440,31 +444,31 @@ impl LocalSession {
 }
 
 impl ClaimHeartbeat {
-    fn start(catalog: Arc<dyn IndexCatalog>, claim: SharedIvfClaim) -> Result<Self> {
+    fn start(catalog: Arc<dyn IndexCatalog>, claim: IvfCentroidsClaim) -> Result<Self> {
         let (stop, stopped) = mpsc::channel();
         let task = thread::Builder::new()
-            .name("relify-shared-ivf-heartbeat".into())
+            .name("relify-ivf-centroids-heartbeat".into())
             .spawn(move || {
                 loop {
-                    match stopped.recv_timeout(SHARED_IVF_RENEW_INTERVAL) {
+                    match stopped.recv_timeout(IVF_CENTROIDS_RENEW_INTERVAL) {
                         Ok(()) | Err(RecvTimeoutError::Disconnected) => return Ok(()),
                         Err(RecvTimeoutError::Timeout) => {
-                            catalog.renew_shared_ivf_claim(&claim, SHARED_IVF_LEASE_MS)?;
+                            catalog.renew_ivf_centroids_claim(&claim, IVF_CENTROIDS_LEASE_MS)?;
                         }
                     }
                 }
             })
             .map_err(|error| {
-                Error::InvalidArgument(format!("failed to start shared IVF heartbeat: {error}"))
+                Error::InvalidArgument(format!("failed to start IVF centroids heartbeat: {error}"))
             })?;
         Ok(Self { stop, task })
     }
 
     fn stop(self) -> Result<()> {
         let _ = self.stop.send(());
-        self.task
-            .join()
-            .map_err(|_| Error::InvalidArgument("shared IVF heartbeat thread panicked".into()))??;
+        self.task.join().map_err(|_| {
+            Error::InvalidArgument("IVF centroids heartbeat thread panicked".into())
+        })??;
         Ok(())
     }
 }

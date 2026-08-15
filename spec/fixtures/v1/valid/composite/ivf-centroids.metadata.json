@@ -18,5 +18,5 @@
   },
   "fingerprint": "6960aca7-a09e-5dbd-949c-881f7431b593",
   "format-version": 1,
-  "location": "s3://relify-fixtures/v1/valid/composite/shared/6f084127-25b1-43f1-a676-b8c055e37fae/"
+  "location": "s3://relify-fixtures/v1/valid/composite/centroid-artifacts/6f084127-25b1-43f1-a676-b8c055e37fae/"
 }

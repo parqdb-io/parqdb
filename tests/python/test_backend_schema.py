@@ -55,7 +55,7 @@ def test_pyarrow_schema_maps_to_canonical_iceberg_types() -> None:
     assert vector_fields(canonical) == ("embedding",)
 
 
-def test_shared_ivf_schema_validation_accepts_optional_source_declarations() -> None:
+def test_ivf_centroids_schema_validation_accepts_optional_source_declarations() -> None:
     search = _search(posting_encoding="source")
     source = CanonicalSchema(
         (
@@ -92,7 +92,7 @@ def test_shared_ivf_schema_validation_accepts_optional_source_declarations() -> 
     )
 
 
-def test_shared_ivf_schema_validation_accepts_unknown_index_nullability() -> None:
+def test_ivf_centroids_schema_validation_accepts_unknown_index_nullability() -> None:
     search = _search(posting_encoding="source")
     source = CanonicalSchema(
         (
@@ -132,7 +132,7 @@ def test_shared_ivf_schema_validation_accepts_unknown_index_nullability() -> Non
     )
 
 
-def test_shared_ivf_schema_validation_rejects_known_optional_index_fields() -> None:
+def test_ivf_centroids_schema_validation_rejects_known_optional_index_fields() -> None:
     search = _search(posting_encoding="source")
     source = CanonicalSchema(
         (
@@ -170,7 +170,7 @@ def test_shared_ivf_schema_validation_rejects_known_optional_index_fields() -> N
         )
 
 
-def test_shared_ivf_schema_validation_rejects_unsupported_keys() -> None:
+def test_ivf_centroids_schema_validation_rejects_unsupported_keys() -> None:
     search = _search(posting_encoding="source")
     source = CanonicalSchema(
         (
@@ -208,7 +208,7 @@ def test_shared_ivf_schema_validation_rejects_unsupported_keys() -> None:
         )
 
 
-def test_shared_ivf_schema_validation_accepts_lvq_fields() -> None:
+def test_ivf_centroids_schema_validation_accepts_lvq_fields() -> None:
     search = _search(posting_encoding="lvq8")
     source = CanonicalSchema(
         (

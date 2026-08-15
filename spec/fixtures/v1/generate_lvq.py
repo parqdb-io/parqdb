@@ -16,7 +16,7 @@ INDEX_UUIDS = {
     "lvq4": "ee577329-84db-40da-af50-bb10d86e2d2f",
     "lvq8": "26878cae-d125-4ec9-b42f-7f0b1ed8c64f",
 }
-SHARED_UUIDS = {
+IVF_CENTROIDS_UUIDS = {
     "lvq4": "ac413538-8613-4ed5-8411-a9579eda38da",
     "lvq8": "269b3fe5-0fb3-48f9-85cc-78863622bb48",
 }
@@ -34,9 +34,7 @@ def fingerprint(descriptor: dict[str, object]) -> str:
     assert isinstance(source, dict)
     canonical_source = {"profile": source["profile"]}
     fields = (
-        ("uri",)
-        if source["profile"] == "parquet"
-        else ("table-uuid", "snapshot-id")
+        ("uri",) if source["profile"] == "parquet" else ("table-uuid", "snapshot-id")
     )
     canonical_source.update((field, source[field]) for field in fields)
     canonical_descriptor = {
@@ -95,9 +93,9 @@ def descriptor(encoding: str) -> dict[str, object]:
 
 def metadata(encoding: str) -> dict[str, object]:
     index_uuid = INDEX_UUIDS[encoding]
-    shared_uuid = SHARED_UUIDS[encoding]
+    centroid_uuid = IVF_CENTROIDS_UUIDS[encoding]
     root = f"s3://relify-fixtures/v1/valid/{encoding}"
-    shared = descriptor(encoding)
+    centroid_descriptor = descriptor(encoding)
     return {
         "format-version": 1,
         "index-uuid": index_uuid,
@@ -111,7 +109,7 @@ def metadata(encoding: str) -> dict[str, object]:
                 "sequence-number": 1,
                 "timestamp-ms": 1_750_000_000_000,
                 "summary": {"operation": "create"},
-                "source": shared["source"],
+                "source": centroid_descriptor["source"],
                 "vector-field": "embedding",
                 "source-key-fields": ["document_id"],
                 "index-family": "ivf",
@@ -122,9 +120,9 @@ def metadata(encoding: str) -> dict[str, object]:
                     "nlist": "2",
                     "ntotal": "3",
                     "posting_encoding": encoding,
-                    "shared_ivf_fingerprint": fingerprint(shared),
-                    "shared_ivf_uuid": shared_uuid,
-                    "shared_ivf_metadata_location": f"{root}/shared-ivf.metadata.json",
+                    "ivf_centroids_fingerprint": fingerprint(centroid_descriptor),
+                    "ivf_centroids_uuid": centroid_uuid,
+                    "ivf_centroids_metadata_location": f"{root}/ivf-centroids.metadata.json",
                 },
                 "index-relations": {
                     "ivf_centroids": {
@@ -148,17 +146,17 @@ def metadata(encoding: str) -> dict[str, object]:
     }
 
 
-def shared_metadata(encoding: str) -> dict[str, object]:
-    shared = descriptor(encoding)
-    shared_uuid = SHARED_UUIDS[encoding]
+def ivf_centroids_metadata(encoding: str) -> dict[str, object]:
+    centroid_descriptor = descriptor(encoding)
+    centroid_uuid = IVF_CENTROIDS_UUIDS[encoding]
     root = f"s3://relify-fixtures/v1/valid/{encoding}"
     return {
         "format-version": 1,
-        "artifact-uuid": shared_uuid,
-        "fingerprint": fingerprint(shared),
-        "location": f"{root}/shared/{shared_uuid}/",
+        "artifact-uuid": centroid_uuid,
+        "fingerprint": fingerprint(centroid_descriptor),
+        "location": f"{root}/centroid-artifacts/{centroid_uuid}/",
         "created-at-ms": 1_750_000_000_000,
-        "descriptor": shared,
+        "descriptor": centroid_descriptor,
         "centroids": {
             "profile": "parquet",
             "uri": f"{root}/ivf_centroids/",
@@ -229,7 +227,9 @@ def write_fixture(encoding: str) -> None:
         compression="NONE",
     )
     write_json(directory / "metadata.json", metadata(encoding))
-    write_json(directory / "shared-ivf.metadata.json", shared_metadata(encoding))
+    write_json(
+        directory / "ivf-centroids.metadata.json", ivf_centroids_metadata(encoding)
+    )
 
     offset, scale, code = encoded[0]
     levels = (1 << bits) - 1

@@ -195,7 +195,7 @@ hits = session.to_dataframe(
 ```
 
 The Parquet source URI must be the same canonical URI recorded by the selected
-index. Spark construction is not implemented for the shared-IVF schema, so the
+index. Spark construction is not implemented for the current IVF schema, so the
 session consumes an already published compatible index.
 
 Search returns a native PySpark DataFrame:
@@ -210,11 +210,7 @@ query = (
 )
 
 hits = session.to_dataframe(query)
-result = (
-    hits.join(document_stats, "document_id")
-    .groupBy("category")
-    .count()
-)
+result = hits.join(document_stats, "document_id").groupBy("category").count()
 ```
 
 `session.collect(query)` instead executes the Spark plan and returns the common
@@ -229,7 +225,7 @@ candidate vectors and projected rows from the source relation.
 
 The current Spark implementation supports Spark Classic query plans and a
 SQLite development index catalog. Index construction is unavailable until a
-conforming shared-IVF builder is implemented. Spark Connect, refresh, Iceberg
+conforming IVF builder is implemented. Spark Connect, refresh, Iceberg
 maintenance, remote index catalogs, and production conformance tests remain
 open.
 
@@ -303,7 +299,7 @@ compute, use StarRocks native vector indexes, query Parquet through `FILES()`,
 or provide a StarRocks DataFrame facade. Its SQLite index catalog is a
 development catalog; remote coordination remains future work.
 
-The opt-in conformance test loads the shared IVF fixtures into a temporary
+The opt-in conformance test loads the IVF fixtures into a temporary
 Iceberg namespace and queries every case through a real StarRocks deployment.
 Its required environment and execution command are documented in
 [`CONTRIBUTING.md`](../CONTRIBUTING.md#tests-and-quality-gates).
@@ -473,9 +469,7 @@ Exact search is available without an index:
 
 ```python
 query = (
-    documents.search(query_vector, column="embedding")
-    .bypass_vector_index()
-    .limit(100)
+    documents.search(query_vector, column="embedding").bypass_vector_index().limit(100)
 )
 hits = session.collect(query)
 ```
@@ -545,9 +539,7 @@ from relify.datafusion import col, functions
 
 query = documents.search(query_vector).limit(100)
 hits = session.to_dataframe(query)
-document_stats = session.read_parquet(
-    "file:///data/document_stats.parquet"
-)
+document_stats = session.read_parquet("file:///data/document_stats.parquet")
 result = (
     hits.join(document_stats, on="document_id")
     .aggregate(

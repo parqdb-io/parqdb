@@ -133,7 +133,7 @@ def register_fixture(session: relify.Session, fixture: Path, name: str) -> None:
     session.indexes.register(name, destination.as_uri())
 
 
-def shared_ivf_fingerprint(descriptor: dict[str, object]) -> str:
+def ivf_centroids_fingerprint(descriptor: dict[str, object]) -> str:
     source = descriptor["source"]
     assert isinstance(source, dict)
     if source["profile"] == "parquet":
@@ -174,21 +174,29 @@ def localize_lvq_fixture(warehouse: Path, directory: Path) -> tuple[Path, Path]:
     metadata["location"] = f"{metadata_root.as_uri()}/"
     snapshot = metadata["snapshots"][0]
     snapshot["source"] = {"profile": "parquet", "uri": source.as_uri()}
-    shared_path = (local / "shared-ivf.metadata.json").resolve()
-    shared = json.loads(shared_path.read_text(encoding="utf-8"))
-    shared["location"] = f"{(local / 'shared').resolve().as_uri()}/"
-    shared["descriptor"]["source"] = snapshot["source"]
-    shared["centroids"] = {
+    centroid_metadata_path = (local / "ivf-centroids.metadata.json").resolve()
+    centroid_metadata = json.loads(centroid_metadata_path.read_text(encoding="utf-8"))
+    centroid_metadata["location"] = (
+        f"{(local / 'centroid-artifacts').resolve().as_uri()}/"
+    )
+    centroid_metadata["descriptor"]["source"] = snapshot["source"]
+    centroid_metadata["centroids"] = {
         "profile": "parquet",
         "uri": centroids.as_uri(),
     }
-    shared["fingerprint"] = shared_ivf_fingerprint(shared["descriptor"])
-    shared_path.write_text(
-        json.dumps(shared, indent=2, sort_keys=True) + "\n",
+    centroid_metadata["fingerprint"] = ivf_centroids_fingerprint(
+        centroid_metadata["descriptor"]
+    )
+    centroid_metadata_path.write_text(
+        json.dumps(centroid_metadata, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    snapshot["parameters"]["shared_ivf_fingerprint"] = shared["fingerprint"]
-    snapshot["parameters"]["shared_ivf_metadata_location"] = shared_path.as_uri()
+    snapshot["parameters"]["ivf_centroids_fingerprint"] = centroid_metadata[
+        "fingerprint"
+    ]
+    snapshot["parameters"]["ivf_centroids_metadata_location"] = (
+        centroid_metadata_path.as_uri()
+    )
     snapshot["index-relations"] = {
         "ivf_centroids": {
             "profile": "parquet",

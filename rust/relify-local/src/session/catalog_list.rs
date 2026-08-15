@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use datafusion::catalog::{CatalogProvider, CatalogProviderList};
 use relify_catalog::{
-    CatalogEntry, CatalogTombstone, IndexCatalog, IndexIdentifier, SharedIvfCatalogEntry,
-    SharedIvfClaim, SharedIvfClaimResult, TableCatalog, TableDefinition, TableIdentifier,
+    CatalogEntry, CatalogTombstone, IndexCatalog, IndexIdentifier, IvfCentroidsCatalogEntry,
+    IvfCentroidsClaim, IvfCentroidsClaimResult, TableCatalog, TableDefinition, TableIdentifier,
 };
-use relify_meta::{IndexMetadata, RelationReference, SharedIvfDescriptor, SharedIvfMetadata};
+use relify_meta::{IndexMetadata, IvfCentroidsDescriptor, IvfCentroidsMetadata, RelationReference};
 use uuid::Uuid;
 
 pub(super) struct RelifyCatalogList {
@@ -122,49 +122,52 @@ impl IndexCatalog for RelifyCatalogList {
         self.indexes.purge_tombstone(tombstone)
     }
 
-    fn load_shared_ivf(&self, fingerprint: &str) -> relify_catalog::Result<SharedIvfCatalogEntry> {
-        self.indexes.load_shared_ivf(fingerprint)
+    fn load_ivf_centroids(
+        &self,
+        fingerprint: &str,
+    ) -> relify_catalog::Result<IvfCentroidsCatalogEntry> {
+        self.indexes.load_ivf_centroids(fingerprint)
     }
 
-    fn claim_shared_ivf(
+    fn claim_ivf_centroids(
         &self,
-        descriptor: &SharedIvfDescriptor,
+        descriptor: &IvfCentroidsDescriptor,
         owner: Uuid,
         lease_duration_ms: i64,
-    ) -> relify_catalog::Result<SharedIvfClaimResult> {
+    ) -> relify_catalog::Result<IvfCentroidsClaimResult> {
         self.indexes
-            .claim_shared_ivf(descriptor, owner, lease_duration_ms)
+            .claim_ivf_centroids(descriptor, owner, lease_duration_ms)
     }
 
-    fn renew_shared_ivf_claim(
+    fn renew_ivf_centroids_claim(
         &self,
-        claim: &SharedIvfClaim,
+        claim: &IvfCentroidsClaim,
         lease_duration_ms: i64,
     ) -> relify_catalog::Result<()> {
         self.indexes
-            .renew_shared_ivf_claim(claim, lease_duration_ms)
+            .renew_ivf_centroids_claim(claim, lease_duration_ms)
     }
 
-    fn publish_shared_ivf(
+    fn publish_ivf_centroids(
         &self,
-        claim: &SharedIvfClaim,
+        claim: &IvfCentroidsClaim,
         metadata_location: &str,
-        metadata: &SharedIvfMetadata,
-    ) -> relify_catalog::Result<SharedIvfCatalogEntry> {
+        metadata: &IvfCentroidsMetadata,
+    ) -> relify_catalog::Result<IvfCentroidsCatalogEntry> {
         self.indexes
-            .publish_shared_ivf(claim, metadata_location, metadata)
+            .publish_ivf_centroids(claim, metadata_location, metadata)
     }
 
-    fn abandon_shared_ivf(
+    fn abandon_ivf_centroids(
         &self,
-        claim: &SharedIvfClaim,
+        claim: &IvfCentroidsClaim,
         error: &str,
     ) -> relify_catalog::Result<()> {
-        self.indexes.abandon_shared_ivf(claim, error)
+        self.indexes.abandon_ivf_centroids(claim, error)
     }
 
-    fn list_shared_ivf(&self) -> relify_catalog::Result<Vec<SharedIvfCatalogEntry>> {
-        self.indexes.list_shared_ivf()
+    fn list_ivf_centroids(&self) -> relify_catalog::Result<Vec<IvfCentroidsCatalogEntry>> {
+        self.indexes.list_ivf_centroids()
     }
 }
 

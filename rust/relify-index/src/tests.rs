@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use relify_catalog::{IndexIdentifier, SharedIvfClaimResult, SqliteCatalog};
+use relify_catalog::{IndexIdentifier, IvfCentroidsClaimResult, SqliteCatalog};
 use relify_core::{IndexArtifacts, IndexFormat};
 use relify_meta::{
     DistanceMetric, IVF_CLUSTERING_PROFILE_VERSION, IndexMetadata, IndexSnapshot,
-    RelationReference, SharedIvfDescriptor, SharedIvfMetadata, SharedIvfReference,
+    IvfCentroidsDescriptor, IvfCentroidsMetadata, IvfCentroidsReference, RelationReference,
     SnapshotLogEntry,
 };
 use relify_storage::{StorageRegistry, Warehouse};
@@ -53,7 +53,7 @@ fn source(uri: &str) -> RelationReference {
 }
 
 fn artifacts(uri: &str, nlist: usize) -> IndexArtifacts {
-    let shared_uuid = Uuid::new_v4();
+    let centroid_uuid = Uuid::new_v4();
     IndexArtifacts {
         format: IndexFormat::ivf(DistanceMetric::L2Squared),
         parameters: BTreeMap::from([
@@ -61,11 +61,14 @@ fn artifacts(uri: &str, nlist: usize) -> IndexArtifacts {
             ("nlist".into(), nlist.to_string()),
             ("ntotal".into(), "3".into()),
             ("posting_encoding".into(), "source".into()),
-            ("shared_ivf_fingerprint".into(), Uuid::new_v4().to_string()),
-            ("shared_ivf_uuid".into(), shared_uuid.to_string()),
             (
-                "shared_ivf_metadata_location".into(),
-                format!("file:///metadata/{shared_uuid}/v1.metadata.json"),
+                "ivf_centroids_fingerprint".into(),
+                Uuid::new_v4().to_string(),
+            ),
+            ("ivf_centroids_uuid".into(), centroid_uuid.to_string()),
+            (
+                "ivf_centroids_metadata_location".into(),
+                format!("file:///metadata/{centroid_uuid}/v1.metadata.json"),
             ),
         ]),
         index_relations: BTreeMap::from([
@@ -109,8 +112,8 @@ fn metadata_document(store: &MetadataStore) -> IndexMetadata {
     }
 }
 
-fn shared_ivf_document(store: &MetadataStore) -> SharedIvfMetadata {
-    let descriptor = SharedIvfDescriptor {
+fn ivf_centroids_document(store: &MetadataStore) -> IvfCentroidsMetadata {
+    let descriptor = IvfCentroidsDescriptor {
         source: source("file:///data/documents.parquet"),
         vector_field: "embedding".into(),
         dimension: 2,
@@ -119,48 +122,50 @@ fn shared_ivf_document(store: &MetadataStore) -> SharedIvfMetadata {
         clustering_profile_version: IVF_CLUSTERING_PROFILE_VERSION,
     };
     let artifact_uuid = Uuid::new_v4();
-    SharedIvfMetadata {
+    IvfCentroidsMetadata {
         format_version: 1,
         artifact_uuid,
         fingerprint: descriptor.fingerprint().unwrap(),
-        location: store.shared_ivf_location(artifact_uuid).unwrap(),
+        location: store.ivf_centroids_location(artifact_uuid).unwrap(),
         created_at_ms: 1_750_000_000_000,
         descriptor,
-        centroids: source("file:///indexes/shared/centroids"),
+        centroids: source("file:///indexes/centroid-artifacts/centroids"),
     }
 }
 
 #[tokio::test]
-async fn repository_validates_the_shared_artifact_against_the_logical_snapshot() {
+async fn repository_validates_the_centroid_artifact_against_the_logical_snapshot() {
     let temporary = TempDir::new().unwrap();
     let repository = repository(&temporary);
     let store = repository.metadata_store();
-    let shared = shared_ivf_document(store);
-    let shared_location = store.write_shared_ivf(&shared).await.unwrap();
+    let centroids = ivf_centroids_document(store);
+    let centroid_location = store.write_ivf_centroids(&centroids).await.unwrap();
     let mut snapshot = metadata_document(store).current_snapshot().unwrap().clone();
-    snapshot.source = shared.descriptor.source.clone();
+    snapshot.source = centroids.descriptor.source.clone();
     snapshot
         .index_relations
-        .insert("ivf_centroids".into(), shared.centroids.clone());
+        .insert("ivf_centroids".into(), centroids.centroids.clone());
+    snapshot.parameters.insert(
+        "ivf_centroids_fingerprint".into(),
+        centroids.fingerprint.clone(),
+    );
+    snapshot.parameters.insert(
+        "ivf_centroids_uuid".into(),
+        centroids.artifact_uuid.to_string(),
+    );
     snapshot
         .parameters
-        .insert("shared_ivf_fingerprint".into(), shared.fingerprint.clone());
-    snapshot
-        .parameters
-        .insert("shared_ivf_uuid".into(), shared.artifact_uuid.to_string());
-    snapshot
-        .parameters
-        .insert("shared_ivf_metadata_location".into(), shared_location);
+        .insert("ivf_centroids_metadata_location".into(), centroid_location);
 
     repository
-        .load_snapshot_shared_ivf(&snapshot)
+        .load_snapshot_ivf_centroids(&snapshot)
         .await
         .unwrap();
 
     snapshot.vector_field = "other_embedding".into();
     assert!(
         repository
-            .load_snapshot_shared_ivf(&snapshot)
+            .load_snapshot_ivf_centroids(&snapshot)
             .await
             .is_err()
     );
@@ -198,54 +203,54 @@ async fn metadata_store_writes_immutable_validated_documents() {
 }
 
 #[tokio::test]
-async fn metadata_store_bounds_index_and_shared_documents_in_one_cache() {
+async fn metadata_store_bounds_index_and_centroid_documents_in_one_cache() {
     let temporary = TempDir::new().unwrap();
     let store = metadata_store(&temporary, 1);
     let index = metadata_document(&store);
     let index_location = store.write_initial(&index).await.unwrap();
-    let shared = shared_ivf_document(&store);
-    let shared_location = store.write_shared_ivf(&shared).await.unwrap();
+    let centroids = ivf_centroids_document(&store);
+    let centroid_location = store.write_ivf_centroids(&centroids).await.unwrap();
 
-    for location in [&index_location, &shared_location] {
+    for location in [&index_location, &centroid_location] {
         std::fs::remove_file(url::Url::parse(location).unwrap().to_file_path().unwrap()).unwrap();
     }
 
     assert!(store.load(&index_location).await.is_err());
     assert_eq!(
-        store.load_shared_ivf(&shared_location).await.unwrap(),
-        shared
+        store.load_ivf_centroids(&centroid_location).await.unwrap(),
+        centroids
     );
 }
 
 #[tokio::test]
-async fn repository_validates_shared_ivf_catalog_and_reference_identity() {
+async fn repository_validates_ivf_centroids_catalog_and_reference_identity() {
     let temporary = TempDir::new().unwrap();
     let repository = repository(&temporary);
-    let shared = shared_ivf_document(repository.metadata_store());
+    let centroids = ivf_centroids_document(repository.metadata_store());
     let location = repository
         .metadata_store()
-        .write_shared_ivf(&shared)
+        .write_ivf_centroids(&centroids)
         .await
         .unwrap();
     let claim = match repository
         .catalog()
-        .claim_shared_ivf(&shared.descriptor, Uuid::new_v4(), 60_000)
+        .claim_ivf_centroids(&centroids.descriptor, Uuid::new_v4(), 60_000)
         .unwrap()
     {
-        SharedIvfClaimResult::Claimed(claim) => claim,
+        IvfCentroidsClaimResult::Claimed(claim) => claim,
         other => panic!("first caller must own the claim, received {other:?}"),
     };
     repository
         .catalog()
-        .publish_shared_ivf(&claim, &location, &shared)
+        .publish_ivf_centroids(&claim, &location, &centroids)
         .unwrap();
 
     let loaded = repository
-        .load_shared_ivf(&shared.fingerprint)
+        .load_ivf_centroids(&centroids.fingerprint)
         .await
         .unwrap();
-    assert_eq!(loaded.metadata, shared);
-    let reference = SharedIvfReference::new(
+    assert_eq!(loaded.metadata, centroids);
+    let reference = IvfCentroidsReference::new(
         &loaded.entry.fingerprint,
         loaded.entry.artifact_uuid,
         &loaded.entry.metadata_location,
@@ -253,14 +258,14 @@ async fn repository_validates_shared_ivf_catalog_and_reference_identity() {
     .unwrap();
     assert_eq!(
         repository
-            .load_shared_ivf_reference(&reference)
+            .load_ivf_centroids_reference(&reference)
             .await
             .unwrap()
             .metadata,
         loaded.metadata
     );
 
-    let mismatched = SharedIvfReference::new(
+    let mismatched = IvfCentroidsReference::new(
         reference.fingerprint,
         Uuid::new_v4(),
         reference.metadata_location,
@@ -268,19 +273,19 @@ async fn repository_validates_shared_ivf_catalog_and_reference_identity() {
     .unwrap();
     assert!(
         repository
-            .load_shared_ivf_reference(&mismatched)
+            .load_ivf_centroids_reference(&mismatched)
             .await
             .is_err()
     );
 
-    let malformed = SharedIvfReference {
+    let malformed = IvfCentroidsReference {
         fingerprint: loaded.entry.fingerprint.to_uppercase(),
         artifact_uuid: loaded.entry.artifact_uuid,
         metadata_location: loaded.entry.metadata_location,
     };
     assert!(
         repository
-            .load_shared_ivf_reference(&malformed)
+            .load_ivf_centroids_reference(&malformed)
             .await
             .is_err()
     );
@@ -296,10 +301,10 @@ async fn metadata_store_rejects_foreign_locations() {
 
     assert!(store.write_initial(&metadata).await.is_err());
 
-    let mut shared = shared_ivf_document(store);
-    shared.location = "file:///tmp/other/shared/".into();
+    let mut centroids = ivf_centroids_document(store);
+    centroids.location = "file:///tmp/other/centroid-artifacts/".into();
     assert!(matches!(
-        store.write_shared_ivf(&shared).await,
+        store.write_ivf_centroids(&centroids).await,
         Err(Error::InvalidMetadata(_))
     ));
 }

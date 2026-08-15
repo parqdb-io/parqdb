@@ -4,7 +4,7 @@ use crate::error::invalid;
 use uuid::Uuid;
 
 use crate::metadata::parse_positive_parameter;
-use crate::{DistanceMetric, IndexSnapshot, Result, SharedIvfReference};
+use crate::{DistanceMetric, IndexSnapshot, IvfCentroidsReference, Result};
 
 /// Current IVF index schema version.
 pub const IVF_SCHEMA_VERSION: i32 = 1;
@@ -58,26 +58,26 @@ impl PostingEncoding {
     }
 }
 
-/// Resolves the shared-IVF reference declared by an IVF snapshot.
-pub fn shared_ivf_reference(snapshot: &IndexSnapshot) -> Result<SharedIvfReference> {
+/// Resolves the IVF-centroids reference declared by an IVF snapshot.
+pub fn ivf_centroids_reference(snapshot: &IndexSnapshot) -> Result<IvfCentroidsReference> {
     if snapshot.index_family != "ivf" || snapshot.index_schema_version != IVF_SCHEMA_VERSION {
-        return invalid("shared IVF reference requires IVF schema version 1");
+        return invalid("IVF centroids reference requires IVF schema version 1");
     }
     let fingerprint = snapshot
         .parameters
-        .get("shared_ivf_fingerprint")
-        .ok_or_else(|| crate::Error::new("missing parameter: shared_ivf_fingerprint"))?;
+        .get("ivf_centroids_fingerprint")
+        .ok_or_else(|| crate::Error::new("missing parameter: ivf_centroids_fingerprint"))?;
     let artifact_uuid = snapshot
         .parameters
-        .get("shared_ivf_uuid")
-        .ok_or_else(|| crate::Error::new("missing parameter: shared_ivf_uuid"))?;
+        .get("ivf_centroids_uuid")
+        .ok_or_else(|| crate::Error::new("missing parameter: ivf_centroids_uuid"))?;
     let artifact_uuid = Uuid::parse_str(artifact_uuid)
-        .map_err(|_| crate::Error::new("invalid parameter: shared_ivf_uuid"))?;
+        .map_err(|_| crate::Error::new("invalid parameter: ivf_centroids_uuid"))?;
     let metadata_location = snapshot
         .parameters
-        .get("shared_ivf_metadata_location")
-        .ok_or_else(|| crate::Error::new("missing parameter: shared_ivf_metadata_location"))?;
-    SharedIvfReference::new(fingerprint, artifact_uuid, metadata_location)
+        .get("ivf_centroids_metadata_location")
+        .ok_or_else(|| crate::Error::new("missing parameter: ivf_centroids_metadata_location"))?;
+    IvfCentroidsReference::new(fingerprint, artifact_uuid, metadata_location)
 }
 
 pub(crate) fn validate_family(snapshot: &IndexSnapshot) -> Result<()> {
@@ -100,9 +100,9 @@ fn validate_ivf(snapshot: &IndexSnapshot) -> Result<()> {
         "nlist",
         "ntotal",
         "posting_encoding",
-        "shared_ivf_fingerprint",
-        "shared_ivf_uuid",
-        "shared_ivf_metadata_location",
+        "ivf_centroids_fingerprint",
+        "ivf_centroids_uuid",
+        "ivf_centroids_metadata_location",
     ];
     if snapshot.parameters.len() != expected_parameters.len()
         || snapshot
@@ -126,7 +126,7 @@ fn validate_ivf(snapshot: &IndexSnapshot) -> Result<()> {
     if nlist > ntotal {
         return invalid("nlist must not exceed ntotal");
     }
-    shared_ivf_reference(snapshot)?;
+    ivf_centroids_reference(snapshot)?;
 
     let expected_relations = ["ivf_centroids", "ivf_postings"];
     if !snapshot.index_relations.contains_key(expected_relations[0])

@@ -1,11 +1,11 @@
-# Shared IVF and Cosine Support
+# Reusable IVF Centroids and Cosine Support
 
 ## Problem
 
-An IVF build currently publishes one self-contained index whose coarse
-clustering and postings encoding are coupled. Building `source`, `lvq4`, and
-`lvq8` indexes over the same source state therefore repeats centroid training
-even though those indexes can use the same coarse model.
+IVF, IVF-LVQ4, and IVF-LVQ8 indexes over the same source can use the same
+coarse centroids, but each representation requires different postings. The
+reusable object must therefore be the centroid relation, not another logical
+IVF index and not its postings.
 
 The current schema also supports only squared Euclidean distance and requires
 source vectors to be `list<float>`. This prevents Relify from indexing datasets
@@ -23,9 +23,9 @@ adds cosine distance by mapping it to squared-L2 over normalized vectors.
 | --- | --- |
 | Which logical index types are supported? | IVF, IVF-LVQ4, and IVF-LVQ8. |
 | Are source vectors copied into an index? | No. The `flat` encoding is removed. |
-| What does the shared IVF contain? | Centroids for the bound source state. |
-| When is an IVF reused? | Automatically for the same source state, vector-index definition, and `nlist`. |
-| How are postings built? | Every logical index scans the source, assigns rows against the shared centroids, and writes its own postings. |
+| What is reused? | Only centroids for the bound source state. |
+| When are centroids reused? | Automatically for the same source state, vector-index definition, and `nlist`. |
+| How are postings built? | Every logical index scans the source, assigns rows against the reusable centroids, and writes exactly one postings relation in its own encoding. |
 | Are encoding files positionally aligned? | No. Every encoding row carries its own cluster ID and source key. |
 | Which source vector element types are accepted? | `float` and `double`; index computation canonicalizes both to `float`. |
 | How is cosine implemented? | Normalize canonical source and query vectors, reuse the squared-L2 path, and divide reported distances by two. |
@@ -36,7 +36,7 @@ adds cosine distance by mapping it to squared-L2 over normalized vectors.
 
 This RFC defines:
 
-- the identity and lifecycle of a shared IVF artifact;
+- the identity and lifecycle of an IVF centroid artifact;
 - the relationship between that artifact and logical indexes;
 - the source, LVQ4, and LVQ8 representations;
 - cosine and source-vector type semantics;
@@ -49,13 +49,14 @@ produce bit-identical centroids or codes.
 
 ## Architecture
 
-A shared IVF artifact is immutable and bound to one exact source state. Logical
-indexes refer to it and add only the data required by their representation.
+An IVF centroid artifact is immutable and bound to one exact source state.
+Logical indexes refer to it and own the postings required by their
+representation.
 
 ```mermaid
 flowchart LR
     S[Exact source relation state]
-    C[Shared IVF artifact<br/>centroids]
+    C[Reusable centroid artifact]
     I[IVF logical index<br/>source scoring]
     Q4[IVF-LVQ4 logical index<br/>LVQ4 codes]
     Q8[IVF-LVQ8 logical index<br/>LVQ8 codes]
@@ -74,17 +75,17 @@ data; neither is a copy of the original vector column.
 
 ### Terms
 
-- **Shared IVF artifact**: immutable centroids and their source binding.
-- **IVF identity**: the semantic descriptor used to find or create a shared IVF
-  artifact.
+- **IVF centroid artifact**: immutable centroids and their source binding.
+- **Centroid identity**: the semantic descriptor used to find or create an IVF
+  centroid artifact.
 - **Logical index**: the user-named, queryable IVF, IVF-LVQ4, or IVF-LVQ8
   object published through the ordinary index catalog.
 - **Representation**: `source`, `lvq4`, or `lvq8`, selected by one logical
   index.
 
-## 1. Shared IVF Identity
+## 1. Centroid Identity
 
-Two builds reuse an IVF only when all fields in this descriptor match:
+Two builds reuse centroids only when all fields in this descriptor match:
 
 | Field | Reason |
 | --- | --- |
@@ -109,7 +110,8 @@ The Parquet rule is deliberately literal:
 - appending, deleting, or overwriting a file behind the URI, including changing
   the expansion of a wildcard URI, makes reuse unsafe;
 - changed data must be published at a different canonical URI, which produces a
-  different IVF fingerprint even when its schema and row count are unchanged;
+  different centroid fingerprint even when its schema and row count are
+  unchanged;
   and
 - changing only the URI also produces a different source state. This RFC does
   not infer byte equivalence between two Parquet locations.
@@ -119,9 +121,9 @@ different Parquet URIs as different source states. It cannot reject an unsafe
 same-URI overwrite because that mutation is not represented in metadata; such
 an overwrite is a source-contract violation by the caller.
 
-The canonical descriptor is hashed to produce an IVF fingerprint. The hash is
-a lookup key, not sufficient proof of compatibility: a catalog entry retains
-the complete descriptor and readers verify it after lookup.
+The canonical descriptor is hashed to produce a centroid fingerprint. The hash
+is a lookup key, not sufficient proof of compatibility: a catalog entry
+retains the complete descriptor and readers verify it after lookup.
 
 For one source state and vector-index definition, `nlist` is the only
 user-selected field that distinguishes coarse partitions. The other identity
@@ -129,51 +131,51 @@ fields prevent accidental reuse across different columns, metrics, or schema
 contracts.
 
 `posting_encoding`, logical index name, builder implementation, physical file
-layout, compression, and writer parallelism are not part of IVF identity. The
-first successfully registered artifact for an identity becomes the canonical
-one. Later builds consume its published centroids rather than training an
-equivalent model independently.
+layout, compression, and writer parallelism are not part of centroid identity.
+The first successfully registered artifact for an identity becomes the
+canonical one. Later builds consume its published centroids rather than
+training an equivalent model independently.
 
 ## 2. Catalog Model
 
 The catalog manages two namespaces of state:
 
 1. user-visible logical indexes, addressed by the existing index identifier;
-2. shared IVF artifacts, addressed internally by IVF fingerprint.
+2. IVF centroid artifacts, addressed internally by centroid fingerprint.
 
-The shared-artifact registry is not exposed by `list_indexes`. A plain IVF
-logical index is still user-visible; it uses the shared centroids and owns its
+The centroid registry is not exposed by `list_indexes`. A plain IVF logical
+index is still user-visible; it uses the reusable centroids and owns its
 source-key postings like every other logical index.
 
 Conceptually, the catalog adds these internal operations:
 
 | Operation | Semantics |
 | --- | --- |
-| `load_shared_ivf(fingerprint)` | Return the matching ready artifact or no match. |
-| `claim_shared_ivf(fingerprint, descriptor)` | Atomically claim construction when no compatible artifact exists. |
-| `publish_shared_ivf(claim, metadata_location)` | Make one complete immutable artifact reusable. |
-| `abandon_shared_ivf(claim, error)` | Record the failure and make the fingerprint claimable by a later build. |
+| `load_ivf_centroids(fingerprint)` | Return the matching ready artifact or no match. |
+| `claim_ivf_centroids(fingerprint, descriptor)` | Atomically claim construction when no compatible artifact exists. |
+| `publish_ivf_centroids(claim, metadata_location)` | Make one complete immutable artifact reusable. |
+| `abandon_ivf_centroids(claim, error)` | Record the failure and make the fingerprint claimable by a later build. |
 
 A claim has an owner and lease so another process does not wait forever after
 a builder terminates. Catalog implementations may use a database row,
 metastore entry, or another compare-and-swap mechanism. They must not discover
 reuse by scanning user-visible index names.
 
-Logical index metadata references the shared artifact by fingerprint, stable
+Logical index metadata references the centroid artifact by fingerprint, stable
 artifact UUID, and immutable metadata location. A reader validates that the
 artifact descriptor matches the logical index snapshot before using it.
 
 Reuse is limited to one catalog trust domain and remains subject to ordinary
 source and index authorization. A builder must be able to resolve the relation
-profiles used by the shared artifact. It must not train a competing IVF for the
-same fingerprint merely because its preferred physical writer is different;
-physical replication of one artifact is outside this RFC.
+profiles used by the centroid artifact. It must not train competing centroids
+for the same fingerprint merely because its preferred physical writer is
+different; physical replication of one artifact is outside this RFC.
 
 ## 3. Index Relations
 
-### Shared IVF artifact
+### IVF centroid artifact
 
-The shared artifact contains one logical relation:
+The centroid artifact contains one logical relation:
 
 ```text
 ivf_centroids(cid, centroid)
@@ -229,16 +231,16 @@ sequenceDiagram
     User->>API: create_index(name, IVF configuration)
     API->>API: reserve logical index name in the build coordinator
     API-->>User: None
-    Builder->>Catalog: load or claim shared IVF fingerprint
-    alt Shared IVF exists
-        Catalog-->>Builder: immutable IVF metadata
+    Builder->>Catalog: load or claim centroid fingerprint
+    alt Centroid artifact exists
+        Catalog-->>Builder: immutable centroid metadata
     else This builder owns the claim
         Builder->>Storage: train and write centroids
-        Builder->>Catalog: publish shared IVF artifact
+        Builder->>Catalog: publish centroid artifact
     else Another builder owns the claim
         Builder->>Catalog: wait for or adopt the published artifact
     end
-    Builder->>Storage: scan source and assign against shared centroids
+    Builder->>Storage: scan source and assign against reusable centroids
     alt Requested representation is IVF
         Builder->>Storage: write source-key postings
     else Requested representation is LVQ4 or LVQ8
@@ -252,11 +254,11 @@ The user observes one logical build with phases such as `resolve_ivf`,
 `train_ivf`, `assign_ivf`, `encode_lvq4`, `encode_lvq8`, and `publish`. Internal
 artifact claims are not separate public build operations.
 
-The shared IVF is published before logical-index postings are built. If the
-postings build fails, the completed IVF remains reusable. No failed logical
-index is made ready. If two builders race, only the claim owner publishes an
-IVF; a losing speculative build must discard its unpublished data and use the
-winner.
+The centroid artifact is published before logical-index postings are built. If
+the postings build fails, the completed centroids remain reusable. No failed
+logical index is made ready. If two builders race, only the claim owner
+publishes the centroids; a losing speculative build must discard its
+unpublished data and use the winner.
 
 A failed logical build retains a session-local status record so the caller can
 inspect its error. It never treats partial files as a published index, and
@@ -326,7 +328,7 @@ metadata fields.
 Centroids are trained from normalized canonical vectors. Assignment and query
 routing use the existing squared-L2 distance to those persisted centroids. A
 query must not normalize a stored centroid independently because the published
-centroid values define the shared IVF partitioning.
+centroid values define the IVF partitioning.
 
 For IVF source scoring, `_distance` is the exact cosine distance of the
 canonical source and query vectors. LVQ4 and LVQ8 encode the normalized source
@@ -336,7 +338,7 @@ to the normalized source vector and therefore approximates cosine distance.
 The reconstructed vector is not normalized again; deviation from unit norm is
 part of the LVQ reconstruction error.
 
-The metric is part of shared IVF identity. L2 and cosine logical indexes never
+The metric is part of centroid identity. L2 and cosine logical indexes never
 share centroids.
 
 ## 7. Query Paths
@@ -380,7 +382,7 @@ documents.create_index(
 The canonical encoding names are `source`, `lvq4`, and `lvq8`; they correspond
 to the user-facing IVF, IVF-LVQ4, and IVF-LVQ8 index types. There is no
 `create_encoding` API. Creating an LVQ index automatically resolves or creates
-its shared IVF artifact. `source` is the default encoding and `l2_squared` is
+its IVF centroid artifact. `source` is the default encoding and `l2_squared` is
 the default metric.
 
 `create_index` remains a command and returns `None`. Construction may outlive
@@ -394,7 +396,7 @@ documents.wait_for_index("documents_lvq8")
 ```
 
 `wait_timeout` remains available on `create_index` for callers that want one
-blocking call. `index_status` exposes the current shared-IVF or encoding phase.
+blocking call. `index_status` exposes the current centroid or postings phase.
 The internal `BuildOperation` is not public API.
 
 This API shape follows
@@ -414,20 +416,21 @@ future today.
 ## 9. Refresh, Drop, and Garbage Collection
 
 An Iceberg source refresh produces a different exact source state and therefore
-a new IVF fingerprint. Refresh builds or reuses the matching new shared IVF,
-builds the requested representation, and commits a new logical index snapshot.
-It does not mutate the previous IVF artifact.
+a new centroid fingerprint. Refresh builds or reuses the matching new centroid
+artifact, builds the requested representation, and commits a new logical index
+snapshot. It does not mutate the previous centroid artifact.
 
 For Parquet, Relify cannot detect replacement at the same URI. The user must
-publish changed source data under a new URI before rebuilding. Reusing an IVF
+publish changed source data under a new URI before rebuilding. Reusing centroids
 after changing the files behind its Parquet URI violates the source contract.
 For example, refreshing `s3://bucket/documents/v1/` without modifying that
-prefix may reuse its IVF; overwriting a file under `v1/` and refreshing may not.
+prefix may reuse its centroids; overwriting a file under `v1/` and refreshing
+may not.
 The changed files must instead be published under a location such as
 `s3://bucket/documents/v2/`, which forces a new source state and fingerprint.
 
 Dropping a logical index removes only its catalog visibility. It does not
-synchronously delete its shared IVF artifact or encoding files. Garbage
+synchronously delete its IVF centroid artifact or postings files. Garbage
 collection may remove an artifact only when it is unreachable from:
 
 - every current or retained logical index metadata file;
@@ -445,7 +448,7 @@ branches:
 
 - schema-v1 `store_vectors` is removed;
 - schema-v2 `posting_encoding = flat` is removed;
-- centroids become a shared artifact;
+- centroids become an independently reusable artifact;
 - source vectors may be `float` or `double`; and
 - metrics are `l2_squared` and `cosine`.
 
@@ -456,13 +459,13 @@ more complexity than the migration is worth.
 
 ## 11. Implementation Order
 
-1. Define the new shared-IVF and logical-index metadata schemas and fixtures.
+1. Define the new IVF-centroids and logical-index metadata schemas and fixtures.
 2. Add catalog artifact lookup, claims, and reachability rules.
 3. Split centroid training from each logical index's assignment and postings build.
 4. Remove `flat` and old-schema implementation paths.
 5. Accept `list<double>` sources and add canonical float conversion.
 6. Add cosine normalization and result scaling to build and query paths.
-7. Reuse the shared artifact from the Spark builder and query backends.
+7. Reuse the centroid artifact from the Spark builder and query backends.
 8. Add concurrent-build, failed-postings, refresh, drop, and GC tests.
 9. Benchmark L2 regressions and cosine Recall on the Cohere dataset.
 

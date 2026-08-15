@@ -73,7 +73,7 @@ A builder creates the physical index and publishes its metadata:
 - `relify.Local` builds Parquet indexes in the current process with native Rust
   training and assignment.
 
-Spark and StarRocks construction is not implemented for the shared-IVF schema.
+Spark and StarRocks construction is not implemented for the IVF-centroids schema.
 Builders remain independent from query backends, so a conforming external
 builder may publish an Iceberg index for DataFusion, Spark, or StarRocks to
 query.

@@ -9,7 +9,7 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Shared IVF centroid artifacts reused by source, LVQ4, and LVQ8 logical
+- Reusable IVF centroid artifacts used by source, LVQ4, and LVQ8 logical
   indexes.
 - Cosine distance and `list<double>` source-vector support through canonical
   float conversion.
@@ -24,7 +24,7 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   configuration selects `source`, `lvq4`, or `lvq8` encoding and
   `l2_squared` or `cosine` distance.
 - The experimental Spark integration is query-only while its builder migrates
-  to the shared-IVF publication contract.
+  to the IVF-centroids publication contract.
 
 ### Fixed
 

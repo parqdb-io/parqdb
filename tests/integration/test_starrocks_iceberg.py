@@ -1,4 +1,4 @@
-"""StarRocks conformance test over a real shared Iceberg catalog."""
+"""StarRocks conformance test over a real centroid_parameters Iceberg catalog."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from support.config import IcebergConfig, StarRocksConfig
-from support.indexes import write_shared_ivf_metadata
+from support.indexes import write_ivf_centroids_metadata
 
 pytestmark = pytest.mark.requires("starrocks", "iceberg")
 
@@ -133,7 +133,7 @@ def _publish_fixture(
         (*namespace, f"{fixture_name}_ivf_centroids"),
         catalog_name,
     )
-    shared = write_shared_ivf_metadata(
+    centroid_parameters = write_ivf_centroids_metadata(
         metadata_root,
         source=source,
         centroids=centroids,
@@ -149,7 +149,7 @@ def _publish_fixture(
         source_key_fields=fixture_snapshot["source-key-fields"],
         builder="fixture",
         metric=fixture_snapshot["metric"],
-        parameters={**fixture_snapshot["parameters"], **shared},
+        parameters={**fixture_snapshot["parameters"], **centroid_parameters},
         index_relations={
             "ivf_centroids": json.dumps(centroids, separators=(",", ":")),
             "ivf_postings": json.dumps(

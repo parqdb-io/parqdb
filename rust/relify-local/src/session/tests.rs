@@ -14,10 +14,11 @@ use datafusion::prelude::ParquetReadOptions;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
-use relify_catalog::{SharedIvfCatalogEntry, SharedIvfClaim, SharedIvfClaimResult};
+use relify_catalog::{IvfCentroidsCatalogEntry, IvfCentroidsClaim, IvfCentroidsClaimResult};
 use relify_meta::{
-    DistanceMetric, IVF_CLUSTERING_PROFILE_VERSION, IndexMetadata, PostingEncoding,
-    SharedIvfDescriptor, SharedIvfMetadata, SharedIvfReference, SnapshotLogEntry,
+    DistanceMetric, IVF_CLUSTERING_PROFILE_VERSION, IndexMetadata, IvfCentroidsDescriptor,
+    IvfCentroidsMetadata, IvfCentroidsReference, PostingEncoding, SnapshotLogEntry,
+    ivf_centroids_reference,
 };
 use rusqlite::Connection;
 use tempfile::TempDir;
@@ -25,7 +26,7 @@ use uuid::Uuid;
 
 use super::*;
 use crate::local_uri::directory_to_file_uri;
-use crate::{IvfConfig, MaintenanceKind, relify_session_config};
+use crate::{IvfConfig, MaintenanceKind, PublishedIndex, relify_session_config};
 
 struct MemoryEntry {
     entry: CatalogEntry,
@@ -208,7 +209,7 @@ fn session_preserves_datafusion_config_and_runtime() {
 #[derive(Default)]
 struct MemoryCatalog {
     entries: Mutex<BTreeMap<IndexIdentifier, MemoryEntry>>,
-    shared_ivf: Mutex<BTreeMap<String, SharedIvfCatalogEntry>>,
+    ivf_centroids: Mutex<BTreeMap<String, IvfCentroidsCatalogEntry>>,
 }
 
 impl IndexCatalog for MemoryCatalog {
@@ -273,60 +274,69 @@ impl IndexCatalog for MemoryCatalog {
             .collect())
     }
 
-    fn load_shared_ivf(&self, fingerprint: &str) -> relify_catalog::Result<SharedIvfCatalogEntry> {
-        self.shared_ivf
+    fn load_ivf_centroids(
+        &self,
+        fingerprint: &str,
+    ) -> relify_catalog::Result<IvfCentroidsCatalogEntry> {
+        self.ivf_centroids
             .lock()
             .unwrap()
             .get(fingerprint)
             .cloned()
-            .ok_or_else(|| CatalogError::SharedIvfNotFound(fingerprint.into()))
+            .ok_or_else(|| CatalogError::IvfCentroidsNotFound(fingerprint.into()))
     }
 
-    fn claim_shared_ivf(
+    fn claim_ivf_centroids(
         &self,
-        descriptor: &SharedIvfDescriptor,
+        descriptor: &IvfCentroidsDescriptor,
         owner: Uuid,
         _lease_duration_ms: i64,
-    ) -> relify_catalog::Result<SharedIvfClaimResult> {
+    ) -> relify_catalog::Result<IvfCentroidsClaimResult> {
         let fingerprint = descriptor.fingerprint()?;
-        if let Some(entry) = self.shared_ivf.lock().unwrap().get(&fingerprint).cloned() {
-            return Ok(SharedIvfClaimResult::Ready(entry));
+        if let Some(entry) = self
+            .ivf_centroids
+            .lock()
+            .unwrap()
+            .get(&fingerprint)
+            .cloned()
+        {
+            return Ok(IvfCentroidsClaimResult::Ready(entry));
         }
-        Ok(SharedIvfClaimResult::Claimed(SharedIvfClaim {
+        Ok(IvfCentroidsClaimResult::Claimed(IvfCentroidsClaim {
             fingerprint,
             owner,
         }))
     }
 
-    fn renew_shared_ivf_claim(
+    fn renew_ivf_centroids_claim(
         &self,
-        _claim: &SharedIvfClaim,
+        _claim: &IvfCentroidsClaim,
         _lease_duration_ms: i64,
     ) -> relify_catalog::Result<()> {
         Ok(())
     }
 
-    fn publish_shared_ivf(
+    fn publish_ivf_centroids(
         &self,
-        claim: &SharedIvfClaim,
+        claim: &IvfCentroidsClaim,
         metadata_location: &str,
-        metadata: &SharedIvfMetadata,
-    ) -> relify_catalog::Result<SharedIvfCatalogEntry> {
-        let entry = SharedIvfCatalogEntry {
+        metadata: &IvfCentroidsMetadata,
+    ) -> relify_catalog::Result<IvfCentroidsCatalogEntry> {
+        let entry = IvfCentroidsCatalogEntry {
             fingerprint: claim.fingerprint.clone(),
             artifact_uuid: metadata.artifact_uuid,
             metadata_location: metadata_location.into(),
         };
-        self.shared_ivf
+        self.ivf_centroids
             .lock()
             .unwrap()
             .insert(claim.fingerprint.clone(), entry.clone());
         Ok(entry)
     }
 
-    fn abandon_shared_ivf(
+    fn abandon_ivf_centroids(
         &self,
-        _claim: &SharedIvfClaim,
+        _claim: &IvfCentroidsClaim,
         _error: &str,
     ) -> relify_catalog::Result<()> {
         Ok(())
@@ -461,7 +471,7 @@ fn direct_pid_metadata(
     source_path: &Path,
     centroids_path: &Path,
     postings_path: &Path,
-    shared: &SharedIvfReference,
+    centroids: &IvfCentroidsReference,
 ) -> IndexMetadata {
     let index_uuid = Uuid::new_v4();
     let snapshot_id = 701;
@@ -484,11 +494,17 @@ fn direct_pid_metadata(
             ("nlist".into(), "2".into()),
             ("ntotal".into(), "3".into()),
             ("posting_encoding".into(), "source".into()),
-            ("shared_ivf_fingerprint".into(), shared.fingerprint.clone()),
-            ("shared_ivf_uuid".into(), shared.artifact_uuid.to_string()),
             (
-                "shared_ivf_metadata_location".into(),
-                shared.metadata_location.clone(),
+                "ivf_centroids_fingerprint".into(),
+                centroids.fingerprint.clone(),
+            ),
+            (
+                "ivf_centroids_uuid".into(),
+                centroids.artifact_uuid.to_string(),
+            ),
+            (
+                "ivf_centroids_metadata_location".into(),
+                centroids.metadata_location.clone(),
             ),
         ]),
         index_relations: BTreeMap::from([
@@ -536,7 +552,7 @@ async fn direct_pid_fixture() -> (TempDir, LocalSession, PathBuf) {
     let source = RelationReference::Parquet {
         uri: directory_to_file_uri(&source_path.canonicalize().unwrap()).unwrap(),
     };
-    let descriptor = SharedIvfDescriptor {
+    let descriptor = IvfCentroidsDescriptor {
         source,
         vector_field: "embedding".into(),
         dimension: 2,
@@ -545,14 +561,14 @@ async fn direct_pid_fixture() -> (TempDir, LocalSession, PathBuf) {
         clustering_profile_version: IVF_CLUSTERING_PROFILE_VERSION,
     };
     let artifact_uuid = Uuid::new_v4();
-    let shared_metadata = SharedIvfMetadata {
+    let centroid_metadata = IvfCentroidsMetadata {
         format_version: 1,
         artifact_uuid,
         fingerprint: descriptor.fingerprint().unwrap(),
         location: session
             .indexes
             .metadata_store()
-            .shared_ivf_location(artifact_uuid)
+            .ivf_centroids_location(artifact_uuid)
             .unwrap(),
         created_at_ms: 1_750_000_000_000,
         descriptor,
@@ -560,21 +576,24 @@ async fn direct_pid_fixture() -> (TempDir, LocalSession, PathBuf) {
             uri: directory_to_file_uri(&centroids_path).unwrap(),
         },
     };
-    let shared_location = session
+    let centroid_location = session
         .indexes
         .metadata_store()
-        .write_shared_ivf(&shared_metadata)
+        .write_ivf_centroids(&centroid_metadata)
         .await
         .unwrap();
-    let shared =
-        SharedIvfReference::new(shared_metadata.fingerprint, artifact_uuid, shared_location)
-            .unwrap();
+    let centroids = IvfCentroidsReference::new(
+        centroid_metadata.fingerprint,
+        artifact_uuid,
+        centroid_location,
+    )
+    .unwrap();
     let metadata = direct_pid_metadata(
         &session,
         &source_path,
         &centroids_path,
         &postings_path,
-        &shared,
+        &centroids,
     );
     let metadata_location = session
         .indexes
@@ -701,9 +720,9 @@ async fn manages_published_indexes_through_catalog_and_source_scoped_operations(
     assert_eq!(index.parameters["nlist"], "2");
     assert_eq!(index.parameters["ntotal"], "3");
     assert_eq!(index.parameters["posting_encoding"], "source");
-    assert!(Uuid::parse_str(&index.parameters["shared_ivf_fingerprint"]).is_ok());
-    assert!(Uuid::parse_str(&index.parameters["shared_ivf_uuid"]).is_ok());
-    assert!(index.parameters["shared_ivf_metadata_location"].ends_with("/v1.metadata.json"));
+    assert!(Uuid::parse_str(&index.parameters["ivf_centroids_fingerprint"]).is_ok());
+    assert!(Uuid::parse_str(&index.parameters["ivf_centroids_uuid"]).is_ok());
+    assert!(index.parameters["ivf_centroids_metadata_location"].ends_with("/v1.metadata.json"));
 
     let other_source = temporary.path().join("other-source");
     write_direct_pid_source(&session.parquet, &other_source).await;
@@ -851,30 +870,88 @@ async fn large_nprobe_pushes_a_static_filter_into_parquet_postings() {
 
 #[tokio::test]
 async fn lvq_indexes_build_and_query_through_parquet() {
-    for (encoding, name) in [
-        (PostingEncoding::Lvq4, "lvq4_index"),
-        (PostingEncoding::Lvq8, "lvq8_index"),
-    ] {
-        assert_lvq_index(encoding, name).await;
-    }
-}
-
-async fn assert_lvq_index(encoding: PostingEncoding, name: &str) {
     let temporary = TempDir::new().unwrap();
     let session = LocalSession::open(temporary.path().join("relify")).unwrap();
     let source_path = temporary.path().join("source");
     write_direct_pid_source(&session.parquet, &source_path).await;
-    let published = session
-        .create_index_with_options(
-            source_path.to_str().unwrap(),
-            name,
-            "embedding",
-            &["source_pid".into()],
-            IvfConfig::new(2, encoding),
-            &LocalBuildOptions::default(),
-        )
-        .await
-        .unwrap();
+    let mut published = Vec::new();
+    for (encoding, name) in [
+        (PostingEncoding::Lvq4, "lvq4_index"),
+        (PostingEncoding::Lvq8, "lvq8_index"),
+    ] {
+        let index = session
+            .create_index_with_options(
+                source_path.to_str().unwrap(),
+                name,
+                "embedding",
+                &["source_pid".into()],
+                IvfConfig::new(2, encoding),
+                &LocalBuildOptions::default(),
+            )
+            .await
+            .unwrap();
+        assert_lvq_index(&session, &source_path, encoding, name, &index).await;
+        published.push(index);
+    }
+
+    assert_eq!(
+        session.list_indexes().unwrap(),
+        ["lvq4_index", "lvq8_index"]
+    );
+    assert_eq!(session.catalog.list_ivf_centroids().unwrap().len(), 1);
+
+    let lvq4 = published[0].metadata.current_snapshot().unwrap();
+    let lvq8 = published[1].metadata.current_snapshot().unwrap();
+    assert_eq!(
+        ivf_centroids_reference(lvq4).unwrap(),
+        ivf_centroids_reference(lvq8).unwrap()
+    );
+    assert_ne!(
+        lvq4.index_relations["ivf_postings"],
+        lvq8.index_relations["ivf_postings"]
+    );
+
+    let RelationReference::Parquet { uri: centroids } = &lvq4.index_relations["ivf_centroids"]
+    else {
+        panic!("local centroids must use Parquet");
+    };
+    let RelationReference::Parquet { uri: lvq4_postings } = &lvq4.index_relations["ivf_postings"]
+    else {
+        panic!("local postings must use Parquet");
+    };
+    let RelationReference::Parquet { uri: lvq8_postings } = &lvq8.index_relations["ivf_postings"]
+    else {
+        panic!("local postings must use Parquet");
+    };
+    let roots = [centroids, lvq4_postings, lvq8_postings];
+    let objects = session.warehouse.list("indexes").await.unwrap();
+    assert!(!objects.is_empty());
+    let mut observed_roots = [false; 3];
+    for object in objects {
+        let location = session
+            .warehouse
+            .object_location(&object.location, false)
+            .unwrap();
+        let root = roots
+            .iter()
+            .position(|root| location.starts_with(root.as_str()))
+            .unwrap_or_else(|| {
+                panic!(
+                    "unexpected index object outside centroid and encoded-postings roots: {location}"
+                )
+            });
+        observed_roots[root] = true;
+    }
+    assert_eq!(observed_roots, [true, true, true]);
+}
+
+async fn assert_lvq_index(
+    session: &LocalSession,
+    source_path: &Path,
+    encoding: PostingEncoding,
+    name: &str,
+    published: &PublishedIndex,
+) {
     let snapshot = published.metadata.current_snapshot().unwrap();
     assert_eq!(snapshot.index_schema_version, 1);
     assert_eq!(PostingEncoding::from_snapshot(snapshot).unwrap(), encoding);
@@ -890,7 +967,7 @@ async fn assert_lvq_index(encoding: PostingEncoding, name: &str) {
 
     let request = SearchRequest {
         source: RelationReference::Parquet {
-            uri: directory_to_file_uri(&source_path).unwrap(),
+            uri: directory_to_file_uri(source_path).unwrap(),
         },
         index: Some(name.into()),
         column: None,
