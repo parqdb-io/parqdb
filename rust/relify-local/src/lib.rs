@@ -11,6 +11,7 @@ mod maintenance;
 mod parquet;
 mod progress;
 mod query;
+mod runtime;
 mod search;
 mod session;
 mod vector;
@@ -31,6 +32,7 @@ pub use relify_core::{
 };
 pub use relify_index::MetadataCacheConfig;
 pub use relify_meta::{IndexMetadata, IndexSnapshot, RelationReference};
+pub use runtime::RelifyRuntime;
 pub use search::{ClusterSelection, ResolvedSearch};
 pub use session::{
     IndexInfo, LocalBuildOptions, LocalSession, PersistentParquetOptions, SourceDescription,

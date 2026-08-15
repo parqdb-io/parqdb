@@ -94,7 +94,7 @@ struct CacheCounters {
     oversized_bypasses: AtomicU64,
 }
 
-/// Allocation and lookup counters for one session's Parquet Page cache.
+/// Allocation and lookup counters for one runtime's Parquet Page cache.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ParquetPageCacheStats {
     /// Active byte capacity.
@@ -282,14 +282,14 @@ impl DecompressedParquetPageCache {
 #[derive(Debug)]
 pub(crate) struct RelifyParquetPageCacheFactory {
     cache: Arc<DecompressedParquetPageCache>,
-    automatic_capacity: usize,
+    default_capacity: usize,
 }
 
 impl RelifyParquetPageCacheFactory {
-    pub(crate) fn new(cache: Arc<DecompressedParquetPageCache>, automatic_capacity: usize) -> Self {
+    pub(crate) fn new(cache: Arc<DecompressedParquetPageCache>, default_capacity: usize) -> Self {
         Self {
             cache,
-            automatic_capacity,
+            default_capacity,
         }
     }
 }
@@ -297,7 +297,7 @@ impl RelifyParquetPageCacheFactory {
 impl ParquetPageCacheFactory for RelifyParquetPageCacheFactory {
     fn update_config(&self, config: &SessionConfig) {
         self.cache
-            .set_capacity(parquet_page_cache_capacity(config).unwrap_or(self.automatic_capacity));
+            .set_capacity(parquet_page_cache_capacity(config).unwrap_or(self.default_capacity));
     }
 
     fn create_page_cache(

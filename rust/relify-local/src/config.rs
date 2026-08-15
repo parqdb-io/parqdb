@@ -1,5 +1,6 @@
 use std::any::Any;
 use std::fmt::Display;
+use std::sync::Arc;
 
 use datafusion::common::config::{
     ConfigEntry, ConfigExtension, ConfigField, ExtensionOptions, Visit,
@@ -10,6 +11,9 @@ use datafusion::prelude::SessionConfig;
 use relify_index::{
     DEFAULT_METADATA_CACHE_BYTES, DEFAULT_METADATA_CACHE_ENTRIES, MetadataCacheConfig,
 };
+
+use crate::Result;
+use crate::runtime::RelifyRuntime;
 
 const DEFAULT_MANIFEST_CACHE_ENTRIES: usize = 128;
 const DEFAULT_MANIFEST_CACHE_BYTES: usize = 64 * 1024 * 1024;
@@ -195,18 +199,44 @@ impl ConfigField for RelifyConfig {
 #[derive(Clone)]
 pub struct LocalSessionOptions {
     config: SessionConfig,
-    runtime: RuntimeEnvBuilder,
+    runtime: LocalRuntimeOptions,
+}
+
+#[derive(Clone)]
+enum LocalRuntimeOptions {
+    Builder(RuntimeEnvBuilder),
+    Shared(Arc<RelifyRuntime>),
 }
 
 impl LocalSessionOptions {
     /// Creates options from `DataFusion`'s native configuration types.
     #[must_use]
     pub const fn new(config: SessionConfig, runtime: RuntimeEnvBuilder) -> Self {
-        Self { config, runtime }
+        Self {
+            config,
+            runtime: LocalRuntimeOptions::Builder(runtime),
+        }
     }
 
-    pub(crate) fn into_parts(self) -> (SessionConfig, RuntimeEnvBuilder) {
-        (ensure_relify_config(self.config), self.runtime)
+    /// Creates session options that reuse process-scoped execution resources.
+    #[must_use]
+    pub fn with_runtime(config: SessionConfig, runtime: Arc<RelifyRuntime>) -> Self {
+        Self {
+            config,
+            runtime: LocalRuntimeOptions::Shared(runtime),
+        }
+    }
+
+    pub(crate) fn into_parts(self) -> Result<(SessionConfig, Arc<RelifyRuntime>)> {
+        let config = ensure_relify_config(self.config);
+        let runtime = match self.runtime {
+            LocalRuntimeOptions::Builder(builder) => Arc::new(RelifyRuntime::new(
+                builder,
+                parquet_page_cache_capacity(&config),
+            )?),
+            LocalRuntimeOptions::Shared(runtime) => runtime,
+        };
+        Ok((config, runtime))
     }
 }
 
@@ -302,8 +332,9 @@ mod tests {
             .set_str("relify.query.manifest.cache.max_bytes", "1024")
             .set_str("relify.query.centroid.cache.max_entries", "5")
             .set_str("relify.query.centroid.cache.max_bytes", "2048");
-        let (config, _) =
-            LocalSessionOptions::new(config, RuntimeEnvBuilder::default()).into_parts();
+        let (config, _) = LocalSessionOptions::new(config, RuntimeEnvBuilder::default())
+            .into_parts()
+            .unwrap();
 
         assert_eq!(
             metadata_cache_config(&config),
@@ -323,7 +354,7 @@ mod tests {
 
     #[test]
     fn prepared_relify_config_accepts_runtime_mutation() {
-        let (mut config, _) = LocalSessionOptions::default().into_parts();
+        let (mut config, _) = LocalSessionOptions::default().into_parts().unwrap();
         config
             .options_mut()
             .set("relify.metadata.cache.max_entries", "7")
