@@ -16,14 +16,15 @@ Relify develops one narrow path at a time. Current priorities follow the
 - Portable synchronous and asynchronous session facades.
 - Process-scoped native index build coordination.
 - Bounded incremental Arrow IPC stream encoding and decoding.
+- Query-only HTTP transport and Python ASGI server with incremental Arrow IPC,
+  cancellation, queue-error mapping, and restart coverage.
 - Atomic refresh and reachability-based orphan removal.
 
 ## Next
 
-1. Add a query-only HTTP transport and Python ASGI server.
-2. Add remote table and index lifecycle after URI authorization,
+1. Add remote table and index lifecycle after URI authorization,
    table-scoped identity, and interrupted-build tests pass.
-3. Run one conformance suite against embedded and HTTP transports.
+2. Run one conformance suite against embedded and HTTP transports.
 
 ## Later
 

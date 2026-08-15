@@ -54,11 +54,7 @@ def verify_wheel(repository: Path, wheel: Path) -> None:
         f"wheel is not tagged for the CPython 3.10 stable ABI: {wheel.name}",
     )
     expected_licenses = {
-        "LICENSE": repository / "LICENSE",
-        "THIRD_PARTY_NOTICES.md": repository / "THIRD_PARTY_NOTICES.md",
-        "vendor/datafusion-python/LICENSE.txt": (
-            repository / "vendor" / "datafusion-python" / "LICENSE.txt"
-        ),
+        relative: repository / relative for relative in project["license-files"]
     }
     expected_sbom = repository / "sboms" / "relify-python.cyclonedx.json"
     with ZipFile(wheel) as archive:

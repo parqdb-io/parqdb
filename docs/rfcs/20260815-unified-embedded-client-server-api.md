@@ -428,7 +428,10 @@ uses these routes:
 | Describe a table | `POST /v1/table/{id}/describe` | JSON |
 | Deregister a source | `POST /v1/table/{id}/deregister` | JSON |
 | Query a table | `POST /v1/table/{id}/query` | Arrow IPC stream |
+| Explain a table query | `POST /v1/table/{id}/explain` | JSON |
+| Render a table query as SQL | `POST /v1/table/{id}/to_sql` | JSON |
 | Execute SQL | `POST /v1/sql` | Arrow IPC stream |
+| Explain SQL | `POST /v1/sql/explain` | JSON |
 | Create an index | `POST /v1/table/{id}/create_index` | JSON |
 | List indexes | `POST /v1/table/{id}/index/list` | JSON |
 | Read index status | `POST /v1/table/{id}/index/{index_name}/stats` | JSON |
@@ -448,6 +451,10 @@ table that can be named in the route. Both return
 the create or refresh response acknowledges acceptance by the live build
 coordinator, and clients poll the index stats operation when implementing
 `wait_for_index`.
+
+The explain routes return portable plan text rather than an engine object.
+`to_sql` is table-scoped because it renders one `VectorQuery` and validates the
+route identifier against the request source.
 
 The HTTP API is specified with OpenAPI 3.1. Authentication uses standard HTTP
 headers, and a request identifier is returned in a response header. API version

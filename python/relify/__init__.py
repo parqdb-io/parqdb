@@ -13,6 +13,8 @@ from ._native import (
     InvalidArgumentError,
     InvalidMetadataError,
     InvalidSchemaError,
+    QueryQueueFullError,
+    QueryQueueTimeoutError,
     RelifyError,
     StorageError,
 )
@@ -38,6 +40,11 @@ from .api import (
     connect_async,
     open_index_catalog,
 )
+from .errors import (
+    ServiceUnavailableError,
+    StreamExecutionError,
+    UnsupportedOperationError,
+)
 
 __version__ = _package_version("relify")
 
@@ -61,13 +68,18 @@ __all__ = [
     "Maintenance",
     "MaintenanceObject",
     "ParquetPageCacheStats",
+    "QueryQueueFullError",
+    "QueryQueueTimeoutError",
     "RelifyError",
+    "ServiceUnavailableError",
     "Session",
     "SessionConfig",
     "SourceTable",
     "StorageError",
+    "StreamExecutionError",
     "Table",
     "TableIdentifier",
+    "UnsupportedOperationError",
     "VectorQuery",
     "WriteOptions",
     "__version__",

@@ -1,9 +1,18 @@
 """Compatibility imports for Relify's public Python API."""
 
-from ._native import BuildAlreadyRunningError
+from ._native import (
+    BuildAlreadyRunningError,
+    QueryQueueFullError,
+    QueryQueueTimeoutError,
+)
 from .build import IndexStatus
 from .catalog import CatalogEntry, IndexCatalog, IndexInfo, open_index_catalog
 from .config import IVF, SessionConfig, WriteOptions
+from .errors import (
+    ServiceUnavailableError,
+    StreamExecutionError,
+    UnsupportedOperationError,
+)
 from .facade import (
     AsyncSession,
     AsyncSourceTable,
@@ -30,11 +39,16 @@ __all__ = [
     "Maintenance",
     "MaintenanceObject",
     "ParquetPageCacheStats",
+    "QueryQueueFullError",
+    "QueryQueueTimeoutError",
+    "ServiceUnavailableError",
     "Session",
     "SessionConfig",
     "SourceTable",
+    "StreamExecutionError",
     "Table",
     "TableIdentifier",
+    "UnsupportedOperationError",
     "VectorQuery",
     "WriteOptions",
     "connect",

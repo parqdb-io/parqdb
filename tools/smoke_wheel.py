@@ -6,6 +6,7 @@ from importlib.metadata import version
 from importlib.util import find_spec
 from tempfile import TemporaryDirectory
 
+import pyarrow
 import relify
 
 
@@ -21,12 +22,11 @@ def main() -> None:
     with TemporaryDirectory(prefix="relify-wheel-smoke-") as directory:
         session = relify.connect(os.path.join(directory, "relify-data"))
         session.register_parquet("documents", relify.datasets.uri("documents"))
-        dataframe = session.sql("SELECT document_id FROM documents LIMIT 1")
-        if (
-            "document_id" not in repr(dataframe)
-            or "<table" not in dataframe._repr_html_()
-        ):
-            raise RuntimeError("embedded DataFusion repr is unavailable")
+        result = session.sql("SELECT document_id FROM documents LIMIT 1")
+        if not isinstance(result, pyarrow.Table) or result.to_pydict() != {
+            "document_id": [1]
+        }:
+            raise RuntimeError(f"unexpected installed-wheel SQL result: {result}")
         table = session.table("documents")
         table.create_index(
             "smoke",

@@ -1,7 +1,8 @@
 # Python API
 
 Relify exposes synchronous and asynchronous facades over one service contract.
-The current transport is embedded and executes through bundled DataFusion.
+It selects embedded execution or the query-only HTTP transport from the
+connection location.
 
 ## Connect
 
@@ -32,6 +33,41 @@ session = relify.connect(
 `Session` is not a DataFusion `SessionContext`. Call
 `session.datafusion_context()` only when an embedded-only DataFusion operation
 is intentionally required.
+
+### Query an Existing Remote Catalog
+
+Install the optional server dependencies in the server environment:
+
+```bash
+python -m pip install "relify[server]"
+```
+
+Create an ASGI application over an existing catalog:
+
+```python
+# service.py
+from relify.server import create_app
+
+app = create_app("/srv/relify")
+```
+
+Run that application with one ASGI worker, then use the same session facade:
+
+```bash
+uvicorn service:app --host 127.0.0.1 --port 8000
+```
+
+```python
+session = relify.connect("http://127.0.0.1:8000")
+documents = session.table("documents")
+hits = session.collect(documents.search(vector).limit(10))
+```
+
+The first HTTP milestone is query-only and unstable. It can list and describe
+registered tables, run vector queries and read-only SQL, stream Arrow results,
+and inspect plans. Source registration and index lifecycle remain embedded-only
+until remote URI authorization and durable lifecycle conformance are complete.
+`datafusion_context()` is intentionally unavailable remotely.
 
 ## Register and Discover Tables
 
