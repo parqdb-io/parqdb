@@ -63,6 +63,23 @@ impl LocalSession {
         Ok(ManagedQueryStream::new(stream, permit))
     }
 
+    /// Explains one search through the same cancellable, admission-controlled path.
+    pub async fn stream_explain_search(
+        &self,
+        request: &SearchRequest,
+        verbose: bool,
+        analyze: bool,
+    ) -> Result<ManagedQueryStream> {
+        let permit = self.runtime.admit_query().await?;
+        let stream = self
+            .plan_search(request)
+            .await?
+            .explain(verbose, analyze)?
+            .execute_stream()
+            .await?;
+        Ok(ManagedQueryStream::new(stream, permit))
+    }
+
     /// Executes one SQL statement as a cancellable, admission-controlled Arrow stream.
     pub async fn stream_sql(&self, sql: &str) -> Result<ManagedQueryStream> {
         let permit = self.runtime.admit_query().await?;

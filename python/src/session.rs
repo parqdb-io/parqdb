@@ -43,6 +43,31 @@ fn parse_metric(value: &str) -> PyResult<DistanceMetric> {
         .ok_or_else(|| InvalidArgumentError::new_err(format!("unsupported metric: {value}")))
 }
 
+#[allow(clippy::too_many_arguments)]
+fn search_request(
+    source: &str,
+    query: Vec<f32>,
+    index: Option<String>,
+    column: Option<String>,
+    nprobe: Option<usize>,
+    limit: usize,
+    projection: Option<Vec<String>>,
+    filter: Option<String>,
+    bypass_index: bool,
+) -> PyResult<SearchRequest> {
+    Ok(SearchRequest {
+        source: parse_relation_reference(source)?,
+        index,
+        column,
+        query,
+        nprobe,
+        limit,
+        projection,
+        filter,
+        bypass_index,
+    })
+}
+
 pub(crate) fn shared_runtime() -> PyResult<Arc<Runtime>> {
     match SHARED_RUNTIME.get_or_init(|| {
         Runtime::new()
@@ -265,6 +290,25 @@ impl PyNativeSession {
                         source,
                     )
                 })
+            })
+            .map_err(|error| core_error(&error))
+    }
+
+    fn list_table_definitions(&self) -> PyResult<Vec<(String, Vec<String>, String)>> {
+        self.session
+            .list_table_definitions()
+            .map(|definitions| {
+                definitions
+                    .into_iter()
+                    .map(|definition| {
+                        let identifier = definition.identifier;
+                        (
+                            identifier.catalog().to_owned(),
+                            identifier.namespace().to_vec(),
+                            identifier.name().to_owned(),
+                        )
+                    })
+                    .collect()
             })
             .map_err(|error| core_error(&error))
     }
@@ -609,17 +653,17 @@ impl PyNativeSession {
     ) -> PyResult<PyDataFrame> {
         let session = Arc::clone(&self.session);
         let runtime = Arc::clone(&self.runtime);
-        let request = SearchRequest {
-            source: parse_relation_reference(source)?,
+        let request = search_request(
+            source,
+            query,
             index,
             column,
-            query,
             nprobe,
             limit,
             projection,
             filter,
             bypass_index,
-        };
+        )?;
         py.detach(move || runtime.block_on(session.plan_search(&request)))
             .map(PyDataFrame::new)
             .map_err(|error| core_error(&error))
@@ -653,19 +697,78 @@ impl PyNativeSession {
         let session = Arc::clone(&self.session);
         let runtime = Arc::clone(&self.runtime);
         let query_runtime = Arc::clone(&runtime);
-        let request = SearchRequest {
-            source: parse_relation_reference(source)?,
+        let request = search_request(
+            source,
+            query,
             index,
             column,
-            query,
             nprobe,
             limit,
             projection,
             filter,
             bypass_index,
-        };
+        )?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let task = query_runtime.spawn(async move { session.stream_search(&request).await });
+            let mut abort_on_drop = AbortOnDrop::new(task.abort_handle());
+            let stream = task
+                .await
+                .map_err(|error| runtime_error(error.to_string()))?
+                .map_err(|error| core_error(&error))?;
+            abort_on_drop.disarm();
+            Ok(PyNativeQueryStream::new(stream, runtime))
+        })
+    }
+
+    #[pyo3(signature = (
+        source,
+        query,
+        index=None,
+        column=None,
+        nprobe=None,
+        limit=10,
+        projection=None,
+        filter=None,
+        bypass_index=false,
+        verbose=false,
+        analyze=false
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn stream_explain_search<'py>(
+        &self,
+        py: Python<'py>,
+        source: &str,
+        query: Vec<f32>,
+        index: Option<String>,
+        column: Option<String>,
+        nprobe: Option<usize>,
+        limit: usize,
+        projection: Option<Vec<String>>,
+        filter: Option<String>,
+        bypass_index: bool,
+        verbose: bool,
+        analyze: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let session = Arc::clone(&self.session);
+        let runtime = Arc::clone(&self.runtime);
+        let query_runtime = Arc::clone(&runtime);
+        let request = search_request(
+            source,
+            query,
+            index,
+            column,
+            nprobe,
+            limit,
+            projection,
+            filter,
+            bypass_index,
+        )?;
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let task = query_runtime.spawn(async move {
+                session
+                    .stream_explain_search(&request, verbose, analyze)
+                    .await
+            });
             let mut abort_on_drop = AbortOnDrop::new(task.abort_handle());
             let stream = task
                 .await
@@ -719,17 +822,17 @@ impl PyNativeSession {
     ) -> PyResult<String> {
         let session = Arc::clone(&self.session);
         let runtime = Arc::clone(&self.runtime);
-        let request = SearchRequest {
-            source: parse_relation_reference(source)?,
+        let request = search_request(
+            source,
+            query,
             index,
             column,
-            query,
             nprobe,
             limit,
             projection,
             filter,
             bypass_index,
-        };
+        )?;
         py.detach(move || runtime.block_on(session.search_sql(&request)))
             .map_err(|error| core_error(&error))
     }

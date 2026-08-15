@@ -25,10 +25,13 @@ def main() -> None:
             .limit(6)
             .select(["document_id", "category", "status"])
         )
-        session.register_view("vector_hits", session.to_dataframe(query))
+        context = session.datafusion_context()
+        context.register_record_batches(
+            "vector_hits", [session.collect(query).to_batches()]
+        )
 
         try:
-            analysis = session.sql(
+            analysis = context.sql(
                 """
                 SELECT
                     category,
@@ -42,7 +45,7 @@ def main() -> None:
             )
             print("DataFusion analysis:", analysis.to_pydict())
         finally:
-            session.deregister_table("vector_hits")
+            context.deregister_table("vector_hits")
 
 
 if __name__ == "__main__":

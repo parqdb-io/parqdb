@@ -52,7 +52,7 @@ class ParquetPageCacheStats:
     oversized_bypasses: int
 
 
-class Session(SessionContext):
+class _EmbeddedSession(SessionContext):
     def __init__(
         self,
         root: str | os.PathLike[str],
@@ -178,7 +178,7 @@ class Session(SessionContext):
             state = load_table_state(self._iceberg_catalog, iceberg_identifier)
             reference = state.relation_json()
             dataframe = self._register_iceberg_relation(reference)
-            return SourceTable(
+            return _EmbeddedSourceTable(
                 dataframe,
                 self,
                 iceberg_identifier,
@@ -190,7 +190,7 @@ class Session(SessionContext):
         if binding is None:
             return dataframe
         catalog, namespace, table_name, reference = binding
-        return SourceTable(
+        return _EmbeddedSourceTable(
             dataframe,
             self,
             TableIdentifier(catalog, tuple(namespace), table_name),
@@ -417,11 +417,11 @@ class Session(SessionContext):
         return TableIdentifier(parts[0], parts[1:-1], parts[-1])
 
 
-class SourceTable(TableOperations, DataFrame):
+class _EmbeddedSourceTable(TableOperations, DataFrame):
     def __init__(
         self,
         dataframe: DataFrame,
-        session: Session,
+        session: _EmbeddedSession,
         identifier: TableIdentifier,
         reference: str,
         *,
@@ -454,7 +454,7 @@ class SourceTable(TableOperations, DataFrame):
         )
 
 
-def connect(
+def _connect_embedded(
     root: str | os.PathLike[str] | None = None,
     *,
     catalog: str | None = None,
@@ -463,14 +463,14 @@ def connect(
     iceberg: object | None = None,
     config: DataFusionSessionConfig | None = None,
     runtime: RuntimeEnvBuilder | None = None,
-) -> Session:
+) -> _EmbeddedSession:
     if root is not None and catalog is not None:
         raise ValueError("root and catalog are mutually exclusive")
     if root is None and catalog is None:
         raise TypeError("connect requires a local root or catalog")
     if catalog is None:
         assert root is not None
-        return Session(
+        return _EmbeddedSession(
             root,
             index_root=index_root,
             storage_options=storage_options,
@@ -495,7 +495,7 @@ def connect(
         raise ValueError("SQLite catalog URI must contain an absolute path")
     if index_root is None:
         raise ValueError("an explicit catalog requires index_root")
-    return Session(
+    return _EmbeddedSession(
         catalog_path.parent,
         index_root=index_root,
         storage_options=storage_options,

@@ -1,4 +1,4 @@
-"""Refresh, inspect, drop, and recover a published index."""
+"""Refresh, inspect, and drop a published index."""
 
 from tempfile import TemporaryDirectory
 
@@ -21,7 +21,7 @@ NEW_DOCUMENT = {
 
 def main() -> None:
     with TemporaryDirectory(prefix="relify-lifecycle-") as workspace:
-        session, documents, source = open_documents(workspace)
+        _session, documents, source = open_documents(workspace)
         build_index(documents)
         before = documents.list_indexes()[0]
 
@@ -30,9 +30,7 @@ def main() -> None:
         documents.wait_for_index("documents_embedding")
         after = documents.list_indexes()[0]
 
-        entry = session.indexes.load("documents_embedding")
         documents.drop_index("documents_embedding")
-        session.indexes.register("recovered_embedding", entry.metadata_location)
 
         print(
             "index lifecycle:",
@@ -41,7 +39,7 @@ def main() -> None:
                     before.current_snapshot_id,
                     after.current_snapshot_id,
                 ],
-                "catalog": session.indexes.list(),
+                "remaining_indexes": [index.name for index in documents.list_indexes()],
             },
         )
 

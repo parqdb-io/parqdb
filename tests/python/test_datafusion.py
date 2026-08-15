@@ -14,16 +14,20 @@ import relify.datafusion as datafusion
 from _support import build_index, register_source, write_vectors
 
 
-def test_to_dataframe_returns_a_composable_datafusion_dataframe(
+def test_portable_results_can_enter_the_explicit_datafusion_context(
     indexed_documents: tuple[relify.Session, relify.SourceTable],
 ) -> None:
     session, documents = indexed_documents
     query = documents.search([0.0, 0.0]).limit(3).select(["id", "payload"])
 
-    result = session.to_dataframe(query)
-    batches = result.filter("id >= 1").select("id", "_distance").collect()
+    result = session.collect(query)
+    context = session.datafusion_context()
+    context.register_record_batches("hits", [result.to_batches()])
+    batches = (
+        context.table("hits").filter("id >= 1").select("id", "_distance").collect()
+    )
 
-    assert isinstance(result, datafusion.DataFrame)
+    assert isinstance(result, pyarrow.Table)
     assert [value for batch in batches for value in batch["id"].to_pylist()] == [1, 2]
 
 
@@ -35,33 +39,35 @@ def test_to_sql_returns_executable_sql_over_the_registered_source(
 
     sql = session.to_sql(query)
     sql_result = session.sql(sql).to_pydict()
-    dataframe_result = session.to_dataframe(query).to_pydict()
+    portable_result = session.collect(query).to_pydict()
 
     assert 'FROM "documents"' in sql
     assert '"__relify_postings_' in sql
     assert "__relify_explain_" not in sql
     assert session.to_sql(query) == sql
-    assert sql_result == dataframe_result
+    assert sql_result == portable_result
 
 
-def test_session_is_its_native_context(tmp_path: Path) -> None:
+def test_session_exposes_its_native_context_explicitly(tmp_path: Path) -> None:
     session = relify.connect(tmp_path / "relify-data")
     batch = pyarrow.record_batch([[1, 2]], names=["value"])
 
-    assert isinstance(session, datafusion.SessionContext)
-    assert "relify_squared_l2" in session.udfs()
-    session.register_record_batches("values", [[batch]])
+    assert not isinstance(session, datafusion.SessionContext)
+    context = session.datafusion_context()
+    assert isinstance(context, datafusion.SessionContext)
+    assert "relify_squared_l2" in context.udfs()
+    context.register_record_batches("values", [[batch]])
     assert session.sql("SELECT SUM(value) AS total FROM values").to_pydict() == {
         "total": [3]
     }
 
 
-def test_embedded_dataframe_repr_uses_embedded_formatter(tmp_path: Path) -> None:
+def test_portable_sql_returns_an_arrow_table(tmp_path: Path) -> None:
     session = relify.connect(tmp_path / "relify-data")
     result = session.sql("SELECT 1 AS value")
 
-    assert "value" in repr(result)
-    assert "<table" in result._repr_html_()
+    assert isinstance(result, pyarrow.Table)
+    assert result.to_pydict() == {"value": [1]}
 
 
 def test_context_derivation_does_not_create_an_incomplete_relify_session(
@@ -69,8 +75,8 @@ def test_context_derivation_does_not_create_an_incomplete_relify_session(
 ) -> None:
     session = relify.connect(tmp_path / "relify-data")
 
-    derived = session.enable_url_table()
-    global_context = relify.Session.global_ctx()
+    derived = session.datafusion_context().enable_url_table()
+    global_context = datafusion.SessionContext.global_ctx()
 
     assert type(derived) is datafusion.SessionContext
     assert type(global_context) is datafusion.SessionContext
@@ -83,14 +89,15 @@ def test_embedded_dataframe_api_supports_lazy_join_and_aggregation(
     from relify.datafusion import functions as functions
 
     session = relify.connect(tmp_path / "relify-data")
-    values = session.from_pydict(
+    context = session.datafusion_context()
+    values = context.from_pydict(
         {
             "id": [1, 2, 3, 4],
             "team": ["a", "a", "b", "b"],
             "score": [5, 15, 20, 30],
         }
     )
-    labels = session.from_pydict(
+    labels = context.from_pydict(
         {
             "id": [2, 3, 4],
             "label": ["two", "three", "four"],
@@ -201,12 +208,8 @@ def test_squared_l2_udf_is_stateless_and_accepts_query_as_an_argument(
             ) AS distance
         """
     ).to_pydict()
-    near_zero = session.to_dataframe(
-        documents.search([0.0, 0.0]).limit(1).select(["id"])
-    )
-    near_ten = session.to_dataframe(
-        documents.search([10.0, 0.0]).limit(1).select(["id"])
-    )
+    near_zero = session.collect(documents.search([0.0, 0.0]).limit(1).select(["id"]))
+    near_ten = session.collect(documents.search([10.0, 0.0]).limit(1).select(["id"]))
 
     assert direct == {"distance": [25.0]}
     assert near_zero.to_pydict()["id"] == [0]
@@ -232,9 +235,9 @@ def test_native_planner_does_not_mutate_session_udf_registration(
         "immutable",
         "relify_squared_l2",
     )
-    session.register_udf(fake_distance)
+    session.datafusion_context().register_udf(fake_distance)
 
-    result = session.to_dataframe(documents.search([10.0, 0.0]).limit(1).select(["id"]))
+    result = session.collect(documents.search([10.0, 0.0]).limit(1).select(["id"]))
 
     assert result.to_pydict()["id"] == [0]
 
@@ -244,9 +247,11 @@ def test_native_planner_does_not_collide_with_user_relations(
 ) -> None:
     session, documents = indexed_documents
     sentinel = pyarrow.record_batch([[42]], names=["value"])
-    session.register_record_batches("__relify_source_0", [[sentinel]])
+    session.datafusion_context().register_record_batches(
+        "__relify_source_0", [[sentinel]]
+    )
 
-    result = session.to_dataframe(documents.search([0.0, 0.0]).limit(1).select(["id"]))
+    result = session.collect(documents.search([0.0, 0.0]).limit(1).select(["id"]))
 
     assert result.to_pydict()["id"] == [0]
     assert session.sql('SELECT value FROM "__relify_source_0"').to_pydict() == {
@@ -254,15 +259,18 @@ def test_native_planner_does_not_collide_with_user_relations(
     }
 
 
-def test_vector_dataframe_uses_native_view_registration(
+def test_portable_vector_results_can_be_registered_in_native_context(
     indexed_documents: tuple[relify.Session, relify.SourceTable],
 ) -> None:
     session, documents = indexed_documents
     query = documents.search([0.0, 0.0]).limit(2).select(["id"])
 
-    session.register_view("relify_test_hits", session.to_dataframe(query))
+    context = session.datafusion_context()
+    context.register_record_batches(
+        "relify_test_hits", [session.collect(query).to_batches()]
+    )
 
-    result = session.sql(
+    result = context.sql(
         """
         SELECT id, _distance
         FROM relify_test_hits
@@ -273,8 +281,8 @@ def test_vector_dataframe_uses_native_view_registration(
     batches = result.collect()
 
     assert [value for batch in batches for value in batch["id"].to_pylist()] == [1]
-    session.deregister_table("relify_test_hits")
-    assert not session.table_exist("relify_test_hits")
+    context.deregister_table("relify_test_hits")
+    assert not context.table_exist("relify_test_hits")
 
 
 def test_explain_plan_reports_search_logical_and_physical_plans(

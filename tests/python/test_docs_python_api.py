@@ -5,7 +5,6 @@ from pathlib import Path
 import pyarrow
 import relify
 from _support import WAIT, register_source, write_vectors
-from relify.datafusion import col, functions
 
 
 def test_python_api_build_search_and_compose_example(tmp_path: Path) -> None:
@@ -33,25 +32,27 @@ def test_python_api_build_search_and_compose_example(tmp_path: Path) -> None:
         .limit(2)
         .select(["id", "payload"])
     )
-    document_stats = session.from_pydict(
+    context = session.datafusion_context()
+    document_stats = context.from_pydict(
         {
             "id": [1, 2, 3],
             "category": ["reference", "guide", "guide"],
             "popularity": [10, 20, 30],
         }
     )
-    analysis = (
-        session.to_dataframe(hits)
-        .join(document_stats, on="id")
-        .aggregate(
-            "category",
-            [
-                functions.count(col("id")).alias("matches"),
-                functions.avg(col("_distance")).alias("avg_distance"),
-                functions.max(col("popularity")).alias("max_popularity"),
-            ],
-        )
-        .sort("category")
+    context.register_view("document_stats", document_stats)
+    analysis = context.sql(
+        f"""
+        SELECT
+            category,
+            COUNT(id) AS matches,
+            AVG(_distance) AS avg_distance,
+            MAX(popularity) AS max_popularity
+        FROM ({session.to_sql(hits)}) AS vector_hits
+        JOIN document_stats USING (id)
+        GROUP BY category
+        ORDER BY category
+        """
     )
     result = pyarrow.Table.from_batches(analysis.collect(), schema=analysis.schema())
     assert result.to_pydict() == {
@@ -66,7 +67,9 @@ def test_python_api_build_search_and_compose_example(tmp_path: Path) -> None:
     assert "relify_squared_l2" in optimized
 
     query = documents.search([0.0, 0.0]).limit(2).select(["id"])
-    df = session.to_dataframe(query)
+    query_result = session.collect(query)
+    context.register_record_batches("query_result", [query_result.to_batches()])
+    df = context.table("query_result")
     assert df.filter("_distance >= 0").collect()[0]["id"].to_pylist() == [0, 1]
 
     search_sql = session.to_sql(query)
@@ -77,7 +80,7 @@ def test_python_api_build_search_and_compose_example(tmp_path: Path) -> None:
         WHERE _distance >= 0
         """
     )
-    assert sql_result.count() == 2
+    assert sql_result.num_rows == 2
 
     exact = session.to_arrow(
         documents.search([0.0, 0.0], column="embedding").bypass_vector_index().limit(1)

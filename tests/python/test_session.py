@@ -17,13 +17,13 @@ def test_connect_rejects_invalid_capabilities(tmp_path: Path) -> None:
         relify.connect(tmp_path / "backend", backend=cast(Any, object()))
 
 
-def test_session_does_not_require_explicit_close(tmp_path: Path) -> None:
+def test_session_has_explicit_idempotent_lifecycle(tmp_path: Path) -> None:
     session = relify.connect(tmp_path / "relify-data")
 
     assert session.root == (tmp_path / "relify-data").resolve()
     assert session.index_root == (tmp_path / "relify-data").resolve().as_uri() + "/"
-    assert not hasattr(session, "close")
-    assert not hasattr(session, "__enter__")
+    assert hasattr(session, "close")
+    assert hasattr(session, "__enter__")
     with pytest.raises(AttributeError):
         session.indexes = cast(Any, object())
     assert session.backend.name == "local"
@@ -32,6 +32,10 @@ def test_session_does_not_require_explicit_close(tmp_path: Path) -> None:
         == relify.backends.load("local").declared_capabilities
     )
     assert not hasattr(session, "context")
+    session.close()
+    session.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        session.sql("SELECT 1")
 
 
 def test_native_sql_stream_is_an_async_arrow_iterator(tmp_path: Path) -> None:
@@ -82,6 +86,51 @@ def test_cancelling_queued_native_stream_releases_admission(tmp_path: Path) -> N
     asyncio.run(cancel_queued())
 
 
+def test_sync_stream_close_releases_runtime_admission(tmp_path: Path) -> None:
+    session = relify.connect(tmp_path / "sync-stream")
+
+    reader = session.stream("SELECT * FROM range(1000000)")
+
+    assert isinstance(reader, pyarrow.RecordBatchReader)
+    assert not session._async._streams
+    assert session._native.query_admission_stats() == (1, 0)
+    reader.close()
+    assert session._native.query_admission_stats() == (0, 0)
+
+    reader = session.stream("SELECT * FROM range(1000000)")
+    assert session._native.query_admission_stats() == (1, 0)
+    native = session._native
+    session.close()
+    assert native.query_admission_stats() == (0, 0)
+
+
+def test_async_facade_matches_portable_embedded_operations(tmp_path: Path) -> None:
+    source = tmp_path / "vectors.parquet"
+    write_vectors(source, [1, 2], [[1.0, 0.0], [2.0, 0.0]])
+
+    async def exercise() -> None:
+        native: Any
+        async with await relify.connect_async(tmp_path / "async-facade") as session:
+            await session.register_parquet("vectors", source)
+            assert [table.name for table in await session.list_tables()] == ["vectors"]
+            vectors = await session.table("vectors")
+            assert vectors.identifier.name == "vectors"
+            assert vectors.schema.names == ["id", "payload", "embedding"]
+            assert (await session.sql("SELECT id FROM vectors")).to_pydict() == {
+                "id": [1, 2]
+            }
+            stream = await session.stream("SELECT * FROM vectors WHERE false")
+            assert stream.schema == vectors.schema
+            assert [batch async for batch in stream] == []
+            native = cast(Any, session)._transport._service.host._native
+            assert native.query_admission_stats() == (0, 0)
+            await session.stream("SELECT * FROM range(1000000)")
+            assert native.query_admission_stats() == (1, 0)
+        assert native.query_admission_stats() == (0, 0)
+
+    asyncio.run(exercise())
+
+
 def test_query_runtime_settings_apply_at_session_creation(tmp_path: Path) -> None:
     config = (
         relify.SessionConfig()
@@ -125,15 +174,16 @@ def test_session_uses_datafusion_config_and_runtime(tmp_path: Path) -> None:
         runtime=runtime,
     )
 
-    assert isinstance(session, relify.datafusion.SessionContext)
-    assert session.sql("SHOW relify.metadata.cache.max_entries").to_pydict()[
+    assert not isinstance(session, relify.datafusion.SessionContext)
+    context = session.datafusion_context()
+    assert context.sql("SHOW relify.metadata.cache.max_entries").to_pydict()[
         "value"
     ] == ["7"]
-    assert session.sql("SHOW datafusion.execution.target_partitions").to_pydict()[
+    assert context.sql("SHOW datafusion.execution.target_partitions").to_pydict()[
         "value"
     ] == ["3"]
-    session.sql("SET relify.metadata.cache.max_entries = 8")
-    assert session.sql("SHOW relify.metadata.cache.max_entries").to_pydict()[
+    context.sql("SET relify.metadata.cache.max_entries = 8")
+    assert context.sql("SHOW relify.metadata.cache.max_entries").to_pydict()[
         "value"
     ] == ["8"]
 
@@ -145,20 +195,20 @@ def test_session_exposes_bounded_parquet_page_cache(tmp_path: Path) -> None:
     session = relify.connect(tmp_path / "page-cache", config=config)
     session.register_parquet("vectors", source)
 
-    assert session.table("vectors").select("id").to_pydict()["id"] == list(range(1_024))
+    assert session.sql("SELECT id FROM vectors")["id"].to_pylist() == list(range(1_024))
     cold = session.parquet_page_cache_stats()
     assert isinstance(cold, relify.ParquetPageCacheStats)
     assert cold.capacity == 1_048_576
     assert cold.admissions > 0
 
-    session.table("vectors").select("id").to_pydict()
+    session.sql("SELECT id FROM vectors")
     warm = session.parquet_page_cache_stats()
     assert warm.hits > cold.hits
 
     session.clear_parquet_page_cache()
     assert session.parquet_page_cache_stats().resident_bytes == 0
-    session.sql("SET relify.parquet.page_cache.capacity = 0")
-    session.table("vectors").select("id").to_pydict()
+    session.datafusion_context().sql("SET relify.parquet.page_cache.capacity = 0")
+    session.sql("SELECT id FROM vectors")
     assert session.parquet_page_cache_stats().capacity == 0
 
 
@@ -208,7 +258,7 @@ def test_persistent_table_identifier_cannot_be_silently_rebound(
     with pytest.raises(Exception, match="already exists"):
         reopened.register_parquet("vectors", second)
 
-    assert reopened.table("vectors").select("id").to_pydict() == {"id": [1]}
+    assert reopened.sql("SELECT id FROM vectors").to_pydict() == {"id": [1]}
 
 
 def test_deregister_releases_the_native_source_binding(tmp_path: Path) -> None:
@@ -229,7 +279,7 @@ def test_deregister_releases_the_native_source_binding(tmp_path: Path) -> None:
     )
     session.register_parquet("vectors", source)
 
-    assert session.table("vectors").select("id", "payload").to_pydict() == {
+    assert session.sql("SELECT id, payload FROM vectors").to_pydict() == {
         "id": [2],
         "payload": ["row-2"],
     }
@@ -244,8 +294,8 @@ def test_registered_parquet_table_has_relify_index_capabilities(tmp_path: Path) 
     vectors = register_source(session, source)
 
     assert isinstance(vectors, relify.SourceTable)
-    assert isinstance(vectors, relify.datafusion.DataFrame)
-    assert type(vectors.select("id")) is relify.datafusion.DataFrame
+    assert not isinstance(vectors, relify.datafusion.DataFrame)
+    assert vectors.schema.names == ["id", "payload", "embedding"]
 
 
 def test_persistent_table_identity_is_canonical_across_qualified_names(
@@ -272,12 +322,15 @@ def test_persistent_table_identity_is_canonical_across_qualified_names(
 
 def test_non_parquet_relations_remain_plain_dataframes(tmp_path: Path) -> None:
     session = relify.connect(tmp_path / "relify-data")
-    session.register_view("values", session.from_pydict({"value": [1, 2]}))
+    context = session.datafusion_context()
+    context.register_view("values", context.from_pydict({"value": [1, 2]}))
 
-    values = session.table("values")
+    values = context.table("values")
 
     assert type(values) is relify.datafusion.DataFrame
     assert values.to_pydict() == {"value": [1, 2]}
+    with pytest.raises(ValueError, match="not a registered Relify source"):
+        session.table("values")
 
 
 def test_explicit_sqlite_catalog_and_file_index_root_are_independent(

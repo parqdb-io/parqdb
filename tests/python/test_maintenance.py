@@ -8,9 +8,11 @@ from threading import Event
 from typing import Any, cast
 from urllib.parse import unquote, urlparse
 
+import pyarrow as pa
 import pytest
 import relify
 from _support import WAIT, build_index, register_source, write_vectors
+from relify._service import TableDescriptor
 
 
 def _uri_path(uri: str) -> Path:
@@ -148,7 +150,8 @@ def test_lazy_query_is_protected_by_retention_without_a_query_lease(
     session = relify.connect(tmp_path / "relify-data")
     vectors = register_source(session, source)
     build_index(vectors, nlist=1)
-    df = session.to_dataframe(vectors.search([0.0, 0.0]).limit(2))
+    context = session.datafusion_context()
+    df = context.sql(session.to_sql(vectors.search([0.0, 0.0]).limit(2)))
     df = df.filter("id >= 0").select("id", "_distance").limit(1)
     old = (datetime.now(UTC) - timedelta(days=30)).timestamp()
     _set_tree_mtime(session.root / "metadata", old)
@@ -180,9 +183,10 @@ def test_temp_view_remains_readable_during_retention(
     session = relify.connect(tmp_path / "relify-data")
     vectors = register_source(session, source)
     build_index(vectors, nlist=1)
-    session.register_view(
+    context = session.datafusion_context()
+    context.register_view(
         "hits",
-        session.to_dataframe(vectors.search([0.0, 0.0]).limit(1).select(["id"])),
+        context.sql(session.to_sql(vectors.search([0.0, 0.0]).limit(1).select(["id"]))),
     )
     old = (datetime.now(UTC) - timedelta(days=30)).timestamp()
     _set_tree_mtime(session.root / "metadata", old)
@@ -195,9 +199,9 @@ def test_temp_view_remains_readable_during_retention(
     )
 
     assert first_removed == ()
-    assert session.sql("SELECT id FROM hits").to_pydict() == {"id": [0]}
+    assert context.sql("SELECT id FROM hits").to_pydict() == {"id": [0]}
 
-    session.deregister_table("hits")
+    context.deregister_table("hits")
     _set_tombstone_time(session, datetime.now(UTC) - timedelta(days=30))
     second_removed = session.maintenance.remove_orphans(
         older_than=datetime.now(UTC),
@@ -268,6 +272,7 @@ def test_remove_orphans_can_run_during_an_active_build(tmp_path: Path) -> None:
         def __init__(self) -> None:
             self.started = Event()
             self.release = Event()
+            self.published = False
 
         def index_exists(self, _name: str) -> bool:
             return False
@@ -302,7 +307,28 @@ def test_remove_orphans_can_run_during_an_active_build(tmp_path: Path) -> None:
             )
             self.started.set()
             assert self.release.wait(timeout=5)
+            self.published = True
             return "file:///metadata.json"
+
+        def list_source_indexes(
+            self,
+            _source: str,
+        ) -> list[tuple[str, str, str, str, dict[str, str], int]]:
+            if not self.published:
+                return []
+            return [
+                (
+                    "vectors_embedding",
+                    "embedding",
+                    "ivf",
+                    "l2_squared",
+                    {},
+                    1,
+                )
+            ]
+
+        def load_index_entry(self, _name: str) -> tuple[str, str]:
+            return "file:///metadata.json", "{}"
 
         def remove_orphans(
             self,
@@ -311,18 +337,29 @@ def test_remove_orphans_can_run_during_an_active_build(tmp_path: Path) -> None:
         ) -> list[tuple[str, str, int]]:
             return []
 
+        def persistent_table_source_by_identifier(
+            self,
+            _catalog: str,
+            _namespace: list[str],
+            _name: str,
+        ) -> str:
+            return "file:///source.parquet"
+
     session = relify.connect(tmp_path / "relify-data")
     native = BlockingNative()
     session._native = native  # type: ignore[assignment]
+    session._repository = native  # type: ignore[assignment]
+    session._indexes = relify.IndexCatalog(native)  # type: ignore[arg-type]
     session._resolve_build_relation = lambda _identifier: {  # type: ignore[method-assign]
         "profile": "parquet",
         "uri": "file:///source.parquet",
     }
     vectors = relify.SourceTable(
-        session.empty_table(),
         session,
-        relify.TableIdentifier("datafusion", ("public",), "vectors"),
-        "file:///source.parquet",
+        TableDescriptor(
+            relify.TableIdentifier("datafusion", ("public",), "vectors"),
+            pa.schema([]),
+        ),
     )
     vectors.create_index(
         "vectors_embedding",

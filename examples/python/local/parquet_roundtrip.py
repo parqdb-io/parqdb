@@ -4,6 +4,7 @@ import os
 from tempfile import TemporaryDirectory
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 import relify
 
 from examples.python._common import DOCUMENT_SCHEMA, DOCUMENTS, build_index
@@ -12,13 +13,14 @@ from examples.python._common import DOCUMENT_SCHEMA, DOCUMENTS, build_index
 def main() -> None:
     with TemporaryDirectory(prefix="relify-parquet-roundtrip-") as workspace:
         root = os.path.join(workspace, "relify-data")
-        source = os.path.join(workspace, "documents")
+        source = os.path.join(workspace, "documents.parquet")
 
         session = relify.connect(root)
-        source_df = session.from_arrow(
-            pa.Table.from_pylist(list(DOCUMENTS), schema=DOCUMENT_SCHEMA)
+        pq.write_table(
+            pa.Table.from_pylist(list(DOCUMENTS), schema=DOCUMENT_SCHEMA),
+            source,
+            compression="zstd",
         )
-        source_df.write_parquet(source, compression="zstd")
 
         session.register_parquet("documents", source)
         documents = session.table("documents")

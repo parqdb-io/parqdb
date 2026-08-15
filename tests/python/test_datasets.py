@@ -73,10 +73,12 @@ def test_packaged_datasets_support_the_readme_workflow(tmp_path: Path) -> None:
     collected = session.collect(hits)
     assert collected["document_id"].to_pylist() == [1, 2, 5]
 
+    context = session.datafusion_context()
+    context.register_record_batches("vector_hits", [collected.to_batches()])
     analysis = (
-        session.to_dataframe(hits)
+        context.table("vector_hits")
         .join(
-            session.read_parquet(relify.datasets.uri("document_stats")),
+            context.read_parquet(relify.datasets.uri("document_stats")),
             on="document_id",
         )
         .aggregate(

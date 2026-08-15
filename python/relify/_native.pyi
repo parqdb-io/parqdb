@@ -18,6 +18,7 @@ class QueryQueueTimeoutError(RelifyError): ...
 
 class _NativeQueryStream:
     def schema(self) -> Any: ...
+    def __arrow_c_stream__(self, requested_schema: Any | None = ...) -> Any: ...
     def __aiter__(self) -> _NativeQueryStream: ...
     async def __anext__(self) -> Any: ...
     async def aclose(self) -> None: ...
@@ -97,6 +98,7 @@ class _NativeSession:
     def persistent_table(
         self, table_name: str
     ) -> tuple[str, list[str], str, str] | None: ...
+    def list_table_definitions(self) -> list[tuple[str, list[str], str]]: ...
     def persistent_table_source_by_identifier(
         self,
         catalog: str,
@@ -185,6 +187,20 @@ class _NativeSession:
         projection: Sequence[str] | None = ...,
         filter: str | None = ...,
         bypass_index: bool = ...,
+    ) -> _NativeQueryStream: ...
+    async def stream_explain_search(
+        self,
+        source: str,
+        query: Sequence[float],
+        index: str | None = ...,
+        column: str | None = ...,
+        nprobe: int | None = ...,
+        limit: int = ...,
+        projection: Sequence[str] | None = ...,
+        filter: str | None = ...,
+        bypass_index: bool = ...,
+        verbose: bool = ...,
+        analyze: bool = ...,
     ) -> _NativeQueryStream: ...
     async def stream_sql(self, sql: str) -> _NativeQueryStream: ...
     def search_sql(

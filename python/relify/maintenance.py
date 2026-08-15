@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Literal, cast
+from typing import Any, Literal, Protocol, cast
 
-if TYPE_CHECKING:
-    from .session import Session
+
+class _MaintenanceSession(Protocol):
+    _native: Any
 
 
 @dataclass(frozen=True)
@@ -16,7 +17,7 @@ class MaintenanceObject:
 
 
 class Maintenance:
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: _MaintenanceSession) -> None:
         self._session = session
 
     def remove_orphans(
