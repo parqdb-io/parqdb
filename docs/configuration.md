@@ -9,7 +9,7 @@ behavior and return types, use the [Python API](python-api.md).
 | Install | Adds |
 | --- | --- |
 | `relify` | Local DataFusion, native builder, Parquet, SQLite catalog |
-| `relify[iceberg]` | PyIceberg support for querying Spark-built indexes locally |
+| `relify[iceberg]` | PyIceberg support for querying Iceberg sources and indexes locally |
 | `relify[spark]` | Experimental Spark Classic and Iceberg integration |
 | `relify[starrocks]` | Experimental StarRocks Arrow Flight SQL integration |
 
@@ -205,13 +205,14 @@ config = relify.IVF(
 | Argument | Default | Meaning |
 | --- | --- | --- |
 | `nlist` | required | Positive number of IVF clusters |
-| `encoding` | `flat` | `source`, `flat`, `lvq4`, or `lvq8` |
+| `encoding` | `source` | `source`, `lvq4`, or `lvq8` |
+| `metric` | `l2_squared` | `l2_squared` or `cosine` |
 
-`flat` stores exact vectors. `lvq4` and `lvq8` store per-vector locally
-adaptive scalar-quantized codes and evaluate approximate squared L2 distance
-without decoding a dense vector column. `source` stores only source keys and
-reads candidate vectors from the source table. Quantized postings are currently
-supported by the local backend.
+`lvq4` and `lvq8` store per-vector locally adaptive scalar-quantized codes and
+evaluate approximate distance without decoding a dense vector column. `source`
+stores only source keys and reads candidate vectors from the source table.
+Quantized postings and cosine construction are currently supported by the local
+backend.
 
 `nprobes` is selected on each query and must not exceed `nlist`.
 

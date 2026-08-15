@@ -1,109 +1,41 @@
 # Roadmap
 
 Relify develops one narrow, interoperable path at a time. The specification
-defines portable behavior; the library implements a supported subset of it.
+defines portable behavior; the library implements the supported subset below.
 
-## 0.1.0: Initial Release
+## Current: Shared IVF
 
-### Local DataFusion and Parquet
+The current local DataFusion path provides:
 
-The initial release includes:
+- persistent Parquet sources and indexes over `file`, S3, and HDFS storage;
+- one shared centroid artifact per source state, vector field,
+  distance metric, and `nlist`;
+- source, LVQ4, and LVQ8 logical indexes that reuse the shared IVF artifact;
+- squared-L2 and cosine search over `list<float>` and `list<double>` source
+  vectors;
+- filtering, projection, exact fallback, SQL and DataFrame composition;
+- immutable metadata publication, atomic refresh, catalog recovery, and
+  retention-aware orphan removal; and
+- open conformance fixtures exercised independently through DuckDB.
 
-- SQLite catalog for persistent Parquet definitions and index mappings;
-- exact paths and nested `*` patterns over `file`, S3, and HDFS sources;
-- `file`, S3, and HDFS warehouses;
-- Parquet source and index tables;
-- local parallel IVF construction with exact-vector and LVQ encodings;
-- DataFusion search, filtering, projection, and exact fallback;
-- exact Iceberg snapshot reads for Spark-built indexes;
-- independent DuckDB execution of the portable IVF fixtures;
-- reproducible persisted-build and large-k Recall-latency results with a Faiss
-  baseline;
-- verified wheels with locked dependency SBOMs and installed-package smoke
-  tests;
-- immutable metadata publication and atomic refresh; and
-- reachability-based orphan removal.
+The experimental Spark and StarRocks integrations are query-only. They consume
+compatible source-encoded, squared-L2 indexes through native engine plans.
+Spark reads Parquet and Iceberg relations; StarRocks reads Iceberg relations.
 
-The release gates and procedure are defined in
-[`CONTRIBUTING.md`](../CONTRIBUTING.md), [`SECURITY.md`](../SECURITY.md), and
-[`release.md`](release.md).
+## Next: Validate the Storage Path
 
-### Spark and Iceberg
+The next milestone focuses on evidence and reliability before expanding the
+surface area:
 
-The initial release also includes:
-
-- a concrete Spark Classic session over a caller-owned `SparkSession`;
-- exact Iceberg source and index snapshot resolution through PyIceberg;
-- distributed MLlib block training over a Faiss-style bounded sample, followed
-  by measured Arrow-batch posting assignment;
-- canonical Iceberg schemas created through PyIceberg and distributed data
-  appended through DataFrameWriterV2;
-- native PySpark DataFrame query plans with relational cluster routing;
-- direct Spark reads of locally built Parquet indexes;
-- asynchronous build status and waiting; and
-- shared index discovery, selection, metadata storage, and publication through
-  `relify-index`.
-
-Before this path is production-ready it still requires a real Spark/Iceberg
-conformance environment, refresh and failed-build maintenance, cross-driver
-build coordination, reproducible distributed benchmarks, and a remote Relify
-index catalog. The current SQLite catalog is for one Spark driver and
-development use.
-
-### StarRocks Query
-
-The query-only StarRocks integration includes:
-
-- a concrete query-only session over a caller-owned Arrow Flight SQL ADBC
-  connection;
-- exact Iceberg table UUID, schema, and snapshot validation through PyIceberg;
-- StarRocks SQL compilation with relational centroid routing, postings
-  pruning, transparent source resolution, filtering, projection, and Top-K;
-- index-only queries when stored vectors and the requested projection permit
-  them;
-- Arrow-table collection and native `EXPLAIN`; and
-- an opt-in StarRocks/Iceberg execution of the shared specification fixtures.
-
-This path requires StarRocks 3.5.1 or later and one Iceberg catalog registered
-under the same logical name in StarRocks and PyIceberg. It is intentionally
-query-only and Iceberg-only at the StarRocks execution layer; construction may
-be delegated to an independent Spark builder. Before production use it still
-requires a maintained conformance deployment, reproducible StarRocks
-benchmarks, and a remote Relify index catalog.
-
-### Backend Extension API
-
-The initial release makes additional query engines independently integrable
-without changing the Relify package:
-
-- lazy discovery through the `relify.backends` package entry-point group;
-- concrete, caller-owned session factories rather than a universal backend
-  container;
-- typed static and bound-session capability reports;
-- shared immutable IVF query resolution through `ResolvedSearch`;
-- a portable `pyarrow.Table` collection terminal whose empty results preserve
-  schema; and
-- reusable backend query-contract checks outside the specification.
-
-The stable local and bundled experimental Spark and StarRocks sessions publish
-capabilities through the same API.
-
-Index construction is independently extensible through
-`relify.builders.v1`. Local and Spark builders publish typed source/output
-profiles, while every concrete table shares the same asynchronous lifecycle.
-A StarRocks table can use an explicit `relify.experimental.Spark(spark)`
-builder without adding construction capabilities to the StarRocks backend.
-
-## Next: Remote Catalogs and Spark Connect
-
-The next milestone adds a remotely coordinated Relify index catalog and
-defines a separate Spark Connect operation lifecycle. New host-engine
-integrations must consume the shared fixtures and produce the same ordered
-query results as the built-in execution paths.
+- benchmark source, LVQ4, and LVQ8 search under constrained memory;
+- validate shared-IVF reuse and cosine recall on public datasets;
+- complete the decompressed Parquet page-cache design and implementation;
+- define a conforming Iceberg builder for the shared-IVF schema; and
+- establish maintained Spark and StarRocks conformance environments.
 
 ## Later
 
-Additional index families, metrics, SDK languages, construction using
-StarRocks compute, Parquet queries through StarRocks, and managed services
-remain out of scope until the implemented paths have independent conformance
-tests and reproducible benchmarks.
+Batch queries, additional index families, remote catalogs, Spark Connect,
+construction with distributed engines, and additional SDK languages remain
+out of scope until the current paths have reproducible benchmarks and stable
+conformance tests.

@@ -15,7 +15,7 @@ use datafusion::common::ScalarValue;
 use datafusion::logical_expr::registry::FunctionRegistry;
 use datafusion::prelude::{Expr, SessionContext, col};
 use object_store::local::LocalFileSystem;
-use relify_meta::{IndexMetadata, PostingEncoding, RelationReference};
+use relify_meta::{DistanceMetric, IndexMetadata, PostingEncoding, RelationReference};
 use relify_storage::StorageRegistry;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -111,6 +111,8 @@ fn resolved_search(nlist: usize, cluster_selection: ClusterSelection) -> Resolve
         source_key_fields: vec!["id".into()],
         postings_relation_key: Some("file:///postings".into()),
         posting_encoding: PostingEncoding::Source,
+        metric: DistanceMetric::L2Squared,
+        source_vector_is_f64: false,
         cluster_selection: Some(cluster_selection),
         nlist: Some(nlist),
         ntotal: Some(nlist),
@@ -170,26 +172,10 @@ fn datafusion_cluster_filter_rejects_invalid_selected_cids() {
 }
 
 #[test]
-fn stored_vectors_allow_an_index_only_key_and_distance_plan() {
+fn source_encoding_requires_the_source_relation() {
     let mut resolved = resolved_search(2, ClusterSelection::All);
-    resolved.posting_encoding = PostingEncoding::Flat;
-
-    assert!(!datafusion_source_relation_required(&resolved).unwrap());
-    let sql = compile_datafusion_sql(&resolved, None, Some("postings"), None, None).unwrap();
-    assert!(!sql.contains("relify_source"));
-    assert!(!sql.contains("JOIN relify_postings"));
-    assert!(sql.contains("p.\"key_1\" AS \"id\""));
-    assert!(sql.contains("relify_squared_l2(p.\"vector\""));
-    assert!(sql.contains("ORDER BY c.\"_distance\" ASC\nLIMIT 10"));
-    assert!(!sql.contains("c.\"id\" ASC"));
-
+    assert!(datafusion_source_relation_required(&resolved).unwrap());
     resolved.projection = vec!["title".into()];
-    assert!(datafusion_source_relation_required(&resolved).unwrap());
-    resolved.projection = vec!["id".into()];
-    resolved.filter = Some("id = 'a'".into());
-    assert!(datafusion_source_relation_required(&resolved).unwrap());
-    resolved.filter = None;
-    resolved.posting_encoding = PostingEncoding::Source;
     assert!(datafusion_source_relation_required(&resolved).unwrap());
 }
 
@@ -493,6 +479,8 @@ async fn datafusion_execution_matches_the_shared_query_fixtures() {
             source_key_fields: snapshot.source_key_fields.clone(),
             postings_relation_key: Some(postings_uri.clone()),
             posting_encoding: PostingEncoding::from_snapshot(snapshot).unwrap(),
+            metric: DistanceMetric::L2Squared,
+            source_vector_is_f64: false,
             cluster_selection: Some(if nprobe == snapshot.parameter_usize("nlist").unwrap() {
                 ClusterSelection::All
             } else {
@@ -532,7 +520,19 @@ fn snapshot(artifacts: &IvfTables) -> IndexSnapshot {
             ("dimension".into(), artifacts.dimension.to_string()),
             ("nlist".into(), artifacts.nlist.to_string()),
             ("ntotal".into(), artifacts.ntotal.to_string()),
-            ("store_vectors".into(), artifacts.store_vectors.to_string()),
+            ("posting_encoding".into(), "source".into()),
+            (
+                "shared_ivf_fingerprint".into(),
+                "73a6be1d-5c50-4f9f-a70b-035ca68b105d".into(),
+            ),
+            (
+                "shared_ivf_uuid".into(),
+                "fe985f6d-3592-4385-a1ca-71347057a210".into(),
+            ),
+            (
+                "shared_ivf_metadata_location".into(),
+                "file:///metadata/fe985f6d-3592-4385-a1ca-71347057a210/v1.metadata.json".into(),
+            ),
         ]),
         index_relations: BTreeMap::new(),
     }

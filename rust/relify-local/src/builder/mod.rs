@@ -26,7 +26,7 @@ use datafusion::logical_expr::{
 use datafusion::prelude::col;
 use futures::StreamExt;
 use parallite::ParalliteContext;
-use relify_meta::{PostingEncoding, RelationReference};
+use relify_meta::{PostingEncoding, RelationReference, SharedIvfReference};
 #[cfg(test)]
 use relify_storage::StorageRegistry;
 #[cfg(test)]
@@ -56,7 +56,6 @@ pub(crate) struct IvfTables {
     pub dimension: usize,
     pub nlist: usize,
     pub ntotal: usize,
-    pub store_vectors: bool,
     pub centroids: RecordBatch,
     pub postings: RecordBatch,
 }
@@ -70,7 +69,24 @@ pub(crate) struct IvfBuildContext<'a> {
     pub progress: &'a LocalBuildProgress,
 }
 
-struct TrainedIvf {
+pub(crate) struct IvfPostingsSpec<'a> {
+    pub vector_field: &'a str,
+    pub source_key_fields: &'a [String],
+    pub config: IvfConfig,
+    pub trained: &'a TrainedIvf,
+    pub shared_ivf: &'a SharedIvfReference,
+    pub centroids: RelationReference,
+}
+
+pub(crate) struct PreparedIvf {
+    source: DataFrame,
+    sample: ReservoirSampler,
+    pub(crate) dimension: usize,
+    pub(crate) nlist: usize,
+    pub(crate) ntotal: usize,
+}
+
+pub(crate) struct TrainedIvf {
     dimension: usize,
     nlist: usize,
     ntotal: usize,
@@ -369,13 +385,100 @@ fn binary_view_codes(
     Ok(builder.finish())
 }
 
-pub(crate) async fn build_ivf_datafusion(
+pub(crate) async fn prepare_ivf_datafusion(
     source: DataFrame,
     vector_field: &str,
     source_key_fields: &[String],
     config: IvfConfig,
+    parallel: &ParalliteContext,
+    progress: &LocalBuildProgress,
+) -> Result<PreparedIvf> {
+    validate_request(vector_field, source_key_fields, config.nlist)?;
+    validate_source_schema(source.schema().inner(), vector_field, source_key_fields)?;
+    let transformed = crate::vector::transform_vector_udf(config.metric)
+        .call(vec![col(vector_field)])
+        .alias(vector_field);
+    let source = source.with_column(vector_field, transformed)?;
+    prepare_training(source, vector_field, config.nlist, parallel, progress).await
+}
+
+pub(crate) fn train_prepared_ivf(
+    prepared: &PreparedIvf,
+    parallel: &ParalliteContext,
+    progress: &LocalBuildProgress,
+) -> Result<TrainedIvf> {
+    let mut options = KMeansOptions::new(prepared.nlist);
+    options.max_iter = DEFAULT_KMEANS_ITERATIONS;
+    options.seed = DEFAULT_SEED;
+    let training_rows = prepared.sample.values().len() / prepared.dimension;
+    progress.begin(
+        BuildPhase::TrainingCentroids,
+        training_rows.saturating_mul(options.max_iter),
+    );
+    let model = fit_lloyd_kmeans_with_progress(
+        prepared.sample.values(),
+        prepared.dimension,
+        parallel,
+        options,
+        |assigned_rows| {
+            let _ = progress.advance(assigned_rows);
+        },
+    )?;
+    Ok(TrainedIvf {
+        dimension: prepared.dimension,
+        nlist: prepared.nlist,
+        ntotal: prepared.ntotal,
+        centroids: model.centroids,
+    })
+}
+
+pub(crate) fn reused_ivf(prepared: &PreparedIvf, centroids: Vec<f32>) -> Result<TrainedIvf> {
+    let expected = prepared
+        .dimension
+        .checked_mul(prepared.nlist)
+        .ok_or_else(|| Error::InvalidSchema("shared centroid shape overflows usize".into()))?;
+    if centroids.len() != expected || centroids.iter().any(|value| !value.is_finite()) {
+        return Err(Error::InvalidSchema(
+            "shared centroid relation does not match the build descriptor".into(),
+        ));
+    }
+    Ok(TrainedIvf {
+        dimension: prepared.dimension,
+        nlist: prepared.nlist,
+        ntotal: prepared.ntotal,
+        centroids,
+    })
+}
+
+pub(crate) async fn write_ivf_centroids(
+    parquet: &ParquetStore,
+    location: &str,
+    trained: &TrainedIvf,
+    writer_options: &ParquetWriterOptions,
+    progress: &LocalBuildProgress,
+) -> Result<()> {
+    let centroid_table = centroids_batch(&trained.centroids, trained.dimension)?;
+    progress.begin(BuildPhase::WritingCentroids, 1);
+    parquet
+        .write_batch(location, &centroid_table, writer_options)
+        .await?;
+    progress.set_completed(1);
+    Ok(())
+}
+
+pub(crate) async fn build_ivf_postings(
+    prepared: PreparedIvf,
+    spec: IvfPostingsSpec<'_>,
     context: IvfBuildContext<'_>,
 ) -> Result<IndexArtifacts> {
+    let IvfPostingsSpec {
+        vector_field,
+        source_key_fields,
+        config,
+        trained,
+        shared_ivf,
+        centroids,
+    } = spec;
     let IvfBuildContext {
         parquet,
         output_root,
@@ -384,33 +487,11 @@ pub(crate) async fn build_ivf_datafusion(
         parallel,
         progress,
     } = context;
-    validate_request(vector_field, source_key_fields, config.nlist)?;
     writer_options.validate()?;
+    let source_schema = Arc::clone(prepared.source.schema().inner());
+    let source = prepared.source;
 
-    let training_source = source.clone();
-    validate_source_schema(
-        training_source.schema().inner(),
-        vector_field,
-        source_key_fields,
-    )?;
-    let trained = train_centroids(
-        training_source.clone(),
-        vector_field,
-        config.nlist,
-        parallel,
-        progress,
-    )
-    .await?;
-
-    let centroids_location = child_location(output_root, "ivf_centroids", true)?;
     let postings_location = child_location(output_root, "ivf_postings", true)?;
-    let centroid_table = centroids_batch(&trained.centroids, trained.dimension)?;
-    progress.begin(BuildPhase::WritingCentroids, 1);
-    parquet
-        .write_batch(&centroids_location, &centroid_table, writer_options)
-        .await?;
-    progress.set_completed(1);
-
     progress.begin(BuildPhase::BuildingPostings, 0);
     write_postings(
         parquet,
@@ -418,8 +499,8 @@ pub(crate) async fn build_ivf_datafusion(
             source,
             vector_field,
             source_key_fields,
-            source_schema: training_source.schema().inner(),
-            trained: &trained,
+            source_schema: source_schema.as_ref(),
+            trained,
             posting_encoding: config.posting_encoding,
             output_location: &postings_location,
             parallelism: parallel.thread_count(),
@@ -428,34 +509,31 @@ pub(crate) async fn build_ivf_datafusion(
         partitions,
     )
     .await?;
-    let (format, encoding_parameter) = match config.posting_encoding.v1_store_vectors() {
-        Some(store_vectors) => (
-            IndexFormat::ivf_v1(),
-            ("store_vectors".into(), store_vectors.to_string()),
-        ),
-        None => (
-            IndexFormat::ivf_v2(),
-            (
-                "posting_encoding".into(),
-                config.posting_encoding.as_str().into(),
-            ),
-        ),
-    };
     Ok(IndexArtifacts {
-        format,
+        format: IndexFormat::ivf(config.metric),
         parameters: BTreeMap::from([
             ("dimension".into(), trained.dimension.to_string()),
             ("nlist".into(), trained.nlist.to_string()),
             ("ntotal".into(), trained.ntotal.to_string()),
-            encoding_parameter,
+            (
+                "posting_encoding".into(),
+                config.posting_encoding.as_str().into(),
+            ),
+            (
+                "shared_ivf_fingerprint".into(),
+                shared_ivf.fingerprint.clone(),
+            ),
+            (
+                "shared_ivf_uuid".into(),
+                shared_ivf.artifact_uuid.to_string(),
+            ),
+            (
+                "shared_ivf_metadata_location".into(),
+                shared_ivf.metadata_location.clone(),
+            ),
         ]),
         index_relations: BTreeMap::from([
-            (
-                "ivf_centroids".into(),
-                RelationReference::Parquet {
-                    uri: centroids_location,
-                },
-            ),
+            ("ivf_centroids".into(), centroids),
             (
                 "ivf_postings".into(),
                 RelationReference::Parquet {
@@ -568,25 +646,11 @@ fn project_postings(
     }
     match posting_encoding {
         PostingEncoding::Source => {}
-        PostingEncoding::Flat => {
-            let output_type =
-                required_vector_type(&vector_type).expect("source vector schema was validated");
-            let expression = if vector_type == output_type {
-                col(vector_field)
-            } else {
-                cast(col(vector_field), output_type.clone())
-            };
-            expressions.push(
-                require_non_null_udf(output_type, true)
-                    .call(vec![expression])
-                    .alias("vector"),
-            );
-        }
         PostingEncoding::Lvq4 | PostingEncoding::Lvq8 => {
             let bits = match posting_encoding {
                 PostingEncoding::Lvq4 => LvqBits::Four,
                 PostingEncoding::Lvq8 => LvqBits::Eight,
-                PostingEncoding::Source | PostingEncoding::Flat => unreachable!(),
+                PostingEncoding::Source => unreachable!(),
             };
             expressions.push(
                 encode_lvq_udf(vector_type.clone(), trained.dimension, bits)
@@ -630,17 +694,28 @@ fn resolved_postings_writer_options(
     resolved
 }
 
-async fn train_centroids(
+async fn prepare_training(
     source: datafusion::dataframe::DataFrame,
     vector_field: &str,
     nlist: usize,
     parallel: &ParalliteContext,
     progress: &LocalBuildProgress,
-) -> Result<TrainedIvf> {
+) -> Result<PreparedIvf> {
     let sample_rows = nlist.saturating_mul(COARSE_MAX_POINTS_PER_CENTROID);
-    progress.begin(BuildPhase::ScanningSource, 1);
-    let ntotal = source.clone().count().await?;
-    progress.set_completed(1);
+    progress.begin(BuildPhase::ReadingTraining, 0);
+    let mut sample = ReservoirSampler::new(sample_rows, DEFAULT_SEED)?;
+    let mut batches = source
+        .clone()
+        .select_columns(&[vector_field])?
+        .execute_stream()
+        .await?;
+    while let Some(batch) = batches.next().await {
+        let batch = batch?;
+        let (vectors, dimension) = borrow_source_vectors(&batch, vector_field)?;
+        sample.push(vectors, dimension)?;
+        let _ = progress.advance(batch.num_rows());
+    }
+    let ntotal = sample.seen_rows();
     if ntotal == 0 {
         return Err(Error::InvalidSchema(
             "source table must contain at least one row".into(),
@@ -651,47 +726,16 @@ async fn train_centroids(
             "nlist ({nlist}) must not exceed ntotal ({ntotal})"
         )));
     }
-    let target_rows = sample_rows.min(ntotal);
-    progress.begin(BuildPhase::ReadingTraining, ntotal);
-    let mut sample = ReservoirSampler::new(target_rows, DEFAULT_SEED)?;
-    let mut batches = source
-        .select_columns(&[vector_field])?
-        .execute_stream()
-        .await?;
-    while let Some(batch) = batches.next().await {
-        let batch = batch?;
-        let (vectors, dimension) = borrow_source_vectors(&batch, vector_field)?;
-        sample.push(vectors, dimension)?;
-        let _ = progress.advance(batch.num_rows());
-    }
-    if sample.seen_rows() != ntotal {
-        return Err(Error::InvalidSchema(format!(
-            "training query returned {} rows, expected {ntotal}",
-            sample.seen_rows()
-        )));
-    }
     let dimension = sample
         .dimension()
         .ok_or_else(|| Error::InvalidSchema("source table must contain at least one row".into()))?;
-    let mut options = KMeansOptions::new(nlist);
-    options.max_iter = DEFAULT_KMEANS_ITERATIONS;
-    options.seed = DEFAULT_SEED;
-    let training_work = target_rows.saturating_mul(options.max_iter);
-    progress.begin(BuildPhase::TrainingCentroids, training_work);
-    let model = fit_lloyd_kmeans_with_progress(
-        sample.values(),
-        dimension,
-        parallel,
-        options,
-        |assigned_rows| {
-            let _ = progress.advance(assigned_rows);
-        },
-    )?;
-    Ok(TrainedIvf {
+    let _ = parallel;
+    Ok(PreparedIvf {
+        source,
+        sample,
         dimension,
         nlist,
         ntotal,
-        centroids: model.centroids,
     })
 }
 
@@ -734,26 +778,6 @@ fn encode_lvq_udf(vector_type: DataType, dimension: usize, bits: LvqBits) -> Sca
     })
 }
 
-fn required_vector_type(data_type: &DataType) -> Option<DataType> {
-    match data_type {
-        DataType::List(field) if field.data_type() == &DataType::Float32 => Some(DataType::List(
-            Arc::new(Field::new(field.name(), DataType::Float32, false)),
-        )),
-        DataType::LargeList(field) if field.data_type() == &DataType::Float32 => Some(
-            DataType::LargeList(Arc::new(Field::new(field.name(), DataType::Float32, false))),
-        ),
-        DataType::FixedSizeList(field, dimension)
-            if *dimension > 0 && field.data_type() == &DataType::Float32 =>
-        {
-            Some(DataType::FixedSizeList(
-                Arc::new(Field::new(field.name(), DataType::Float32, false)),
-                *dimension,
-            ))
-        }
-        _ => None,
-    }
-}
-
 fn validate_source_schema(
     schema: &Schema,
     vector_field: &str,
@@ -762,9 +786,9 @@ fn validate_source_schema(
     let vector = schema
         .field_with_name(vector_field)
         .map_err(|_| Error::InvalidSchema(format!("vector column not found: {vector_field}")))?;
-    if required_vector_type(vector.data_type()).is_none() {
+    if crate::vector::canonical_vector_type(vector.data_type()).is_none() {
         return Err(Error::InvalidSchema(
-            "source vector column must be list<float>".into(),
+            "source vector column must be list<float> or list<double>".into(),
         ));
     }
     for key in source_key_fields {
@@ -817,9 +841,6 @@ fn estimate_posting_row_width(
         .sum::<usize>();
     let vector_width = match posting_encoding {
         PostingEncoding::Source => 0,
-        PostingEncoding::Flat => dimension
-            .saturating_mul(std::mem::size_of::<f32>())
-            .saturating_add(std::mem::size_of::<i32>()),
         PostingEncoding::Lvq4 => LvqBits::Four
             .code_size(dimension)
             .saturating_add(2 * std::mem::size_of::<f32>()),
@@ -875,36 +896,7 @@ pub(crate) async fn build_ivf_with_options(
     output_root: &Path,
     writer_options: &ParquetWriterOptions,
 ) -> Result<IndexArtifacts> {
-    build_ivf_with_storage_options(
-        source,
-        vector_field,
-        source_key_fields,
-        IvfConfig::new(nlist, PostingEncoding::Flat),
-        output_root,
-        writer_options,
-    )
-    .await
-}
-
-#[cfg(test)]
-pub(crate) async fn build_ivf_with_storage_options(
-    source: &RecordBatch,
-    vector_field: &str,
-    source_key_fields: &[String],
-    config: IvfConfig,
-    output_root: &Path,
-    writer_options: &ParquetWriterOptions,
-) -> Result<IndexArtifacts> {
-    let tables = build_ivf_tables_with_vector_storage(
-        source,
-        vector_field,
-        source_key_fields,
-        config.nlist,
-        config
-            .posting_encoding
-            .v1_store_vectors()
-            .expect("test IVF config uses a v1 posting encoding"),
-    )?;
+    let tables = build_ivf_tables(source, vector_field, source_key_fields, nlist)?;
     let output_root = Url::from_directory_path(output_root)
         .map_err(|()| Error::InvalidArgument("output path is not absolute".into()))?;
     let centroids_location = child_location(output_root.as_str(), "ivf_centroids", true)?;
@@ -938,12 +930,24 @@ pub(crate) async fn build_ivf_with_storage_options(
         ),
     ]);
     Ok(IndexArtifacts {
-        format: IndexFormat::ivf_v1(),
+        format: IndexFormat::ivf(crate::DistanceMetric::L2Squared),
         parameters: BTreeMap::from([
             ("dimension".into(), tables.dimension.to_string()),
             ("nlist".into(), tables.nlist.to_string()),
             ("ntotal".into(), tables.ntotal.to_string()),
-            ("store_vectors".into(), tables.store_vectors.to_string()),
+            ("posting_encoding".into(), "source".into()),
+            (
+                "shared_ivf_fingerprint".into(),
+                "73a6be1d-5c50-4f9f-a70b-035ca68b105d".into(),
+            ),
+            (
+                "shared_ivf_uuid".into(),
+                "fe985f6d-3592-4385-a1ca-71347057a210".into(),
+            ),
+            (
+                "shared_ivf_metadata_location".into(),
+                "file:///metadata/fe985f6d-3592-4385-a1ca-71347057a210/v1.metadata.json".into(),
+            ),
         ]),
         index_relations,
     })
@@ -955,17 +959,6 @@ pub(crate) fn build_ivf_tables(
     vector_field: &str,
     source_key_fields: &[String],
     nlist: usize,
-) -> Result<IvfTables> {
-    build_ivf_tables_with_vector_storage(source, vector_field, source_key_fields, nlist, true)
-}
-
-#[cfg(test)]
-pub(crate) fn build_ivf_tables_with_vector_storage(
-    source: &RecordBatch,
-    vector_field: &str,
-    source_key_fields: &[String],
-    nlist: usize,
-    store_vectors: bool,
 ) -> Result<IvfTables> {
     validate_request(vector_field, source_key_fields, nlist)?;
 
@@ -992,23 +985,12 @@ pub(crate) fn build_ivf_tables_with_vector_storage(
     let parallel = ParalliteContext::default();
     let model = fit_lloyd_kmeans(&training, dimension, &parallel, options)?;
     let cells = assign_to_centroids(vectors, dimension, &model.centroids, &parallel)?;
-    let posting_vectors = if store_vectors {
-        let vector_column = source
-            .schema()
-            .index_of(vector_field)
-            .expect("source vector schema was validated");
-        Some(Arc::clone(source.column(vector_column)))
-    } else {
-        None
-    };
-
     Ok(IvfTables {
         dimension,
         nlist,
         ntotal,
-        store_vectors,
         centroids: centroids_batch(&model.centroids, dimension)?,
-        postings: postings_batch(&cells, &key_arrays, posting_vectors)?,
+        postings: postings_batch(&cells, &key_arrays, None)?,
     })
 }
 

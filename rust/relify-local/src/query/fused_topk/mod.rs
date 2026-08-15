@@ -22,6 +22,7 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use self::exec::{DistanceInput, IvfTopKExec};
 use super::{lvq_squared_l2_udf, squared_l2_udf};
 use relify_kernels::LvqBits;
+use relify_meta::DistanceMetric;
 
 mod exec;
 mod selector;
@@ -53,10 +54,18 @@ pub(crate) fn relify_session_context(
         .with_physical_optimizer_rules(rules)
         .build();
     let context = SessionContext::new_with_state(state);
+    register_internal_udfs(&context);
+    context
+}
+
+pub(crate) fn register_internal_udfs(context: &SessionContext) {
     context.register_udf(squared_l2_udf());
     context.register_udf(lvq_squared_l2_udf(LvqBits::Four));
     context.register_udf(lvq_squared_l2_udf(LvqBits::Eight));
-    context
+    context.register_udf(crate::vector::transform_vector_udf(
+        DistanceMetric::L2Squared,
+    ));
+    context.register_udf(crate::vector::transform_vector_udf(DistanceMetric::Cosine));
 }
 
 /// Replaces `Sort(Projection(relify_squared_l2(...)))` with one vector-native

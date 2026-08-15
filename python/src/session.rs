@@ -9,9 +9,9 @@ use datafusion_python::context::{PyRuntimeEnvBuilder, PySessionConfig};
 use datafusion_python::dataframe::PyDataFrame;
 use pyo3::prelude::*;
 use relify_local::{
-    IvfConfig, LocalBuildOptions, LocalBuildProgress, LocalSession, LocalSessionOptions,
-    ParquetWriterOptions, PersistentParquetOptions, PostingEncoding, SearchRequest,
-    relify_session_config,
+    DistanceMetric, IvfConfig, LocalBuildOptions, LocalBuildProgress, LocalSession,
+    LocalSessionOptions, ParquetWriterOptions, PersistentParquetOptions, PostingEncoding,
+    SearchRequest, relify_session_config,
 };
 use relify_meta::RelationReference;
 use tokio::runtime::Runtime;
@@ -35,6 +35,11 @@ fn parse_posting_encoding(value: &str) -> PyResult<PostingEncoding> {
     PostingEncoding::from_metadata(value).ok_or_else(|| {
         InvalidArgumentError::new_err(format!("unsupported posting_encoding: {value}"))
     })
+}
+
+fn parse_metric(value: &str) -> PyResult<DistanceMetric> {
+    DistanceMetric::from_metadata(value)
+        .ok_or_else(|| InvalidArgumentError::new_err(format!("unsupported metric: {value}")))
 }
 
 pub(crate) fn shared_runtime() -> PyResult<Arc<Runtime>> {
@@ -465,6 +470,7 @@ impl PyNativeSession {
         source_key_fields,
         nlist,
         posting_encoding,
+        metric,
         writer_options,
         partitions,
         threads,
@@ -480,6 +486,7 @@ impl PyNativeSession {
         source_key_fields: Vec<String>,
         nlist: usize,
         posting_encoding: &str,
+        metric: &str,
         writer_options: &PyParquetWriterOptions,
         partitions: Option<usize>,
         threads: Option<usize>,
@@ -490,13 +497,14 @@ impl PyNativeSession {
         let writer_options = writer_options.options.clone();
         let progress = progress.map(|tracker| tracker.progress.clone());
         let posting_encoding = parse_posting_encoding(posting_encoding)?;
+        let metric = parse_metric(metric)?;
         py.detach(move || {
             runtime.block_on(session.create_index_with_options(
                 &source,
                 &index_name,
                 &vector_field,
                 &source_key_fields,
-                IvfConfig::new(nlist, posting_encoding),
+                IvfConfig::with_metric(nlist, posting_encoding, metric),
                 &LocalBuildOptions {
                     writer_options,
                     partitions,
@@ -514,6 +522,7 @@ impl PyNativeSession {
         index_name,
         nlist,
         posting_encoding,
+        metric,
         writer_options,
         partitions,
         threads,
@@ -527,6 +536,7 @@ impl PyNativeSession {
         index_name: String,
         nlist: Option<usize>,
         posting_encoding: Option<String>,
+        metric: Option<String>,
         writer_options: &PyParquetWriterOptions,
         partitions: Option<usize>,
         threads: Option<usize>,
@@ -536,15 +546,16 @@ impl PyNativeSession {
         let runtime = Arc::clone(&self.runtime);
         let writer_options = writer_options.options.clone();
         let progress = progress.map(|tracker| tracker.progress.clone());
-        let config = match (nlist, posting_encoding) {
-            (Some(nlist), Some(posting_encoding)) => Some(IvfConfig::new(
+        let config = match (nlist, posting_encoding, metric) {
+            (Some(nlist), Some(posting_encoding), Some(metric)) => Some(IvfConfig::with_metric(
                 nlist,
                 parse_posting_encoding(&posting_encoding)?,
+                parse_metric(&metric)?,
             )),
-            (None, None) => None,
+            (None, None, None) => None,
             _ => {
                 return Err(InvalidArgumentError::new_err(
-                    "nlist and posting_encoding must be provided together",
+                    "nlist, posting_encoding, and metric must be provided together",
                 ));
             }
         };

@@ -1,7 +1,12 @@
 use std::sync::Arc;
 
-use relify_catalog::{CatalogEntry, Error as CatalogError, IndexCatalog, IndexIdentifier};
-use relify_meta::{IndexMetadata, RelationReference};
+use relify_catalog::{
+    CatalogEntry, Error as CatalogError, IndexCatalog, IndexIdentifier, SharedIvfCatalogEntry,
+};
+use relify_meta::{
+    DistanceMetric, IndexMetadata, IndexSnapshot, RelationReference, SharedIvfMetadata,
+    SharedIvfReference, shared_ivf_reference,
+};
 
 use crate::{Error, MetadataStore, Result};
 
@@ -12,6 +17,15 @@ pub struct LoadedIndex {
     pub entry: CatalogEntry,
     /// Validated metadata stored at the catalog pointer.
     pub metadata: IndexMetadata,
+}
+
+/// One cataloged and validated immutable shared-IVF artifact.
+#[derive(Debug, Clone)]
+pub struct LoadedSharedIvf {
+    /// Catalog pointer used to load this state.
+    pub entry: SharedIvfCatalogEntry,
+    /// Validated metadata stored at the catalog pointer.
+    pub metadata: SharedIvfMetadata,
 }
 
 /// Backend-neutral access to one Relify index catalog and metadata store.
@@ -59,6 +73,68 @@ impl IndexRepository {
         let entry = self.catalog.load(identifier)?;
         let metadata = self.metadata.load(&entry.metadata_location).await?;
         Ok(LoadedIndex { entry, metadata })
+    }
+
+    /// Loads one ready shared-IVF artifact by fingerprint.
+    pub async fn load_shared_ivf(&self, fingerprint: &str) -> Result<LoadedSharedIvf> {
+        let entry = self.catalog.load_shared_ivf(fingerprint)?;
+        self.load_shared_ivf_entry(entry).await
+    }
+
+    /// Loads and validates the shared artifact referenced by a logical index.
+    pub async fn load_shared_ivf_reference(
+        &self,
+        reference: &SharedIvfReference,
+    ) -> Result<LoadedSharedIvf> {
+        let metadata = self
+            .metadata
+            .load_shared_ivf(&reference.metadata_location)
+            .await?;
+        if metadata.fingerprint != reference.fingerprint
+            || metadata.artifact_uuid != reference.artifact_uuid
+        {
+            return Err(Error::InvalidMetadata(
+                "logical index shared-IVF reference does not match its metadata".into(),
+            ));
+        }
+        Ok(LoadedSharedIvf {
+            entry: SharedIvfCatalogEntry {
+                fingerprint: reference.fingerprint.clone(),
+                artifact_uuid: reference.artifact_uuid,
+                metadata_location: reference.metadata_location.clone(),
+            },
+            metadata,
+        })
+    }
+
+    /// Loads and validates the shared artifact required by one logical IVF snapshot.
+    pub async fn load_snapshot_shared_ivf(
+        &self,
+        snapshot: &IndexSnapshot,
+    ) -> Result<LoadedSharedIvf> {
+        let reference = shared_ivf_reference(snapshot)?;
+        let loaded = self.load_shared_ivf_reference(&reference).await?;
+        let descriptor = &loaded.metadata.descriptor;
+        let metric = DistanceMetric::from_metadata(&snapshot.metric).ok_or_else(|| {
+            Error::InvalidMetadata(format!("unsupported IVF metric: {}", snapshot.metric))
+        })?;
+        let centroids = snapshot
+            .index_relations
+            .get("ivf_centroids")
+            .ok_or_else(|| Error::InvalidMetadata("missing relation role: ivf_centroids".into()))?;
+        if descriptor.source.exact_state_key() != snapshot.source.exact_state_key()
+            || descriptor.vector_field != snapshot.vector_field
+            || usize::try_from(descriptor.dimension).ok()
+                != Some(snapshot.parameter_usize("dimension")?)
+            || usize::try_from(descriptor.nlist).ok() != Some(snapshot.parameter_usize("nlist")?)
+            || descriptor.metric != metric
+            || loaded.metadata.centroids != *centroids
+        {
+            return Err(Error::InvalidMetadata(
+                "logical index does not match its shared IVF artifact".into(),
+            ));
+        }
+        Ok(loaded)
     }
 
     /// Loads all indexes bound to one exact source-table state.
@@ -133,5 +209,20 @@ impl IndexRepository {
     /// Removes an index mapping without deleting metadata or index tables.
     pub fn drop(&self, identifier: &IndexIdentifier) -> Result<()> {
         Ok(IndexCatalog::drop(self.catalog.as_ref(), identifier)?)
+    }
+
+    async fn load_shared_ivf_entry(&self, entry: SharedIvfCatalogEntry) -> Result<LoadedSharedIvf> {
+        let metadata = self
+            .metadata
+            .load_shared_ivf(&entry.metadata_location)
+            .await?;
+        if metadata.fingerprint != entry.fingerprint
+            || metadata.artifact_uuid != entry.artifact_uuid
+        {
+            return Err(Error::InvalidMetadata(
+                "shared-IVF catalog entry does not match its metadata".into(),
+            ));
+        }
+        Ok(LoadedSharedIvf { entry, metadata })
     }
 }

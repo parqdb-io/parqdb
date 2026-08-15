@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
 
 import pytest
 import relify
@@ -93,17 +92,6 @@ def test_builder_capabilities_are_typed(profile: BuildProfile) -> None:
     )
 
 
-def test_spark_builder_requires_a_classic_session() -> None:
-    with pytest.raises(NotImplementedError, match="Spark Classic"):
-        relify.experimental.Spark(object())
-
-    class _Spark:
-        sparkContext: Any = None
-
-    with pytest.raises(TypeError, match="active"):
-        relify.experimental.Spark(_Spark())
-
-
 def test_coordinator_discards_output_that_violates_the_builder_profile(
     tmp_path: Path,
 ) -> None:
@@ -129,7 +117,12 @@ def test_coordinator_discards_output_that_violates_the_builder_profile(
                     "dimension": "2",
                     "nlist": "1",
                     "ntotal": "1",
-                    "store_vectors": "true",
+                    "posting_encoding": "source",
+                    "shared_ivf_fingerprint": ("33333333-3333-3333-3333-333333333333"),
+                    "shared_ivf_uuid": "44444444-4444-4444-4444-444444444444",
+                    "shared_ivf_metadata_location": (
+                        "file:///tmp/shared-ivf/v1.metadata.json"
+                    ),
                 },
                 index_relations={
                     "ivf_centroids": {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -12,10 +13,10 @@ from _support import register_source
 
 FIXTURES = Path(__file__).parents[2] / "spec" / "fixtures" / "v1"
 VALID = FIXTURES / "valid"
-COMPOSITE = VALID / "composite_no_vectors"
+COMPOSITE = VALID / "composite"
 INVALID = FIXTURES / "invalid"
 INVALID_CASES = json.loads((INVALID / "manifest.json").read_text(encoding="utf-8"))
-V2_VALID = Path(__file__).parents[2] / "spec" / "fixtures" / "v2" / "valid"
+FINGERPRINT_NAMESPACE = uuid.UUID("2fb71e63-a27c-4fc5-9d6d-5070698dc398")
 
 
 def squared_l2(left: list[float], right: list[float]) -> float:
@@ -43,7 +44,6 @@ def reference_search(
     snapshot = metadata["snapshots"][0]
     key_fields = snapshot["source-key-fields"]
     vector_field = snapshot["vector-field"]
-    store_vectors = snapshot["parameters"]["store_vectors"] == "true"
     source = {
         tuple(row[field] for field in key_fields): row
         for row in pq.read_table(directory / "source.parquet").to_pylist()
@@ -52,7 +52,7 @@ def reference_search(
     postings = pq.read_table(
         directory / "ivf_postings", partitioning="hive"
     ).to_pylist()
-    assert all(("vector" in posting) == store_vectors for posting in postings)
+    assert all("vector" not in posting for posting in postings)
     query = case["query-vector"]
     selected = {
         row["cid"]
@@ -80,14 +80,14 @@ def reference_search(
                 **{field: row[field] for field in case["projection"]},
                 "_distance": squared_l2(
                     query,
-                    posting["vector"] if store_vectors else row[vector_field],
+                    row[vector_field],
                 ),
             }
         )
     return sorted(candidates, key=lambda row: row["_distance"])[: case["k"]]
 
 
-def reference_search_v2(
+def reference_lvq_search(
     case: dict[str, Any],
     directory: Path,
 ) -> list[dict[str, object]]:
@@ -133,7 +133,35 @@ def register_fixture(session: relify.Session, fixture: Path, name: str) -> None:
     session.indexes.register(name, destination.as_uri())
 
 
-def localize_v2_fixture(warehouse: Path, directory: Path) -> tuple[Path, Path]:
+def shared_ivf_fingerprint(descriptor: dict[str, object]) -> str:
+    source = descriptor["source"]
+    assert isinstance(source, dict)
+    if source["profile"] == "parquet":
+        canonical_source = {"profile": "parquet", "uri": source["uri"]}
+    else:
+        canonical_source = {
+            field: source[field]
+            for field in (
+                "profile",
+                "table-uuid",
+                "snapshot-id",
+            )
+        }
+    canonical_descriptor = {
+        "source": canonical_source,
+        "vector-field": descriptor["vector-field"],
+        "dimension": descriptor["dimension"],
+        "metric": descriptor["metric"],
+        "nlist": descriptor["nlist"],
+        "clustering-profile-version": descriptor["clustering-profile-version"],
+    }
+    canonical = json.dumps(
+        canonical_descriptor, ensure_ascii=False, separators=(",", ":")
+    )
+    return str(uuid.uuid5(FINGERPRINT_NAMESPACE, canonical))
+
+
+def localize_lvq_fixture(warehouse: Path, directory: Path) -> tuple[Path, Path]:
     local = warehouse / "fixture"
     shutil.copytree(directory, local)
     source = (local / "source.parquet").resolve()
@@ -146,6 +174,21 @@ def localize_v2_fixture(warehouse: Path, directory: Path) -> tuple[Path, Path]:
     metadata["location"] = f"{metadata_root.as_uri()}/"
     snapshot = metadata["snapshots"][0]
     snapshot["source"] = {"profile": "parquet", "uri": source.as_uri()}
+    shared_path = (local / "shared-ivf.metadata.json").resolve()
+    shared = json.loads(shared_path.read_text(encoding="utf-8"))
+    shared["location"] = f"{(local / 'shared').resolve().as_uri()}/"
+    shared["descriptor"]["source"] = snapshot["source"]
+    shared["centroids"] = {
+        "profile": "parquet",
+        "uri": centroids.as_uri(),
+    }
+    shared["fingerprint"] = shared_ivf_fingerprint(shared["descriptor"])
+    shared_path.write_text(
+        json.dumps(shared, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    snapshot["parameters"]["shared_ivf_fingerprint"] = shared["fingerprint"]
+    snapshot["parameters"]["shared_ivf_metadata_location"] = shared_path.as_uri()
     snapshot["index-relations"] = {
         "ivf_centroids": {
             "profile": "parquet",
@@ -184,31 +227,31 @@ def test_composite_metadata_fixture_is_accepted_by_the_native_reader(
     entry = session.indexes.load("composite")
     snapshot = entry.metadata["snapshots"][0]
     assert snapshot["source-key-fields"] == ("tenant_id", "document_id")
-    assert snapshot["parameters"]["store_vectors"] == "false"
+    assert snapshot["parameters"]["posting_encoding"] == "source"
 
 
 @pytest.mark.parametrize("encoding", ["lvq4", "lvq8"])
-def test_v2_metadata_fixtures_are_accepted_by_the_native_reader(
+def test_lvq_metadata_fixtures_are_accepted_by_the_native_reader(
     tmp_path: Path,
     encoding: str,
 ) -> None:
     session = relify.connect(tmp_path / "relify-data")
-    register_fixture(session, V2_VALID / encoding / "metadata.json", encoding)
+    register_fixture(session, VALID / encoding / "metadata.json", encoding)
 
     entry = session.indexes.load(encoding)
     snapshot = entry.metadata["snapshots"][0]
-    assert snapshot["index-schema-version"] == 2
+    assert snapshot["index-schema-version"] == 1
     assert snapshot["parameters"]["posting_encoding"] == encoding
 
 
 @pytest.mark.parametrize("encoding", ["lvq4", "lvq8"])
-def test_v2_pyarrow_fixtures_are_queryable_by_the_native_reader(
+def test_lvq_pyarrow_fixtures_are_queryable_by_the_native_reader(
     tmp_path: Path,
     encoding: str,
 ) -> None:
-    directory = V2_VALID / encoding
+    directory = VALID / encoding
     session = relify.connect(tmp_path / "relify-data")
-    source, metadata = localize_v2_fixture(session.root, directory)
+    source, metadata = localize_lvq_fixture(session.root, directory)
     documents = register_source(session, source, "documents")
     session.indexes.register(encoding, metadata.as_uri())
     case = json.loads((directory / "queries.json").read_text(encoding="utf-8"))[0]
@@ -264,11 +307,11 @@ def test_query_fixtures_are_internally_consistent() -> None:
     ("encoding", "expected_code"),
     [("lvq4", "800f"), ("lvq8", "0080ff")],
 )
-def test_v2_query_fixtures_are_internally_consistent(
+def test_lvq_query_fixtures_are_internally_consistent(
     encoding: str,
     expected_code: str,
 ) -> None:
-    directory = V2_VALID / encoding
+    directory = VALID / encoding
     cases = json.loads((directory / "queries.json").read_text(encoding="utf-8"))
     postings = pq.read_table(
         directory / "ivf_postings", partitioning="hive"
@@ -277,7 +320,7 @@ def test_v2_query_fixtures_are_internally_consistent(
     assert first_code.hex() == expected_code
 
     for case in cases:
-        actual = reference_search_v2(case, directory)
+        actual = reference_lvq_search(case, directory)
         assert [row["document_id"] for row in actual] == [
             row["document_id"] for row in case["expected"]
         ]

@@ -19,7 +19,7 @@ def test_ivf_requires_a_positive_value(nlist: int) -> None:
 
 
 def test_ivf_has_one_canonical_encoding() -> None:
-    assert relify.IVF(1).encoding == "flat"
+    assert relify.IVF(1).encoding == "source"
     assert relify.IVF(1, encoding="source").encoding == "source"
     assert relify.IVF(1, encoding="lvq4").encoding == "lvq4"
     assert relify.IVF(1, encoding="lvq8").encoding == "lvq8"

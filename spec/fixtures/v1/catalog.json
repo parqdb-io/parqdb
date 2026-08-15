@@ -7,11 +7,11 @@
   },
   "locations": {
     "base": "s3://relify-fixtures/v1/catalog/metadata-v1.json",
-    "next": "s3://relify-fixtures/v1/catalog/metadata-v2.json"
+    "next": "s3://relify-fixtures/v1/catalog/metadata-next.json"
   },
   "metadata": {
     "base": "valid/metadata.json",
-    "next": "valid/metadata-v2.json"
+    "next": "valid/metadata-next.json"
   },
   "operations": [
     {

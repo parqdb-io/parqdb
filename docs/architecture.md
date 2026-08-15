@@ -9,7 +9,7 @@ Python API
     -> relify.experimental.spark (Spark + Parquet/Iceberg reads)
     -> relify.experimental.starrocks (StarRocks + Iceberg reads)
     -> third-party BackendPlugin sessions
-    -> Local / Spark / third-party IndexBuilder implementations
+    -> Local / third-party IndexBuilder implementations
 
 relify-local -------------------------\
 relify.experimental.spark -------------+--> relify-index
@@ -38,6 +38,11 @@ immutable metadata document and owns atomic register, compare-and-swap commit,
 drop, and discovery. Its table side stores provider-defined definitions needed
 to reconstruct local external tables. It does not read metadata files, source
 data, or index tables.
+
+The SQLite implementation uses an application identifier and an internal
+schema generation to reject unrelated or incompatible database files. This
+pre-stable policy is recorded in
+[ADR 0011](decisions/0011-sqlite-catalog-format-identity.md).
 
 `relify-storage` resolves absolute `file`, `s3`, and `hdfs` URIs through the
 Arrow object-store interface. A `Warehouse` restricts Relify-managed metadata
@@ -76,15 +81,13 @@ name describes embedded execution, not a filesystem restriction. The local
 builder writes Parquet, while the query resolver reads both Parquet and exact
 Iceberg snapshots.
 
-`relify.experimental.spark` is the Spark Classic implementation. It reads
-Parquet relations through Spark and optionally binds one PyIceberg catalog
-under the same logical catalog name used by Spark. Spark owns table reads,
-bounded-sample MLlib block training, Arrow-batch assignment, the required
-`(cid, key...)` range shuffle and partition-local sort, distributed Iceberg
-data writes, and the native DataFrame query plan.
-PyIceberg supplies exact table UUID and snapshot references and creates index
-tables with the canonical schema before Spark appends data. The session never
-creates a DataFusion context and does not use private PySpark JVM objects.
+`relify.experimental.spark` is the query-only Spark Classic implementation. It
+reads Parquet relations through Spark and optionally binds one PyIceberg
+catalog under the same logical catalog name used by Spark. Spark owns the
+native DataFrame query plan, including centroid routing, postings pruning,
+source joins, filtering, distance evaluation, and Top-K. PyIceberg supplies
+exact table UUID and snapshot references. The session never creates a
+DataFusion context and does not use private PySpark JVM objects.
 
 `relify.experimental.starrocks` is the StarRocks query implementation. It
 binds a caller-owned Arrow Flight SQL ADBC connection and one PyIceberg catalog
@@ -129,9 +132,8 @@ Builders advertise source/index profiles and accept an immutable
 configuration, keys, and writer options. A builder returns portable
 `BuildOutput`; the coordinator publishes it through `relify-index` and invokes
 the supplied discard action if publication fails. `Local` builds
-Parquet-to-Parquet through Rust. `Spark(spark_session)` builds
-Iceberg-to-Iceberg and may be passed to a Spark, StarRocks, or other
-Iceberg-bound table. Query backend capabilities contain no build matrix.
+Parquet-to-Parquet through Rust. Spark and StarRocks are currently query-only;
+query backend capabilities contain no implicit build matrix.
 
 `VectorQuery` is an immutable backend-independent value containing a structured
 table identifier and logical search options. It neither holds a session nor
@@ -212,17 +214,16 @@ directly to DataFusion file groups, avoiding per-query object listing and
 whole-relation partition pruning while retaining the standard Parquet reader
 and page cache.
 The session retains manifests in a configurable entry- and byte-bounded
-planning cache;
-oversized manifests are used for the current plan but not admitted. Stable
+planning cache; oversized manifests are used for the current plan but not
+admitted. Stable
 internal table names keep only a lightweight deferred provider and therefore do
 not pin an evicted manifest. Decoded postings are not cached. A full probe needs
-neither centroid routing nor a cluster predicate. IVF postings store exact
-vectors by default,
-so key/vector-only projections without a source filter can compute and rank
-results from index tables alone. Other projections and filters resolve source
-rows by key. Callers can continue from the resulting lazy DataFrame directly or
-compile complete SQL over the session's registered source and index relations.
-Observable index metadata and query semantics remain in Rust.
+neither centroid routing nor a cluster predicate. Source-encoded indexes
+resolve vectors from source rows; LVQ indexes can rank from their code postings
+when neither filtering nor projection requires source payload. Callers can
+continue from the resulting lazy DataFrame directly or compile complete SQL
+over the session's registered source and index relations. Observable index
+metadata and query semantics remain in Rust.
 
 The local session uses one storage-backed query path for cold and warm data.
 File, row-group, and column pruning select Parquet input before the reader checks
@@ -235,16 +236,14 @@ require no separate index-cache invalidation path.
 
 The local path uses SQLite, persistent Parquet table definitions, a Rust
 builder, one Rust-owned DataFusion context, and optional exact Iceberg
-resolution. `Local()` is its default builder. The experimental Spark path uses
-one caller-owned Spark Classic session, optional Parquet sources, and one
-matching PyIceberg catalog; `relify.experimental.Spark(session)` is its default
-builder. Experimental StarRocks has no default builder and accepts an explicit
-compatible builder. All sessions expose the root Relify index namespace, share
+resolution. `Local()` is its default builder. The experimental Spark and
+StarRocks paths are query-only adapters over caller-owned engines and matching
+PyIceberg catalogs. All sessions expose the root Relify index namespace, share
 `relify-index`, and can query compatible physical index-table profiles
-independent of which builder produced them.
+independent of which conforming builder produced them.
 
-Spark refresh, cross-driver build coordination, remote Relify index catalogs,
-and Spark Connect are not current capabilities. Additional engines add
+Spark construction and refresh, remote Relify index catalogs, and Spark
+Connect are not current capabilities. Additional engines add
 concrete session types around the shared metadata, `ResolvedSearch`, and
 `VectorQuery` semantics. Independently distributed integrations register a
 `BackendPlugin`; they do not inject a replaceable backend object into another
@@ -260,13 +259,11 @@ immutable warehouse prefix:
 <warehouse>/indexes/<index-uuid>/<snapshot-id>/
 ```
 
-Spark instead creates named Iceberg tables in the configured `relify`
-namespace and binds their exact snapshots. After the index tables are
-complete, both paths create an immutable Relify metadata object under the
-metadata warehouse. The catalog register or compare-and-swap commit is the
-publication point. A failure before that point never exposes a partial index;
-the builder removes newly created unpublished tables when its catalog supports
-purge.
+After the index tables are complete, the local path creates an immutable Relify
+metadata object under the metadata warehouse. The catalog register or
+compare-and-swap commit is the publication point. A failure before that point
+never exposes a partial index;
+unpublished objects become retention-protected orphan-removal candidates.
 
 Catalog transactions and storage guarantees are independent. The warehouse
 does not require atomic directory rename, so the same publication flow works

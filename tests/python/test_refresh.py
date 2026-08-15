@@ -10,7 +10,7 @@ import relify
 from _support import WAIT, build_index, register_source, write_vectors
 
 
-def test_refresh_publishes_a_new_snapshot_for_updated_source(
+def test_refresh_reuses_shared_ivf_for_the_same_immutable_source(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "vectors.parquet"
@@ -20,11 +20,6 @@ def test_refresh_publishes_a_new_snapshot_for_updated_source(
     build_index(vectors, nlist=2)
     before = session.indexes.load("vectors_embedding")
 
-    write_vectors(
-        source,
-        [0, 1, 2, 3],
-        [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [10.0, 0.0]],
-    )
     vectors.refresh_index("vectors_embedding", wait_timeout=WAIT)
 
     after = session.indexes.load("vectors_embedding")
@@ -40,13 +35,23 @@ def test_refresh_publishes_a_new_snapshot_for_updated_source(
     assert snapshots[1]["sequence-number"] == 2
     assert snapshots[1]["summary"]["operation"] == "refresh"
     assert snapshots[1]["parameters"]["nlist"] == "2"
-    assert snapshots[1]["parameters"]["ntotal"] == "4"
+    assert snapshots[1]["parameters"]["ntotal"] == "3"
+    for field in (
+        "shared_ivf_fingerprint",
+        "shared_ivf_uuid",
+        "shared_ivf_metadata_location",
+    ):
+        assert snapshots[1]["parameters"][field] == snapshots[0]["parameters"][field]
+    assert (
+        snapshots[1]["index-relations"]["ivf_centroids"]
+        == snapshots[0]["index-relations"]["ivf_centroids"]
+    )
     assert (
         snapshots[1]["index-relations"]["ivf_postings"]
         != snapshots[0]["index-relations"]["ivf_postings"]
     )
-    assert session.to_arrow(vectors.search([10.0, 0.0]).limit(1))["id"].to_pylist() == [
-        3
+    assert session.to_arrow(vectors.search([2.0, 0.0]).limit(1))["id"].to_pylist() == [
+        2
     ]
     assert (
         vectors.index_status("vectors_embedding").current_snapshot_id
@@ -74,8 +79,35 @@ def test_refresh_can_change_ivf_configuration(tmp_path: Path) -> None:
     metadata = session.indexes.load("vectors_embedding").metadata
     assert metadata["snapshots"][0]["parameters"]["nlist"] == "2"
     assert metadata["snapshots"][1]["parameters"]["nlist"] == "1"
-    assert metadata["snapshots"][0]["parameters"]["store_vectors"] == "true"
-    assert metadata["snapshots"][1]["parameters"]["store_vectors"] == "false"
+    assert metadata["snapshots"][0]["parameters"]["posting_encoding"] == "source"
+    assert metadata["snapshots"][1]["parameters"]["posting_encoding"] == "source"
+    assert (
+        metadata["snapshots"][0]["parameters"]["shared_ivf_fingerprint"]
+        != metadata["snapshots"][1]["parameters"]["shared_ivf_fingerprint"]
+    )
+
+
+def test_refresh_rejects_changing_the_distance_metric(tmp_path: Path) -> None:
+    source = tmp_path / "vectors.parquet"
+    write_vectors(source, [0, 1], [[1.0, 0.0], [0.0, 1.0]])
+    session = relify.connect(tmp_path / "relify-data")
+    vectors = register_source(session, source)
+    build_index(vectors, nlist=1)
+    before = session.indexes.load("vectors_embedding")
+
+    with pytest.raises(
+        relify.InvalidArgumentError,
+        match="refresh cannot change the distance metric",
+    ):
+        vectors.refresh_index(
+            "vectors_embedding",
+            config=relify.IVF(nlist=1, metric="cosine"),
+            wait_timeout=WAIT,
+        )
+
+    after = session.indexes.load("vectors_embedding")
+    assert after.metadata_location == before.metadata_location
+    assert after.metadata == before.metadata
 
 
 def test_failed_refresh_preserves_the_published_snapshot(tmp_path: Path) -> None:
@@ -134,6 +166,7 @@ def test_refresh_keeps_the_previous_snapshot_visible_while_building(
             index_name: str,
             nlist: int | None,
             posting_encoding: str | None,
+            metric: str | None,
             writer_options: object,
             partitions: int | None,
             threads: int | None,
@@ -146,6 +179,7 @@ def test_refresh_keeps_the_previous_snapshot_visible_while_building(
                 index_name=index_name,
                 nlist=nlist,
                 posting_encoding=posting_encoding,
+                metric=metric,
                 writer_options=writer_options,
                 partitions=partitions,
                 threads=threads,

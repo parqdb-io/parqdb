@@ -40,7 +40,7 @@ This RFC defines:
 - the relationship between that artifact and logical indexes;
 - the source, LVQ4, and LVQ8 representations;
 - cosine and source-vector type semantics;
-- automatic reuse, publication, failure, refresh, and garbage collection; and
+- automatic reuse, publication, failure, and refresh; and
 - the public build API behavior.
 
 It does not add product quantization, batch queries, incremental clustering,
@@ -102,9 +102,11 @@ files unchanged. Replacing files or changing the files matched by a URI pattern
 requires registering the changed data under a new URI before building another
 index. Relify does not compute a Parquet file-manifest fingerprint in this RFC.
 
-The canonical descriptor is hashed to produce an IVF fingerprint. The hash is
-a lookup key, not sufficient proof of compatibility: a catalog entry retains
-the complete descriptor and readers verify it after lookup.
+The descriptor's semantic fields are hashed to produce an IVF fingerprint.
+Iceberg locator fields are excluded because table UUID and snapshot ID define
+its exact state. The hash is a lookup key, not sufficient proof of
+compatibility: a catalog entry retains the complete descriptor and readers
+verify every semantic field after lookup.
 
 For one source state and vector-index definition, `nlist` is the only
 user-selected field that distinguishes coarse partitions. The other identity
@@ -231,9 +233,9 @@ sequenceDiagram
     Catalog-->>API: index state becomes ready
 ```
 
-The user observes one logical build with phases such as `resolve_ivf`,
-`train_ivf`, `assign_ivf`, `encode_lvq4`, `encode_lvq8`, and `publish`. Internal
-artifact claims are not separate public build operations.
+The user observes one logical build through the existing source-reading,
+centroid-training, postings-writing, and publication phases. Internal artifact
+claims are not separate public build operations.
 
 The shared IVF is published before logical-index postings are built. If the
 postings build fails, the completed IVF remains reusable. No failed logical
@@ -390,33 +392,29 @@ For Parquet, Relify cannot detect replacement at the same URI. The user must
 publish changed source data under a new URI before rebuilding. Reusing an IVF
 after changing the files behind its Parquet URI violates the source contract.
 
-Dropping a logical index removes only its catalog visibility. It does not
-synchronously delete its shared IVF artifact or encoding files. Garbage
-collection may remove an artifact only when it is unreachable from:
-
-- every current or retained logical index metadata file;
-- an active build claim; and
-- the catalog's reader-safety retention window.
-
-Reference counting is not part of the commit protocol. Reachability from
-immutable metadata remains authoritative, avoiding races between concurrent
-drop and create operations.
+Dropping a logical index removes only its catalog visibility. Its logical-index
+files follow the normal retention-safe orphan-removal path. Ready shared IVF
+artifacts remain registered and reachable in the first implementation, even
+when no published logical index currently references them. Removing them safely
+requires a cross-process usage lease for builds that are reusing an existing
+artifact; catalog reachability alone cannot observe that transient state.
 
 ## 10. Compatibility and Migration
 
-This change replaces the current IVF schema rather than adding compatibility
-branches:
+This change replaces the pre-release IVF layouts rather than adding
+compatibility branches. The resulting format is published as IVF schema
+version 1:
 
-- schema-v1 `store_vectors` is removed;
-- schema-v2 `posting_encoding = flat` is removed;
+- `store_vectors` is removed;
+- `posting_encoding = flat` is removed;
 - centroids become a shared artifact;
 - source vectors may be `float` or `double`; and
 - metrics are `l2_squared` and `cosine`.
 
-Implementations reject old IVF metadata with an error that instructs the user
-to rebuild the index. Relify has not published a stable index-format release,
-so retaining read and write paths for the experimental schemas would impose
-more complexity than the migration is worth.
+Implementations reject metadata from the experimental layouts with an error
+that instructs the user to rebuild the index. Relify has not published a stable
+index-format release, so those layouts do not receive public schema-version
+numbers or compatibility branches.
 
 ## 11. Implementation Order
 
@@ -426,7 +424,8 @@ more complexity than the migration is worth.
 4. Remove `flat` and old-schema implementation paths.
 5. Accept `list<double>` sources and add canonical float conversion.
 6. Add cosine normalization and result scaling to build and query paths.
-7. Reuse the shared artifact from the Spark builder and query backends.
+7. Keep experimental query backends read-only until their builders implement
+   the shared-artifact publication contract.
 8. Add concurrent-build, failed-postings, refresh, drop, and GC tests.
 9. Benchmark L2 regressions and cosine Recall on the Cohere dataset.
 

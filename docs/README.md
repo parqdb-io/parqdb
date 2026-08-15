@@ -19,8 +19,8 @@ the index specification and implementation design.
 | Goal | Guide | Status |
 | --- | --- | --- |
 | Build and query Parquet indexes in one Python process | [Local DataFusion and Parquet](guides/local.md) | Stable |
-| Build and query Iceberg indexes with Spark Classic | [Spark and Iceberg](guides/spark.md) | Experimental |
-| Query a Spark-built Iceberg index with StarRocks | [StarRocks and Iceberg](guides/starrocks.md) | Experimental |
+| Query published Parquet or Iceberg indexes with Spark Classic | [Spark and Iceberg](guides/spark.md) | Experimental |
+| Query a published Iceberg index with StarRocks | [StarRocks and Iceberg](guides/starrocks.md) | Experimental |
 | Run the maintained examples | [Python examples](../examples/python/README.md) | Tested in the repository |
 
 The local backend is the default place to begin. Spark and StarRocks use the

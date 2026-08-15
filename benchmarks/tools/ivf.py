@@ -70,7 +70,7 @@ TRAINING_SAMPLING = {
     "faiss": "uniform-without-replacement-v1",
 }
 RELIFY_POSTINGS_LAYOUT = "hive-cid-file-v1"
-RELIFY_ENCODINGS = ("lvq8", "lvq4", "flat")
+RELIFY_ENCODINGS = ("lvq8", "lvq4", "source")
 FAISS_ENCODINGS = ("sq8", "sq4", "flat")
 
 

@@ -42,8 +42,8 @@ python -m pip install relify
 
 Spark 和 StarRocks 需要单独部署和配置，详见[计算引擎](#计算引擎)。
 
-下面的示例使用包内置数据集构建 IVF-Flat 索引，并执行带标量过滤的向量
-检索：
+下面的示例使用包内置数据集构建不复制源向量的 IVF 索引，并执行带标量
+过滤的向量检索：
 
 ```python
 import relify
@@ -114,8 +114,8 @@ print(summary.to_pydict())
 | 引擎 | 运行模式 | 当前能力 | 状态 |
 | --- | --- | --- | --- |
 | DataFusion | 嵌入式 | 在同一 Python 进程中构建和查询 Parquet 索引 | 已支持 |
-| Spark Classic | 批处理 | 构建 Iceberg 索引；查询 Parquet 和 Iceberg | 实验性 |
-| StarRocks | OLAP | 通过 Arrow Flight SQL 查询由 Spark 构建的 Iceberg 索引 | 实验性 |
+| Spark Classic | 批处理 | 查询使用源向量和 L2 距离的 Parquet 与 Iceberg 索引 | 实验性 |
+| StarRocks | OLAP | 通过 Arrow Flight SQL 查询使用源向量和 L2 距离的 Iceberg 索引 | 实验性 |
 
 DataFusion 是默认后端。Spark 和 StarRocks 位于 `relify.experimental`，由
 调用方负责引擎和 Catalog 配置。三个后端采用相同的查询模型和开放索引

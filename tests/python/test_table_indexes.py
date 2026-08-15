@@ -17,6 +17,7 @@ def test_table_lists_only_indexes_for_its_exact_source(tmp_path: Path) -> None:
     second = register_source(session, second_source, "second")
     build_index(first, "first_embedding", nlist=1)
     build_index(second, "second_embedding", nlist=1)
+    first_snapshot = session.indexes.load("first_embedding").metadata["snapshots"][0]
 
     assert first.list_indexes() == [
         relify.IndexInfo(
@@ -24,12 +25,7 @@ def test_table_lists_only_indexes_for_its_exact_source(tmp_path: Path) -> None:
             column="embedding",
             family="ivf",
             metric="l2_squared",
-            parameters={
-                "dimension": "2",
-                "nlist": "1",
-                "ntotal": "2",
-                "store_vectors": "true",
-            },
+            parameters=first_snapshot["parameters"],
             current_snapshot_id=first.index_status(
                 "first_embedding"
             ).current_snapshot_id,

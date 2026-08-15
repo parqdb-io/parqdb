@@ -4,9 +4,10 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Barrier};
 
 use relify_catalog::{
-    CatalogTombstone, Error, IndexCatalog, IndexIdentifier, SqliteCatalog, TableCatalog,
-    TableDefinition, TableIdentifier,
+    CatalogTombstone, Error, IndexCatalog, IndexIdentifier, SharedIvfClaimResult, SqliteCatalog,
+    TableCatalog, TableDefinition, TableIdentifier,
 };
+use relify_meta::{DistanceMetric, RelationReference, SharedIvfDescriptor, SharedIvfMetadata};
 use rusqlite::Connection;
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -23,10 +24,211 @@ fn sqlite_catalog_satisfies_index_catalog_contract() {
 }
 
 #[test]
-fn root_namespace_exists_in_a_new_catalog() {
+fn shared_ivf_claim_publish_and_lookup_are_atomic() {
     let temporary = TempDir::new().unwrap();
     let catalog = SqliteCatalog::open(temporary.path().join("catalog.sqlite")).unwrap();
+    let descriptor = shared_ivf_descriptor(temporary.path());
+    let first_owner = Uuid::new_v4();
+    let second_owner = Uuid::new_v4();
+    let claim = match catalog
+        .claim_shared_ivf(&descriptor, first_owner, 60_000)
+        .unwrap()
+    {
+        SharedIvfClaimResult::Claimed(claim) => claim,
+        other => panic!("first caller must own the claim, received {other:?}"),
+    };
+    assert!(matches!(
+        catalog
+            .claim_shared_ivf(&descriptor, second_owner, 60_000)
+            .unwrap(),
+        SharedIvfClaimResult::Busy { .. }
+    ));
+    catalog.renew_shared_ivf_claim(&claim, 60_000).unwrap();
+
+    let metadata = shared_ivf_metadata(temporary.path(), &descriptor);
+    let metadata_location = file_uri(&temporary.path().join("shared-v1.metadata.json"));
+    assert!(matches!(
+        catalog.publish_shared_ivf(&claim, "shared-v1.metadata.json", &metadata),
+        Err(Error::InvalidMetadata(_))
+    ));
+    let published = catalog
+        .publish_shared_ivf(&claim, &metadata_location, &metadata)
+        .unwrap();
+
+    assert_eq!(
+        catalog.load_shared_ivf(&published.fingerprint).unwrap(),
+        published
+    );
+    assert_eq!(
+        catalog.list_shared_ivf().unwrap(),
+        std::slice::from_ref(&published)
+    );
+    assert!(matches!(
+        catalog
+            .claim_shared_ivf(&descriptor, second_owner, 60_000)
+            .unwrap(),
+        SharedIvfClaimResult::Ready(entry) if entry == published
+    ));
+}
+
+#[test]
+fn expired_shared_ivf_claim_cannot_be_renewed_or_published() {
+    let temporary = TempDir::new().unwrap();
+    let database = temporary.path().join("catalog.sqlite");
+    let catalog = SqliteCatalog::open(&database).unwrap();
+    let descriptor = shared_ivf_descriptor(temporary.path());
+    let claim = match catalog
+        .claim_shared_ivf(&descriptor, Uuid::new_v4(), 60_000)
+        .unwrap()
+    {
+        SharedIvfClaimResult::Claimed(claim) => claim,
+        other => panic!("first caller must own the claim, received {other:?}"),
+    };
+    Connection::open(&database)
+        .unwrap()
+        .execute("UPDATE shared_ivf_artifacts SET lease_expires_ms = 0", [])
+        .unwrap();
+    let metadata = shared_ivf_metadata(temporary.path(), &descriptor);
+    let metadata_location = file_uri(&temporary.path().join("shared-v1.metadata.json"));
+
+    assert!(matches!(
+        catalog.renew_shared_ivf_claim(&claim, 60_000),
+        Err(Error::SharedIvfClaimLost(_))
+    ));
+    assert!(matches!(
+        catalog.publish_shared_ivf(&claim, &metadata_location, &metadata),
+        Err(Error::SharedIvfClaimLost(_))
+    ));
+}
+
+#[test]
+fn expired_shared_ivf_claim_uses_compare_and_swap_publication() {
+    let temporary = TempDir::new().unwrap();
+    let database = temporary.path().join("catalog.sqlite");
+    let catalog = SqliteCatalog::open(&database).unwrap();
+    let descriptor = shared_ivf_descriptor(temporary.path());
+    let first = match catalog
+        .claim_shared_ivf(&descriptor, Uuid::new_v4(), 60_000)
+        .unwrap()
+    {
+        SharedIvfClaimResult::Claimed(claim) => claim,
+        other => panic!("first caller must own the claim, received {other:?}"),
+    };
+    Connection::open(&database)
+        .unwrap()
+        .execute("UPDATE shared_ivf_artifacts SET lease_expires_ms = 0", [])
+        .unwrap();
+    let second = match catalog
+        .claim_shared_ivf(&descriptor, Uuid::new_v4(), 60_000)
+        .unwrap()
+    {
+        SharedIvfClaimResult::Claimed(claim) => claim,
+        other => panic!("expired claim must be replaced, received {other:?}"),
+    };
+    let metadata = shared_ivf_metadata(temporary.path(), &descriptor);
+    let metadata_location = file_uri(&temporary.path().join("shared-v1.metadata.json"));
+
+    assert!(matches!(
+        catalog.publish_shared_ivf(&first, &metadata_location, &metadata),
+        Err(Error::SharedIvfClaimLost(_))
+    ));
+    catalog
+        .publish_shared_ivf(&second, &metadata_location, &metadata)
+        .unwrap();
+}
+
+#[test]
+fn concurrent_shared_ivf_claims_allow_exactly_one_builder() {
+    let temporary = TempDir::new().unwrap();
+    let catalog = SqliteCatalog::open(temporary.path().join("catalog.sqlite")).unwrap();
+    let descriptor = shared_ivf_descriptor(temporary.path());
+    let barrier = Arc::new(Barrier::new(3));
+    let handles = [Uuid::new_v4(), Uuid::new_v4()].map(|owner| {
+        let catalog = catalog.clone();
+        let descriptor = descriptor.clone();
+        let barrier = Arc::clone(&barrier);
+        std::thread::spawn(move || {
+            barrier.wait();
+            catalog.claim_shared_ivf(&descriptor, owner, 60_000)
+        })
+    });
+    barrier.wait();
+    let results = handles.map(|handle| handle.join().unwrap().unwrap());
+
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(result, SharedIvfClaimResult::Claimed(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(result, SharedIvfClaimResult::Busy { .. }))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn shared_ivf_reuse_follows_iceberg_exact_state_across_renames() {
+    let temporary = TempDir::new().unwrap();
+    let catalog = SqliteCatalog::open(temporary.path().join("catalog.sqlite")).unwrap();
+    let table_uuid = Uuid::new_v4();
+    let mut descriptor = shared_ivf_descriptor(temporary.path());
+    descriptor.source = RelationReference::Iceberg {
+        catalog: "first".into(),
+        namespace: vec!["analytics".into()],
+        name: "documents".into(),
+        table_uuid,
+        snapshot_id: 101,
+    };
+    let claim = match catalog
+        .claim_shared_ivf(&descriptor, Uuid::new_v4(), 60_000)
+        .unwrap()
+    {
+        SharedIvfClaimResult::Claimed(claim) => claim,
+        other => panic!("first caller must own the claim, received {other:?}"),
+    };
+    let metadata = shared_ivf_metadata(temporary.path(), &descriptor);
+    let metadata_location = file_uri(&temporary.path().join("shared-v1.metadata.json"));
+    let published = catalog
+        .publish_shared_ivf(&claim, &metadata_location, &metadata)
+        .unwrap();
+
+    let mut renamed = descriptor;
+    renamed.source = RelationReference::Iceberg {
+        catalog: "second".into(),
+        namespace: vec!["renamed".into()],
+        name: "vectors".into(),
+        table_uuid,
+        snapshot_id: 101,
+    };
+    assert!(matches!(
+        catalog
+            .claim_shared_ivf(&renamed, Uuid::new_v4(), 60_000)
+            .unwrap(),
+        SharedIvfClaimResult::Ready(entry) if entry == published
+    ));
+}
+
+#[test]
+fn root_namespace_exists_in_a_new_catalog() {
+    let temporary = TempDir::new().unwrap();
+    let database = temporary.path().join("catalog.sqlite");
+    let catalog = SqliteCatalog::open(&database).unwrap();
     assert!(catalog.list(&[]).unwrap().is_empty());
+
+    let connection = Connection::open(database).unwrap();
+    let application_id: i64 = connection
+        .query_row("PRAGMA application_id", [], |row| row.get(0))
+        .unwrap();
+    let user_version: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(application_id, 0x524c_4659);
+    assert_eq!(user_version, 4);
 }
 
 #[test]
@@ -379,4 +581,104 @@ fn rejects_an_unversioned_existing_schema() {
         SqliteCatalog::open(&database),
         Err(Error::UnsupportedSchemaVersion(0))
     ));
+}
+
+#[test]
+fn rejects_an_unrelated_unversioned_database_without_modifying_it() {
+    let temporary = TempDir::new().unwrap();
+    let database = temporary.path().join("catalog.sqlite");
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .execute("CREATE TABLE application_data (id INTEGER PRIMARY KEY)", [])
+        .unwrap();
+    drop(connection);
+
+    assert!(matches!(
+        SqliteCatalog::open(&database),
+        Err(Error::UnsupportedApplicationId(0))
+    ));
+
+    let connection = Connection::open(database).unwrap();
+    let objects = connection
+        .prepare(
+            "SELECT name FROM sqlite_schema
+             WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+             ORDER BY name",
+        )
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(objects, ["application_data"]);
+}
+
+#[test]
+fn rejects_catalogs_from_older_prerelease_schemas() {
+    for version in [1, 2, 3] {
+        let temporary = TempDir::new().unwrap();
+        let database = temporary.path().join("catalog.sqlite");
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute_batch(&format!(
+                "CREATE TABLE indexes (name TEXT PRIMARY KEY);
+                 PRAGMA user_version={version};"
+            ))
+            .unwrap();
+        drop(connection);
+
+        assert!(matches!(
+            SqliteCatalog::open(&database),
+            Err(Error::UnsupportedSchemaVersion(actual)) if actual == version
+        ));
+    }
+}
+
+#[test]
+fn rejects_the_current_schema_without_the_relify_application_id() {
+    let temporary = TempDir::new().unwrap();
+    let database = temporary.path().join("catalog.sqlite");
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE indexes (name TEXT PRIMARY KEY);
+             PRAGMA user_version=4;",
+        )
+        .unwrap();
+    drop(connection);
+
+    assert!(matches!(
+        SqliteCatalog::open(&database),
+        Err(Error::UnsupportedApplicationId(0))
+    ));
+}
+
+fn shared_ivf_descriptor(root: &std::path::Path) -> SharedIvfDescriptor {
+    SharedIvfDescriptor {
+        source: RelationReference::Parquet {
+            uri: file_uri(&root.join("source.parquet")),
+        },
+        vector_field: "embedding".into(),
+        dimension: 2,
+        metric: DistanceMetric::L2Squared,
+        nlist: 2,
+        clustering_profile_version: 1,
+    }
+}
+
+fn shared_ivf_metadata(
+    root: &std::path::Path,
+    descriptor: &SharedIvfDescriptor,
+) -> SharedIvfMetadata {
+    SharedIvfMetadata {
+        format_version: 1,
+        artifact_uuid: Uuid::new_v4(),
+        fingerprint: descriptor.fingerprint().unwrap(),
+        location: directory_uri(&root.join("shared")),
+        created_at_ms: 1_750_000_000_000,
+        descriptor: descriptor.clone(),
+        centroids: RelationReference::Parquet {
+            uri: directory_uri(&root.join("centroids")),
+        },
+    }
 }

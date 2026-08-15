@@ -17,14 +17,15 @@ matrix.
 
 ## Index and Query Semantics
 
-- IVF is the only implemented index family. The local backend supports exact
-  vectors and LVQ4/LVQ8 encodings; experimental backends support a narrower
-  subset.
-- Squared L2 is the only distance metric.
+- IVF is the only implemented index family. The local backend supports
+  source-backed, LVQ4, and LVQ8 postings; experimental backends support only
+  source-backed L2 indexes.
+- Squared L2 and cosine are supported by the local backend.
 - Query vectors are one-dimensional; batch queries are not implemented.
 - Results order by distance; the relative order of equal-distance rows is
   unspecified.
-- Vector columns must have one fixed dimension and finite `float32` elements.
+- Vector columns must have one fixed dimension and finite `float32` or
+  `float64` elements. Computation canonicalizes them to `float32`.
 - The current API accepts SQL-string source filters; it does not expose a
   backend-neutral expression object for filters.
 
@@ -34,13 +35,10 @@ matrix.
 - The Python catalog facade exposes one root index namespace.
 - There is no remote catalog service or multi-node transaction coordinator.
 - Local builds coordinate through the local catalog and filesystem state.
-- The Spark development catalog assumes one coordinating driver; cross-driver
-  build coordination is not implemented.
 
 ## Storage
 
 - Local index construction writes Parquet.
-- Spark index construction writes Iceberg.
 - Local storage access supports `file`, S3, and HDFS.
 - Parquet locations have no snapshot isolation. Replacing files under a
   registered path is the application's consistency responsibility.
@@ -50,18 +48,17 @@ matrix.
 
 The stable local backend supports Parquet source registration, local IVF
 construction, exact fallback, filtering, projection, DataFusion SQL and
-DataFrame composition, index caching, refresh, catalog recovery, and orphan
-removal. The local builder does not write Iceberg indexes.
+DataFrame composition, decompressed Parquet page caching, refresh, catalog
+recovery, and orphan removal. The local builder does not write Iceberg indexes.
 
 ## Spark
 
-The experimental backend supports Spark Classic 4.0 and 4.1, initial Iceberg
-index construction, native PySpark DataFrame queries, and queries over
-compatible Parquet indexes. It does not support:
+The experimental backend supports Spark Classic 4.0 and 4.1 and native
+PySpark DataFrame queries over compatible source-encoded L2 Parquet and
+Iceberg indexes. It does not support:
 
 - Spark Connect;
-- index refresh;
-- cross-driver build coordination;
+- index construction or refresh;
 - Iceberg maintenance;
 - a remote Relify index catalog; or
 - production distributed benchmarks and conformance guarantees.
@@ -78,7 +75,7 @@ It does not:
 - create or configure the StarRocks Iceberg catalog; or
 - expose a DataFrame facade.
 
-Construction can be delegated explicitly to a compatible Spark builder.
+Construction for the shared-IVF schema is currently local and Parquet-only.
 
 ## Operational Scope
 

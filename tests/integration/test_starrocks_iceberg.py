@@ -11,6 +11,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from support.config import IcebergConfig, StarRocksConfig
+from support.indexes import write_shared_ivf_metadata
 
 pytestmark = pytest.mark.requires("starrocks", "iceberg")
 
@@ -39,15 +40,17 @@ def test_starrocks_reproduces_the_portable_iceberg_fixtures(
     created: list[tuple[str, ...]] = []
     try:
         catalog_uri = f"sqlite://{tmp_path / 'relify.sqlite'}"
+        metadata_root = tmp_path / "relify-metadata"
         session = relify.experimental.starrocks.connect(
             connection,
             index_catalog=catalog_uri,
             iceberg_catalog=catalog,
             catalog_name=starrocks.catalog_name,
+            metadata_root=metadata_root.as_uri(),
         )
         for fixture_name, directory in (
-            ("stored", FIXTURES),
-            ("composite", FIXTURES / "composite_no_vectors"),
+            ("source", FIXTURES),
+            ("composite", FIXTURES / "composite"),
         ):
             source_identifier, index_name = _publish_fixture(
                 session=session,
@@ -56,6 +59,7 @@ def test_starrocks_reproduces_the_portable_iceberg_fixtures(
                 fixture_name=fixture_name,
                 directory=directory,
                 catalog_name=starrocks.catalog_name,
+                metadata_root=metadata_root,
                 created=created,
             )
             table = session.table(".".join((*namespace, source_identifier[-1])))
@@ -100,6 +104,7 @@ def _publish_fixture(
     fixture_name: str,
     directory: Path,
     catalog_name: str,
+    metadata_root: Path,
     created: list[tuple[str, ...]],
 ) -> tuple[tuple[str, ...], str]:
     tables = {}
@@ -122,26 +127,39 @@ def _publish_fixture(
     fixture_snapshot = fixture_metadata["snapshots"][0]
     source_identifier = (*namespace, f"{fixture_name}_source")
     index_name = f"{fixture_name}_embedding"
+    source = _relation(tables["source"], source_identifier, catalog_name)
+    centroids = _relation(
+        tables["ivf_centroids"],
+        (*namespace, f"{fixture_name}_ivf_centroids"),
+        catalog_name,
+    )
+    shared = write_shared_ivf_metadata(
+        metadata_root,
+        source=source,
+        centroids=centroids,
+        vector_field=fixture_snapshot["vector-field"],
+        dimension=int(fixture_snapshot["parameters"]["dimension"]),
+        metric=fixture_snapshot["metric"],
+        nlist=int(fixture_snapshot["parameters"]["nlist"]),
+    )
     session._native.publish_initial(
         index_name=index_name,
-        source_json=json.dumps(
-            _relation(tables["source"], source_identifier, catalog_name),
-            separators=(",", ":"),
-        ),
+        source_json=json.dumps(source, separators=(",", ":")),
         vector_field=fixture_snapshot["vector-field"],
         source_key_fields=fixture_snapshot["source-key-fields"],
         builder="fixture",
-        parameters=fixture_snapshot["parameters"],
+        metric=fixture_snapshot["metric"],
+        parameters={**fixture_snapshot["parameters"], **shared},
         index_relations={
-            role: json.dumps(
+            "ivf_centroids": json.dumps(centroids, separators=(",", ":")),
+            "ivf_postings": json.dumps(
                 _relation(
-                    tables[role],
-                    (*namespace, f"{fixture_name}_{role}"),
+                    tables["ivf_postings"],
+                    (*namespace, f"{fixture_name}_ivf_postings"),
                     catalog_name,
                 ),
                 separators=(",", ":"),
-            )
-            for role in ("ivf_centroids", "ivf_postings")
+            ),
         },
     )
     return source_identifier, index_name

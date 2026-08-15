@@ -24,11 +24,10 @@ A Relify index consists of portable JSON metadata and ordinary relations. The
 current IVF family stores:
 
 - centroids used to choose candidate clusters; and
-- postings that map clusters to source keys and either source references,
-  exact vectors, or LVQ codes.
+- postings that map clusters to source keys and optionally contain LVQ codes.
 
-Parquet relations are used by the local builder. The Spark builder publishes
-the same logical relations as Iceberg tables. The
+Parquet relations are used by the local builder. The specification also defines
+the same logical relations for Iceberg tables. The
 [open index specification](../spec/README.md) defines their schemas and query
 semantics independently of the Python implementation.
 
@@ -70,10 +69,12 @@ A builder creates the physical index and publishes its metadata:
 
 - `relify.Local` builds Parquet indexes in the current process with native Rust
   training and assignment.
-- `relify.experimental.spark.Spark` builds Iceberg indexes with Spark Classic.
 
-Builders are selected independently from query backends. This is what allows a
-Spark-built Iceberg index to be queried by DataFusion or StarRocks.
+Spark and StarRocks construction is not implemented for the shared-IVF schema.
+
+Builders are selected independently from query backends. A conforming external
+builder can therefore publish an Iceberg index for DataFusion, Spark, or
+StarRocks to query.
 
 ## Backend
 
@@ -83,7 +84,7 @@ engine. It owns engine-specific planning and result collection:
 | Backend | Source and index access | Build | Query |
 | --- | --- | --- | --- |
 | Local DataFusion | Parquet; Iceberg query with PyIceberg | Parquet | Stable |
-| Spark Classic | Parquet query; Iceberg query and build | Iceberg | Experimental |
+| Spark Classic | Parquet and Iceberg query | No built-in builder | Experimental |
 | StarRocks | Iceberg through Arrow Flight SQL | No built-in builder | Experimental |
 
 All backends accept the same `VectorQuery` shape and can return a portable
@@ -97,7 +98,7 @@ An indexed query has four logical stages:
 
 1. select the nearest IVF centroids;
 2. scan postings for the selected cluster IDs;
-3. apply source filters and compute exact squared L2 distances; and
+3. apply source filters and compute the configured distance; and
 4. order by distance, then retain the requested limit.
 
 The relative order of candidates with equal distance is unspecified.

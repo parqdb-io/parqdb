@@ -1,21 +1,17 @@
 {
-  "current-snapshot-id": 702,
+  "current-snapshot-id": 701,
   "format-version": 1,
   "index-uuid": "2f1c7f5e-3c43-4a44-8f2a-cf560c4db8d1",
-  "last-sequence-number": 2,
-  "last-updated-ms": 1750000000001,
+  "last-sequence-number": 1,
+  "last-updated-ms": 1750000000000,
   "location": "s3://relify-fixtures/v1/metadata/2f1c7f5e-3c43-4a44-8f2a-cf560c4db8d1/",
   "properties": {
-    "fixture": "ivf-parquet-v1"
+    "fixture": "ivf-parquet"
   },
   "snapshot-log": [
     {
       "snapshot-id": 701,
       "timestamp-ms": 1750000000000
-    },
-    {
-      "snapshot-id": 702,
-      "timestamp-ms": 1750000000001
     }
   ],
   "snapshots": [
@@ -37,7 +33,10 @@
         "dimension": "2",
         "nlist": "2",
         "ntotal": "3",
-        "store_vectors": "true"
+        "posting_encoding": "flat",
+        "shared_ivf_fingerprint": "4c774941-faf4-5e06-9a2a-03ffa111641f",
+        "shared_ivf_metadata_location": "s3://relify-fixtures/v1/valid/shared-ivf.metadata.json",
+        "shared_ivf_uuid": "fe985f6d-3592-4385-a1ca-71347057a210"
       },
       "sequence-number": 1,
       "snapshot-id": 701,
@@ -52,41 +51,6 @@
         "operation": "create"
       },
       "timestamp-ms": 1750000000000,
-      "vector-field": "embedding"
-    },
-    {
-      "index-family": "ivf",
-      "index-relations": {
-        "ivf_centroids": {
-          "profile": "parquet",
-          "uri": "s3://relify-fixtures/v1/valid/ivf_centroids/"
-        },
-        "ivf_postings": {
-          "profile": "parquet",
-          "uri": "s3://relify-fixtures/v1/valid/ivf_postings/"
-        }
-      },
-      "index-schema-version": 1,
-      "metric": "l2_squared",
-      "parameters": {
-        "dimension": "2",
-        "nlist": "2",
-        "ntotal": "3",
-        "store_vectors": "true"
-      },
-      "sequence-number": 2,
-      "snapshot-id": 702,
-      "source": {
-        "profile": "parquet",
-        "uri": "s3://relify-fixtures/v1/valid/source/"
-      },
-      "source-key-fields": [
-        "document_id"
-      ],
-      "summary": {
-        "operation": "refresh"
-      },
-      "timestamp-ms": 1750000000001,
       "vector-field": "embedding"
     }
   ]

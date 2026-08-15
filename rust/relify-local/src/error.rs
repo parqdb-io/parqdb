@@ -1,6 +1,10 @@
 use relify_catalog::IndexIdentifier;
 use thiserror::Error;
 
+#[derive(Debug, Error)]
+#[error("{0}")]
+pub(crate) struct InvalidSchemaDataFusionError(String);
+
 /// Error returned by embedded Relify operations.
 #[derive(Debug, Error)]
 pub enum Error {
@@ -39,7 +43,7 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     /// `DataFusion` planning or execution failed.
     #[error("DataFusion error: {0}")]
-    DataFusion(#[from] datafusion::error::DataFusionError),
+    DataFusion(datafusion::error::DataFusionError),
     /// Arrow validation or computation failed.
     #[error("Arrow error: {0}")]
     Arrow(#[from] arrow::error::ArrowError),
@@ -60,6 +64,40 @@ pub type Result<T> = std::result::Result<T, Error>;
 impl From<relify_meta::Error> for Error {
     fn from(error: relify_meta::Error) -> Self {
         Self::InvalidMetadata(error.into_message())
+    }
+}
+
+impl From<datafusion::error::DataFusionError> for Error {
+    fn from(error: datafusion::error::DataFusionError) -> Self {
+        if let Some(message) = invalid_schema_message(&error) {
+            Self::InvalidSchema(message.to_owned())
+        } else {
+            Self::DataFusion(error)
+        }
+    }
+}
+
+pub(crate) fn invalid_schema_datafusion(
+    message: impl Into<String>,
+) -> datafusion::error::DataFusionError {
+    datafusion::error::DataFusionError::External(Box::new(InvalidSchemaDataFusionError(
+        message.into(),
+    )))
+}
+
+fn invalid_schema_message(error: &datafusion::error::DataFusionError) -> Option<&str> {
+    use datafusion::error::DataFusionError;
+
+    match error {
+        DataFusionError::External(source) => source
+            .downcast_ref::<InvalidSchemaDataFusionError>()
+            .map(|source| source.0.as_str()),
+        DataFusionError::Context(_, source) | DataFusionError::Diagnostic(_, source) => {
+            invalid_schema_message(source)
+        }
+        DataFusionError::Collection(errors) => errors.iter().find_map(invalid_schema_message),
+        DataFusionError::Shared(source) => invalid_schema_message(source),
+        _ => None,
     }
 }
 

@@ -4,9 +4,9 @@
   "index-uuid": "26878cae-d125-4ec9-b42f-7f0b1ed8c64f",
   "last-sequence-number": 1,
   "last-updated-ms": 1750000000000,
-  "location": "s3://relify-fixtures/v2/metadata/26878cae-d125-4ec9-b42f-7f0b1ed8c64f/",
+  "location": "s3://relify-fixtures/v1/metadata/26878cae-d125-4ec9-b42f-7f0b1ed8c64f/",
   "properties": {
-    "fixture": "ivf-parquet-lvq8-v2"
+    "fixture": "ivf-parquet-lvq8"
   },
   "snapshot-log": [
     {
@@ -20,26 +20,29 @@
       "index-relations": {
         "ivf_centroids": {
           "profile": "parquet",
-          "uri": "s3://relify-fixtures/v2/lvq8/ivf_centroids/"
+          "uri": "s3://relify-fixtures/v1/valid/lvq8/ivf_centroids/"
         },
         "ivf_postings": {
           "profile": "parquet",
-          "uri": "s3://relify-fixtures/v2/lvq8/ivf_postings/"
+          "uri": "s3://relify-fixtures/v1/valid/lvq8/ivf_postings/"
         }
       },
-      "index-schema-version": 2,
+      "index-schema-version": 1,
       "metric": "l2_squared",
       "parameters": {
         "dimension": "3",
         "nlist": "2",
         "ntotal": "3",
-        "posting_encoding": "lvq8"
+        "posting_encoding": "lvq8",
+        "shared_ivf_fingerprint": "23c8386d-9be3-505b-9476-e0d8950bf33b",
+        "shared_ivf_metadata_location": "s3://relify-fixtures/v1/valid/lvq8/shared-ivf.metadata.json",
+        "shared_ivf_uuid": "269b3fe5-0fb3-48f9-85cc-78863622bb48"
       },
       "sequence-number": 1,
       "snapshot-id": 901,
       "source": {
         "profile": "parquet",
-        "uri": "s3://relify-fixtures/v2/lvq8/source/"
+        "uri": "s3://relify-fixtures/v1/valid/lvq8/source/"
       },
       "source-key-fields": [
         "document_id"

@@ -28,12 +28,16 @@
     "violates": "positive integer parameters must use canonical base-10 representation"
   },
   {
-    "file": "noncanonical-store-vectors.metadata.json",
-    "violates": "store_vectors must be exactly true or false"
+    "file": "unsupported-store-vectors.metadata.json",
+    "violates": "store_vectors is not part of IVF schema version 1"
+  },
+  {
+    "file": "unsupported-flat-encoding.metadata.json",
+    "violates": "posting_encoding must be source, lvq4, or lvq8"
   },
   {
     "file": "unsupported-metric.metadata.json",
-    "violates": "IVF schema version 1 supports only l2_squared"
+    "violates": "IVF metric must be l2_squared or cosine"
   },
   {
     "file": "unsupported-relation-profile.metadata.json",

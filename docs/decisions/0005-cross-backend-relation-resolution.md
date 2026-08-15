@@ -29,12 +29,13 @@ tables.
 
 One session binds at most one logical Iceberg catalog name. Metadata that
 references another catalog fails resolution instead of being silently rebound.
-Each runtime may still expose different construction capabilities: the local
-builder writes Parquet and the initial Spark builder writes Iceberg.
+Each runtime may expose different construction capabilities. The current local
+builder writes Parquet; compatible Iceberg indexes may be published by a
+conforming external builder.
 
 ## Consequences
 
-A Spark-built Iceberg index can be queried by DataFusion, and a locally built
+A compatible Iceberg index can be queried by DataFusion, and a locally built
 Parquet index can be queried by Spark, provided both sessions use the same
 Relify index catalog and can access the referenced storage. Cross-backend
 interoperability does not require another index format, export step, or metadata

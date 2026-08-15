@@ -2,16 +2,19 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use relify_meta::{IndexMetadata, RelationReference};
+use relify_meta::{IndexMetadata, RelationReference, SharedIvfDescriptor, SharedIvfMetadata};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use uuid::Uuid;
 
 use crate::identifier::namespace_key;
 use crate::{
-    CatalogEntry, CatalogTombstone, Error, IndexCatalog, IndexIdentifier, Result, TableCatalog,
-    TableDefinition, TableIdentifier,
+    CatalogEntry, CatalogTombstone, Error, IndexCatalog, IndexIdentifier, Result,
+    SharedIvfCatalogEntry, SharedIvfClaim, SharedIvfClaimResult, TableCatalog, TableDefinition,
+    TableIdentifier,
 };
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
+const APPLICATION_ID: i64 = 0x524c_4659; // ASCII "RLFY"
 const ROOT_NAMESPACE_KEY: &str = "[]";
 
 /// A namespace-aware Relify catalog stored in `SQLite`.
@@ -83,17 +86,27 @@ impl SqliteCatalog {
 
     fn initialize(&self) -> Result<()> {
         let mut connection = self.connection()?;
-        connection.execute_batch("PRAGMA journal_mode=WAL;")?;
+        let application_id =
+            connection.query_row("PRAGMA application_id", [], |row| row.get::<_, i64>(0))?;
         let version =
             connection.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))?;
-        match version {
-            SCHEMA_VERSION => Ok(()),
-            0 if table_exists(&connection, "indexes")? => {
-                Err(Error::UnsupportedSchemaVersion(version))
+        if application_id == 0 && version == 0 {
+            if database_is_empty(&connection)? {
+                connection.execute_batch("PRAGMA journal_mode=WAL;")?;
+                return create_schema(&mut connection);
             }
-            0 => create_schema(&mut connection),
-            other => Err(Error::UnsupportedSchemaVersion(other)),
+            if !table_exists(&connection, "indexes")? {
+                return Err(Error::UnsupportedApplicationId(application_id));
+            }
         }
+        if version != SCHEMA_VERSION {
+            return Err(Error::UnsupportedSchemaVersion(version));
+        }
+        if application_id != APPLICATION_ID {
+            return Err(Error::UnsupportedApplicationId(application_id));
+        }
+        connection.execute_batch("PRAGMA journal_mode=WAL;")?;
+        Ok(())
     }
 }
 
@@ -336,6 +349,213 @@ impl IndexCatalog for SqliteCatalog {
             params![tombstone.metadata_location, tombstone.unreachable_since_ms],
         )? == 1)
     }
+
+    fn load_shared_ivf(&self, fingerprint: &str) -> Result<SharedIvfCatalogEntry> {
+        let row = self
+            .connection()?
+            .query_row(
+                "SELECT artifact_uuid, metadata_location
+                 FROM shared_ivf_artifacts
+                 WHERE fingerprint = ?1 AND state = 'ready'",
+                [fingerprint],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?
+            .ok_or_else(|| Error::SharedIvfNotFound(fingerprint.to_owned()))?;
+        shared_ivf_entry(fingerprint, &row.0, &row.1)
+    }
+
+    fn claim_shared_ivf(
+        &self,
+        descriptor: &SharedIvfDescriptor,
+        owner: Uuid,
+        lease_duration_ms: i64,
+    ) -> Result<SharedIvfClaimResult> {
+        descriptor.validate()?;
+        validate_lease(owner, lease_duration_ms)?;
+        let fingerprint = descriptor.fingerprint()?;
+        let descriptor_json = serde_json::to_string(descriptor)?;
+        let owner_string = owner.to_string();
+        let now = now_ms()?;
+        let lease_expires_ms = now.saturating_add(lease_duration_ms);
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existing = transaction
+            .query_row(
+                "SELECT descriptor, state, owner, lease_expires_ms,
+                        artifact_uuid, metadata_location
+                 FROM shared_ivf_artifacts WHERE fingerprint = ?1",
+                [&fingerprint],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<i64>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                    ))
+                },
+            )
+            .optional()?;
+        if let Some((stored, state, current_owner, current_lease, artifact_uuid, location)) =
+            existing
+        {
+            let stored_descriptor: SharedIvfDescriptor = serde_json::from_str(&stored)?;
+            if !stored_descriptor.is_compatible_with(descriptor) {
+                return Err(Error::InvalidMetadata(
+                    "shared IVF fingerprint collision".into(),
+                ));
+            }
+            if state == "ready" {
+                let entry = shared_ivf_entry(
+                    &fingerprint,
+                    artifact_uuid.as_deref().ok_or_else(|| {
+                        Error::Implementation("ready shared IVF has no artifact UUID".into())
+                    })?,
+                    location.as_deref().ok_or_else(|| {
+                        Error::Implementation("ready shared IVF has no metadata location".into())
+                    })?,
+                )?;
+                transaction.commit()?;
+                return Ok(SharedIvfClaimResult::Ready(entry));
+            }
+            if state == "building"
+                && current_owner.as_deref() != Some(owner_string.as_str())
+                && let Some(lease_expires_ms) = current_lease
+                && lease_expires_ms > now
+            {
+                transaction.commit()?;
+                return Ok(SharedIvfClaimResult::Busy { lease_expires_ms });
+            }
+            transaction.execute(
+                "UPDATE shared_ivf_artifacts
+                 SET descriptor = ?1, state = 'building', owner = ?2, lease_expires_ms = ?3,
+                     artifact_uuid = NULL, metadata_location = NULL, error = NULL
+                 WHERE fingerprint = ?4",
+                params![descriptor_json, owner_string, lease_expires_ms, fingerprint],
+            )?;
+        } else {
+            transaction.execute(
+                "INSERT INTO shared_ivf_artifacts(
+                    fingerprint, descriptor, state, owner, lease_expires_ms
+                 ) VALUES (?1, ?2, 'building', ?3, ?4)",
+                params![fingerprint, descriptor_json, owner_string, lease_expires_ms],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(SharedIvfClaimResult::Claimed(SharedIvfClaim {
+            fingerprint,
+            owner,
+        }))
+    }
+
+    fn renew_shared_ivf_claim(&self, claim: &SharedIvfClaim, lease_duration_ms: i64) -> Result<()> {
+        validate_lease(claim.owner, lease_duration_ms)?;
+        let now = now_ms()?;
+        let lease_expires_ms = now.saturating_add(lease_duration_ms);
+        let updated = self.connection()?.execute(
+            "UPDATE shared_ivf_artifacts SET lease_expires_ms = ?1
+             WHERE fingerprint = ?2 AND state = 'building' AND owner = ?3
+               AND lease_expires_ms > ?4",
+            params![
+                lease_expires_ms,
+                claim.fingerprint,
+                claim.owner.to_string(),
+                now
+            ],
+        )?;
+        if updated == 1 {
+            Ok(())
+        } else {
+            Err(Error::SharedIvfClaimLost(claim.fingerprint.clone()))
+        }
+    }
+
+    fn publish_shared_ivf(
+        &self,
+        claim: &SharedIvfClaim,
+        metadata_location: &str,
+        metadata: &SharedIvfMetadata,
+    ) -> Result<SharedIvfCatalogEntry> {
+        metadata.validate()?;
+        if metadata.fingerprint != claim.fingerprint {
+            return Err(Error::InvalidMetadata(
+                "published shared IVF fingerprint does not match claim".into(),
+            ));
+        }
+        relify_meta::SharedIvfReference::new(
+            &claim.fingerprint,
+            metadata.artifact_uuid,
+            metadata_location,
+        )?;
+        let descriptor_json = serde_json::to_string(&metadata.descriptor)?;
+        let now = now_ms()?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let updated = transaction.execute(
+            "UPDATE shared_ivf_artifacts
+             SET state = 'ready', owner = NULL, lease_expires_ms = NULL,
+                 artifact_uuid = ?1, metadata_location = ?2, error = NULL
+             WHERE fingerprint = ?3 AND descriptor = ?4
+               AND state = 'building' AND owner = ?5 AND lease_expires_ms > ?6",
+            params![
+                metadata.artifact_uuid.to_string(),
+                metadata_location,
+                claim.fingerprint,
+                descriptor_json,
+                claim.owner.to_string(),
+                now,
+            ],
+        )?;
+        if updated != 1 {
+            return Err(Error::SharedIvfClaimLost(claim.fingerprint.clone()));
+        }
+        transaction.execute(
+            "DELETE FROM catalog_tombstones WHERE metadata_location = ?1",
+            [metadata_location],
+        )?;
+        transaction.commit()?;
+        Ok(SharedIvfCatalogEntry {
+            fingerprint: claim.fingerprint.clone(),
+            artifact_uuid: metadata.artifact_uuid,
+            metadata_location: metadata_location.to_owned(),
+        })
+    }
+
+    fn abandon_shared_ivf(&self, claim: &SharedIvfClaim, error: &str) -> Result<()> {
+        let updated = self.connection()?.execute(
+            "UPDATE shared_ivf_artifacts
+             SET state = 'failed', owner = NULL, lease_expires_ms = NULL, error = ?1
+             WHERE fingerprint = ?2 AND state = 'building' AND owner = ?3",
+            params![error, claim.fingerprint, claim.owner.to_string()],
+        )?;
+        if updated == 1 {
+            Ok(())
+        } else {
+            Err(Error::SharedIvfClaimLost(claim.fingerprint.clone()))
+        }
+    }
+
+    fn list_shared_ivf(&self) -> Result<Vec<SharedIvfCatalogEntry>> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT fingerprint, artifact_uuid, metadata_location
+             FROM shared_ivf_artifacts WHERE state = 'ready' ORDER BY fingerprint",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (fingerprint, artifact_uuid, location) = row?;
+            shared_ivf_entry(&fingerprint, &artifact_uuid, &location)
+        })
+        .collect()
+    }
 }
 
 impl TableCatalog for SqliteCatalog {
@@ -455,7 +675,18 @@ fn create_schema(connection: &mut Connection) -> Result<()> {
              properties TEXT NOT NULL,
              PRIMARY KEY(catalog, namespace, name)
          );
-         PRAGMA user_version=3;",
+         CREATE TABLE shared_ivf_artifacts (
+             fingerprint TEXT PRIMARY KEY,
+             descriptor TEXT NOT NULL,
+             state TEXT NOT NULL CHECK(state IN ('building', 'ready', 'failed')),
+             owner TEXT,
+             lease_expires_ms INTEGER,
+             artifact_uuid TEXT UNIQUE,
+             metadata_location TEXT UNIQUE,
+             error TEXT
+         );
+         PRAGMA application_id=1380730457;
+         PRAGMA user_version=4;",
     )?;
     transaction.execute(
         "INSERT INTO namespaces(namespace) VALUES (?1)",
@@ -463,6 +694,29 @@ fn create_schema(connection: &mut Connection) -> Result<()> {
     )?;
     transaction.commit()?;
     Ok(())
+}
+
+fn validate_lease(owner: Uuid, lease_duration_ms: i64) -> Result<()> {
+    if owner.is_nil() || lease_duration_ms <= 0 {
+        return Err(Error::Implementation(
+            "shared IVF owner and lease duration must be valid".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn shared_ivf_entry(
+    fingerprint: &str,
+    artifact_uuid: &str,
+    metadata_location: &str,
+) -> Result<SharedIvfCatalogEntry> {
+    let artifact_uuid =
+        Uuid::parse_str(artifact_uuid).map_err(|error| Error::Implementation(error.to_string()))?;
+    Ok(SharedIvfCatalogEntry {
+        fingerprint: fingerprint.to_owned(),
+        artifact_uuid,
+        metadata_location: metadata_location.to_owned(),
+    })
 }
 
 fn table_exists(connection: &Connection, name: &str) -> Result<bool> {
@@ -474,6 +728,17 @@ fn table_exists(connection: &Connection, name: &str) -> Result<bool> {
         )
         .optional()?
         .is_some())
+}
+
+fn database_is_empty(connection: &Connection) -> Result<bool> {
+    Ok(!connection.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM sqlite_schema
+             WHERE name NOT LIKE 'sqlite_%'
+         )",
+        [],
+        |row| row.get(0),
+    )?)
 }
 
 fn is_unique_constraint(error: &rusqlite::Error) -> bool {

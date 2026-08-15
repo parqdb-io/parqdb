@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use object_store::ObjectMeta;
 use relify_catalog::{CatalogTombstone, IndexCatalog};
-use relify_meta::RelationReference;
+use relify_meta::{RelationReference, shared_ivf_reference};
 use relify_storage::Warehouse;
 use uuid::Uuid;
 
@@ -161,15 +161,16 @@ async fn tombstone_references(
         }
         match metadata_store.load(&tombstone.metadata_location).await {
             Ok(metadata) => {
-                for snapshot in &metadata.snapshots {
-                    for reference in snapshot.index_relations.values() {
-                        let RelationReference::Parquet { uri } = reference else {
-                            continue;
-                        };
-                        if let Some(root) = snapshot_root(warehouse, uri)? {
-                            references.insert(root);
-                        }
-                    }
+                references.extend(index_metadata_references(warehouse, &metadata)?);
+            }
+            Err(relify_index::Error::InvalidMetadata(_)) => {
+                let metadata = metadata_store
+                    .load_shared_ivf(&tombstone.metadata_location)
+                    .await?;
+                if let RelationReference::Parquet { uri } = &metadata.centroids
+                    && let Some(root) = snapshot_root(warehouse, uri)?
+                {
+                    references.insert(root);
                 }
             }
             Err(relify_index::Error::Storage(relify_storage::Error::ObjectStore(
@@ -197,18 +198,45 @@ async fn reachable_locations(
         if warehouse.managed(&entry.metadata_location).is_ok() {
             reachable.insert(entry.metadata_location);
         }
-        for snapshot in &metadata.snapshots {
-            for reference in snapshot.index_relations.values() {
-                let RelationReference::Parquet { uri } = reference else {
-                    continue;
-                };
-                if let Some(root) = snapshot_root(warehouse, uri)? {
-                    reachable.insert(root);
-                }
-            }
+        reachable.extend(index_metadata_references(warehouse, &metadata)?);
+    }
+    for entry in catalog.list_shared_ivf()? {
+        let metadata = metadata_store
+            .load_shared_ivf(&entry.metadata_location)
+            .await?;
+        if warehouse.managed(&entry.metadata_location).is_ok() {
+            reachable.insert(entry.metadata_location);
+        }
+        if let RelationReference::Parquet { uri } = &metadata.centroids
+            && let Some(root) = snapshot_root(warehouse, uri)?
+        {
+            reachable.insert(root);
         }
     }
     Ok(reachable)
+}
+
+fn index_metadata_references(
+    warehouse: &Warehouse,
+    metadata: &relify_meta::IndexMetadata,
+) -> Result<HashSet<String>> {
+    let mut references = HashSet::new();
+    for snapshot in &metadata.snapshots {
+        if let Ok(shared) = shared_ivf_reference(snapshot)
+            && warehouse.managed(&shared.metadata_location).is_ok()
+        {
+            references.insert(shared.metadata_location);
+        }
+        for reference in snapshot.index_relations.values() {
+            let RelationReference::Parquet { uri } = reference else {
+                continue;
+            };
+            if let Some(root) = snapshot_root(warehouse, uri)? {
+                references.insert(root);
+            }
+        }
+    }
+    Ok(references)
 }
 
 async fn candidates(
