@@ -13,7 +13,9 @@ if TYPE_CHECKING:
 
 
 def configure_relify_session(session: relify.Session, threads: int) -> None:
-    session.sql(f"SET datafusion.execution.target_partitions = '{threads}'").collect()
+    session.datafusion_context().sql(
+        f"SET datafusion.execution.target_partitions = '{threads}'"
+    ).collect()
 
 
 def relify_search(

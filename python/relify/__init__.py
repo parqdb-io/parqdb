@@ -21,6 +21,8 @@ from ._native import (
 )
 from .api import (
     IVF,
+    AsyncSession,
+    AsyncSourceTable,
     CatalogEntry,
     IndexCatalog,
     IndexInfo,
@@ -37,6 +39,7 @@ from .api import (
     VectorQuery,
     WriteOptions,
     connect,
+    connect_async,
     open_index_catalog,
 )
 
@@ -46,6 +49,8 @@ __all__ = [
     "IVF",
     "AlreadyExistsError",
     "AmbiguousIndexError",
+    "AsyncSession",
+    "AsyncSourceTable",
     "BackendError",
     "BuildAlreadyRunningError",
     "CatalogEntry",
@@ -74,6 +79,7 @@ __all__ = [
     "backends",
     "builders",
     "connect",
+    "connect_async",
     "datafusion",
     "datasets",
     "experimental",

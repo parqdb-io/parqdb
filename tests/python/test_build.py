@@ -5,9 +5,11 @@ from datetime import timedelta
 from pathlib import Path
 from threading import Event
 
+import pyarrow as pa
 import pytest
 import relify
 from _support import WAIT, build_index, register_source, write_vectors
+from relify._service import TableDescriptor
 
 
 def test_published_index_cannot_be_created_again(tmp_path: Path) -> None:
@@ -204,10 +206,11 @@ def test_async_coordinator_rejects_duplicate_build_and_times_out(
         "uri": "file:///source.parquet",
     }
     vectors = relify.SourceTable(
-        session.empty_table(),
         session,
-        relify.TableIdentifier("datafusion", ("public",), "vectors"),
-        "file:///source.parquet",
+        TableDescriptor(
+            relify.TableIdentifier("datafusion", ("public",), "vectors"),
+            pa.schema([]),
+        ),
     )
     vectors.create_index(
         "vectors_embedding",
@@ -329,16 +332,18 @@ def test_independent_sessions_do_not_share_a_build_queue(tmp_path: Path) -> None
         "uri": "file:///second.parquet",
     }
     first = relify.SourceTable(
-        first_session.empty_table(),
         first_session,
-        relify.TableIdentifier("datafusion", ("public",), "first"),
-        "file:///first.parquet",
+        TableDescriptor(
+            relify.TableIdentifier("datafusion", ("public",), "first"),
+            pa.schema([]),
+        ),
     )
     second = relify.SourceTable(
-        second_session.empty_table(),
         second_session,
-        relify.TableIdentifier("datafusion", ("public",), "second"),
-        "file:///second.parquet",
+        TableDescriptor(
+            relify.TableIdentifier("datafusion", ("public",), "second"),
+            pa.schema([]),
+        ),
     )
 
     try:

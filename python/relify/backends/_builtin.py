@@ -26,7 +26,6 @@ LOCAL_CAPABILITIES = BackendCapabilities(
     terminals=frozenset(
         {
             Terminal.COLLECT,
-            Terminal.DATAFRAME,
             Terminal.SQL,
             Terminal.EXPLAIN,
             Terminal.ANALYZE,
@@ -49,7 +48,7 @@ def local_report(*, iceberg: bool) -> CapabilityReport:
 
 
 def load_local_plugin() -> SimpleBackendPlugin:
-    from ..session import connect
+    from ..facade import connect
 
     return SimpleBackendPlugin(LOCAL_INFO, LOCAL_CAPABILITIES, connect)
 

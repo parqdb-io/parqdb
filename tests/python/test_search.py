@@ -301,7 +301,7 @@ def test_where_rejects_invalid_backend_expressions(
         session.to_arrow(documents.search([0.0, 0.0]).where("missing = 1"))
 
 
-def test_dataframe_and_arrow_execution_share_the_session(
+def test_arrow_results_can_be_registered_in_the_native_context(
     indexed_documents: tuple[relify.Session, relify.SourceTable],
 ) -> None:
     session, documents = indexed_documents
@@ -311,7 +311,8 @@ def test_dataframe_and_arrow_execution_share_the_session(
     assert result.column_names == ["id", "_distance"]
     assert result["id"].to_pylist() == [0]
 
-    session.register_view("hits", session.to_dataframe(query))
-    sql_result = session.sql("SELECT * FROM hits").collect()
+    context = session.datafusion_context()
+    context.register_record_batches("hits", [result.to_batches()])
+    sql_result = context.sql("SELECT * FROM hits").collect()
     assert [value for batch in sql_result for value in batch["id"].to_pylist()] == [0]
-    session.deregister_table("hits")
+    context.deregister_table("hits")

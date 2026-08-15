@@ -63,7 +63,6 @@ def test_bound_capabilities_distinguish_unavailable_from_unsupported(
     assert available["terminals"] == [
         "analyze",
         "collect",
-        "dataframe",
         "explain",
         "sql",
     ]
