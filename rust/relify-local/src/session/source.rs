@@ -771,7 +771,7 @@ fn validate_vector_field(
 ) -> Result<()> {
     if !is_float_vector_type(field.data_type()) {
         return Err(Error::InvalidSchema(
-            "source vector column must be list<float>".into(),
+            "source vector column must be list<float> or list<double>".into(),
         ));
     }
     if let (Some(expected), DataType::FixedSizeList(_, actual)) =
@@ -786,13 +786,15 @@ fn validate_vector_field(
 }
 
 fn is_float_vector_type(data_type: &DataType) -> bool {
+    crate::vector::canonical_vector_type(data_type).is_some()
+}
+
+pub(super) fn vector_elements_are_f64(data_type: &DataType) -> bool {
     match data_type {
         DataType::List(field) | DataType::LargeList(field) => {
-            field.data_type() == &DataType::Float32
+            field.data_type() == &DataType::Float64
         }
-        DataType::FixedSizeList(field, dimension) => {
-            *dimension > 0 && field.data_type() == &DataType::Float32
-        }
+        DataType::FixedSizeList(field, _) => field.data_type() == &DataType::Float64,
         _ => false,
     }
 }

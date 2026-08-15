@@ -14,7 +14,11 @@ use datafusion::prelude::ParquetReadOptions;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
-use relify_meta::{IndexMetadata, PostingEncoding, SnapshotLogEntry};
+use relify_catalog::{SharedIvfCatalogEntry, SharedIvfClaim, SharedIvfClaimResult};
+use relify_meta::{
+    DistanceMetric, IVF_CLUSTERING_PROFILE_VERSION, IndexMetadata, PostingEncoding,
+    SharedIvfDescriptor, SharedIvfMetadata, SharedIvfReference, SnapshotLogEntry,
+};
 use rusqlite::Connection;
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -204,6 +208,7 @@ fn session_preserves_datafusion_config_and_runtime() {
 #[derive(Default)]
 struct MemoryCatalog {
     entries: Mutex<BTreeMap<IndexIdentifier, MemoryEntry>>,
+    shared_ivf: Mutex<BTreeMap<String, SharedIvfCatalogEntry>>,
 }
 
 impl IndexCatalog for MemoryCatalog {
@@ -266,6 +271,65 @@ impl IndexCatalog for MemoryCatalog {
             .filter(|entry| entry.source_identity == source_identity)
             .map(|entry| entry.entry.clone())
             .collect())
+    }
+
+    fn load_shared_ivf(&self, fingerprint: &str) -> relify_catalog::Result<SharedIvfCatalogEntry> {
+        self.shared_ivf
+            .lock()
+            .unwrap()
+            .get(fingerprint)
+            .cloned()
+            .ok_or_else(|| CatalogError::SharedIvfNotFound(fingerprint.into()))
+    }
+
+    fn claim_shared_ivf(
+        &self,
+        descriptor: &SharedIvfDescriptor,
+        owner: Uuid,
+        _lease_duration_ms: i64,
+    ) -> relify_catalog::Result<SharedIvfClaimResult> {
+        let fingerprint = descriptor.fingerprint()?;
+        if let Some(entry) = self.shared_ivf.lock().unwrap().get(&fingerprint).cloned() {
+            return Ok(SharedIvfClaimResult::Ready(entry));
+        }
+        Ok(SharedIvfClaimResult::Claimed(SharedIvfClaim {
+            fingerprint,
+            owner,
+        }))
+    }
+
+    fn renew_shared_ivf_claim(
+        &self,
+        _claim: &SharedIvfClaim,
+        _lease_duration_ms: i64,
+    ) -> relify_catalog::Result<()> {
+        Ok(())
+    }
+
+    fn publish_shared_ivf(
+        &self,
+        claim: &SharedIvfClaim,
+        metadata_location: &str,
+        metadata: &SharedIvfMetadata,
+    ) -> relify_catalog::Result<SharedIvfCatalogEntry> {
+        let entry = SharedIvfCatalogEntry {
+            fingerprint: claim.fingerprint.clone(),
+            artifact_uuid: metadata.artifact_uuid,
+            metadata_location: metadata_location.into(),
+        };
+        self.shared_ivf
+            .lock()
+            .unwrap()
+            .insert(claim.fingerprint.clone(), entry.clone());
+        Ok(entry)
+    }
+
+    fn abandon_shared_ivf(
+        &self,
+        _claim: &SharedIvfClaim,
+        _error: &str,
+    ) -> relify_catalog::Result<()> {
+        Ok(())
     }
 }
 
@@ -397,6 +461,7 @@ fn direct_pid_metadata(
     source_path: &Path,
     centroids_path: &Path,
     postings_path: &Path,
+    shared: &SharedIvfReference,
 ) -> IndexMetadata {
     let index_uuid = Uuid::new_v4();
     let snapshot_id = 701;
@@ -418,7 +483,13 @@ fn direct_pid_metadata(
             ("dimension".into(), "2".into()),
             ("nlist".into(), "2".into()),
             ("ntotal".into(), "3".into()),
-            ("store_vectors".into(), "false".into()),
+            ("posting_encoding".into(), "source".into()),
+            ("shared_ivf_fingerprint".into(), shared.fingerprint.clone()),
+            ("shared_ivf_uuid".into(), shared.artifact_uuid.to_string()),
+            (
+                "shared_ivf_metadata_location".into(),
+                shared.metadata_location.clone(),
+            ),
         ]),
         index_relations: BTreeMap::from([
             (
@@ -462,7 +533,49 @@ async fn direct_pid_fixture() -> (TempDir, LocalSession, PathBuf) {
     write_direct_pid_source(&session.parquet, &source_path).await;
     let (centroids_path, postings_path) =
         write_direct_pid_relations(&session.parquet, temporary.path()).await;
-    let metadata = direct_pid_metadata(&session, &source_path, &centroids_path, &postings_path);
+    let source = RelationReference::Parquet {
+        uri: directory_to_file_uri(&source_path.canonicalize().unwrap()).unwrap(),
+    };
+    let descriptor = SharedIvfDescriptor {
+        source,
+        vector_field: "embedding".into(),
+        dimension: 2,
+        metric: DistanceMetric::L2Squared,
+        nlist: 2,
+        clustering_profile_version: IVF_CLUSTERING_PROFILE_VERSION,
+    };
+    let artifact_uuid = Uuid::new_v4();
+    let shared_metadata = SharedIvfMetadata {
+        format_version: 1,
+        artifact_uuid,
+        fingerprint: descriptor.fingerprint().unwrap(),
+        location: session
+            .indexes
+            .metadata_store()
+            .shared_ivf_location(artifact_uuid)
+            .unwrap(),
+        created_at_ms: 1_750_000_000_000,
+        descriptor,
+        centroids: RelationReference::Parquet {
+            uri: directory_to_file_uri(&centroids_path).unwrap(),
+        },
+    };
+    let shared_location = session
+        .indexes
+        .metadata_store()
+        .write_shared_ivf(&shared_metadata)
+        .await
+        .unwrap();
+    let shared =
+        SharedIvfReference::new(shared_metadata.fingerprint, artifact_uuid, shared_location)
+            .unwrap();
+    let metadata = direct_pid_metadata(
+        &session,
+        &source_path,
+        &centroids_path,
+        &postings_path,
+        &shared,
+    );
     let metadata_location = session
         .indexes
         .metadata_store()
@@ -577,22 +690,20 @@ async fn manages_published_indexes_through_catalog_and_source_scoped_operations(
         .list_source_indexes(source_path.to_str().unwrap())
         .await
         .unwrap();
-    assert_eq!(
-        indexes,
-        [IndexInfo {
-            name: "direct_index".into(),
-            column: "embedding".into(),
-            family: "ivf".into(),
-            metric: "l2_squared".into(),
-            parameters: BTreeMap::from([
-                ("dimension".into(), "2".into()),
-                ("nlist".into(), "2".into()),
-                ("ntotal".into(), "3".into()),
-                ("store_vectors".into(), "false".into()),
-            ]),
-            current_snapshot_id: 701,
-        }]
-    );
+    assert_eq!(indexes.len(), 1);
+    let index = &indexes[0];
+    assert_eq!(index.name, "direct_index");
+    assert_eq!(index.column, "embedding");
+    assert_eq!(index.family, "ivf");
+    assert_eq!(index.metric, "l2_squared");
+    assert_eq!(index.current_snapshot_id, 701);
+    assert_eq!(index.parameters["dimension"], "2");
+    assert_eq!(index.parameters["nlist"], "2");
+    assert_eq!(index.parameters["ntotal"], "3");
+    assert_eq!(index.parameters["posting_encoding"], "source");
+    assert!(Uuid::parse_str(&index.parameters["shared_ivf_fingerprint"]).is_ok());
+    assert!(Uuid::parse_str(&index.parameters["shared_ivf_uuid"]).is_ok());
+    assert!(index.parameters["shared_ivf_metadata_location"].ends_with("/v1.metadata.json"));
 
     let other_source = temporary.path().join("other-source");
     write_direct_pid_source(&session.parquet, &other_source).await;
@@ -765,7 +876,7 @@ async fn assert_lvq_index(encoding: PostingEncoding, name: &str) {
         .await
         .unwrap();
     let snapshot = published.metadata.current_snapshot().unwrap();
-    assert_eq!(snapshot.index_schema_version, 2);
+    assert_eq!(snapshot.index_schema_version, 1);
     assert_eq!(PostingEncoding::from_snapshot(snapshot).unwrap(), encoding);
     let RelationReference::Parquet { uri } = &snapshot.index_relations["ivf_postings"] else {
         panic!("local postings must use Parquet");

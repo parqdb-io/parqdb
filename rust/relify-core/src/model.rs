@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 
 use relify_catalog::IndexIdentifier;
-use relify_meta::{IndexMetadata, PostingEncoding, RelationReference};
+use relify_meta::{
+    DistanceMetric, IVF_SCHEMA_VERSION, IndexMetadata, PostingEncoding, RelationReference,
+};
 
 /// Portable identity of one index representation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,23 +17,13 @@ pub struct IndexFormat {
 }
 
 impl IndexFormat {
-    /// Returns the legacy IVF format used by current builders.
+    /// Returns the current IVF format for `metric`.
     #[must_use]
-    pub fn ivf_v1() -> Self {
+    pub fn ivf(metric: DistanceMetric) -> Self {
         Self {
             family: "ivf".into(),
-            schema_version: 1,
-            metric: "l2_squared".into(),
-        }
-    }
-
-    /// Returns IVF schema version 2.
-    #[must_use]
-    pub fn ivf_v2() -> Self {
-        Self {
-            family: "ivf".into(),
-            schema_version: 2,
-            metric: "l2_squared".into(),
+            schema_version: IVF_SCHEMA_VERSION,
+            metric: metric.as_str().into(),
         }
     }
 }
@@ -43,6 +35,8 @@ pub struct IvfConfig {
     pub nlist: usize,
     /// Vector representation stored in IVF postings.
     pub posting_encoding: PostingEncoding,
+    /// Distance metric used for training and search.
+    pub metric: DistanceMetric,
 }
 
 impl IvfConfig {
@@ -52,6 +46,21 @@ impl IvfConfig {
         Self {
             nlist,
             posting_encoding,
+            metric: DistanceMetric::L2Squared,
+        }
+    }
+
+    /// Creates an IVF configuration with an explicit metric.
+    #[must_use]
+    pub const fn with_metric(
+        nlist: usize,
+        posting_encoding: PostingEncoding,
+        metric: DistanceMetric,
+    ) -> Self {
+        Self {
+            nlist,
+            posting_encoding,
+            metric,
         }
     }
 }
@@ -107,14 +116,12 @@ mod tests {
 
     #[test]
     fn posting_encodings_have_canonical_metadata_names() {
-        for (encoding, name, legacy) in [
-            (PostingEncoding::Source, "source", Some(false)),
-            (PostingEncoding::Flat, "flat", Some(true)),
-            (PostingEncoding::Lvq4, "lvq4", None),
-            (PostingEncoding::Lvq8, "lvq8", None),
+        for (encoding, name) in [
+            (PostingEncoding::Source, "source"),
+            (PostingEncoding::Lvq4, "lvq4"),
+            (PostingEncoding::Lvq8, "lvq8"),
         ] {
             assert_eq!(encoding.as_str(), name);
-            assert_eq!(encoding.v1_store_vectors(), legacy);
         }
     }
 }

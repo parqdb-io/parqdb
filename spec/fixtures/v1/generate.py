@@ -3,18 +3,23 @@ from __future__ import annotations
 import copy
 import json
 import shutil
+import uuid
 from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from generate_lvq import write_lvq_fixtures
 
 ROOT = Path(__file__).parent
 VALID = ROOT / "valid"
-COMPOSITE = VALID / "composite_no_vectors"
+COMPOSITE = VALID / "composite"
 INVALID = ROOT / "invalid"
 
 INDEX_UUID = "2f1c7f5e-3c43-4a44-8f2a-cf560c4db8d1"
 COMPOSITE_INDEX_UUID = "8e51cf0a-c749-4894-83e7-5e9be2c373b7"
+SHARED_IVF_UUID = "fe985f6d-3592-4385-a1ca-71347057a210"
+COMPOSITE_SHARED_IVF_UUID = "6f084127-25b1-43f1-a676-b8c055e37fae"
+FINGERPRINT_NAMESPACE = uuid.UUID("2fb71e63-a27c-4fc5-9d6d-5070698dc398")
 SNAPSHOT_ID = 701
 NEXT_SNAPSHOT_ID = 702
 COMPOSITE_SNAPSHOT_ID = 801
@@ -40,7 +45,48 @@ def write_postings(directory: Path, table: pa.Table) -> None:
     )
 
 
+def shared_descriptor(
+    source_uri: str,
+    *,
+    dimension: int = 2,
+    metric: str = "l2_squared",
+    nlist: int = 2,
+) -> dict[str, object]:
+    return {
+        "source": {"profile": "parquet", "uri": source_uri},
+        "vector-field": "embedding",
+        "dimension": dimension,
+        "metric": metric,
+        "nlist": nlist,
+        "clustering-profile-version": 1,
+    }
+
+
+def fingerprint(descriptor: dict[str, object]) -> str:
+    source = descriptor["source"]
+    assert isinstance(source, dict)
+    canonical_source = {"profile": source["profile"]}
+    fields = (
+        ("uri",) if source["profile"] == "parquet" else ("table-uuid", "snapshot-id")
+    )
+    canonical_source.update((field, source[field]) for field in fields)
+    canonical_descriptor = {
+        "source": canonical_source,
+        "vector-field": descriptor["vector-field"],
+        "dimension": descriptor["dimension"],
+        "metric": descriptor["metric"],
+        "nlist": descriptor["nlist"],
+        "clustering-profile-version": descriptor["clustering-profile-version"],
+    }
+    canonical = json.dumps(
+        canonical_descriptor, ensure_ascii=False, separators=(",", ":")
+    )
+    return str(uuid.uuid5(FINGERPRINT_NAMESPACE, canonical))
+
+
 def metadata() -> dict[str, object]:
+    source_uri = "s3://relify-fixtures/v1/valid/source/"
+    descriptor = shared_descriptor(source_uri)
     return {
         "format-version": 1,
         "index-uuid": INDEX_UUID,
@@ -56,7 +102,7 @@ def metadata() -> dict[str, object]:
                 "summary": {"operation": "create"},
                 "source": {
                     "profile": "parquet",
-                    "uri": "s3://relify-fixtures/v1/valid/source/",
+                    "uri": source_uri,
                 },
                 "vector-field": "embedding",
                 "source-key-fields": ["document_id"],
@@ -67,7 +113,12 @@ def metadata() -> dict[str, object]:
                     "dimension": "2",
                     "nlist": "2",
                     "ntotal": "3",
-                    "store_vectors": "true",
+                    "posting_encoding": "source",
+                    "shared_ivf_fingerprint": fingerprint(descriptor),
+                    "shared_ivf_uuid": SHARED_IVF_UUID,
+                    "shared_ivf_metadata_location": (
+                        "s3://relify-fixtures/v1/valid/shared-ivf.metadata.json"
+                    ),
                 },
                 "index-relations": {
                     "ivf_centroids": {
@@ -87,7 +138,26 @@ def metadata() -> dict[str, object]:
                 "snapshot-id": SNAPSHOT_ID,
             }
         ],
-        "properties": {"fixture": "ivf-parquet-v1"},
+        "properties": {"fixture": "ivf-parquet"},
+    }
+
+
+def shared_metadata(
+    directory_uri: str,
+    artifact_uuid: str,
+    descriptor: dict[str, object],
+) -> dict[str, object]:
+    return {
+        "format-version": 1,
+        "artifact-uuid": artifact_uuid,
+        "fingerprint": fingerprint(descriptor),
+        "location": f"{directory_uri}/shared/{artifact_uuid}/",
+        "created-at-ms": 1_750_000_000_000,
+        "descriptor": descriptor,
+        "centroids": {
+            "profile": "parquet",
+            "uri": f"{directory_uri}/ivf_centroids/",
+        },
     }
 
 
@@ -120,11 +190,11 @@ def catalog_operations() -> dict[str, object]:
         },
         "metadata": {
             "base": "valid/metadata.json",
-            "next": "valid/metadata-v2.json",
+            "next": "valid/metadata-next.json",
         },
         "locations": {
             "base": "s3://relify-fixtures/v1/catalog/metadata-v1.json",
-            "next": "s3://relify-fixtures/v1/catalog/metadata-v2.json",
+            "next": "s3://relify-fixtures/v1/catalog/metadata-next.json",
         },
         "operations": [
             {
@@ -218,13 +288,11 @@ def write_tables() -> None:
         [
             pa.array([0, 0, 1], type=pa.int32()),
             pa.array(["a", "b", "c"], type=pa.string()),
-            pa.array([[0.0, 0.0], [1.0, 0.0], [10.0, 0.0]], type=vector),
         ],
         schema=pa.schema(
             [
                 pa.field("cid", pa.int32(), nullable=False),
                 pa.field("key_1", pa.string(), nullable=False),
-                pa.field("vector", vector, nullable=False),
             ]
         ),
     )
@@ -247,25 +315,28 @@ def composite_metadata() -> dict[str, object]:
             "snapshot-id": COMPOSITE_SNAPSHOT_ID,
         }
     ]
-    value["properties"] = {"fixture": "ivf-parquet-composite-no-vectors-v1"}
+    value["properties"] = {"fixture": "ivf-parquet-composite"}
     snapshot = value["snapshots"][0]  # type: ignore[index]
     snapshot["snapshot-id"] = COMPOSITE_SNAPSHOT_ID
     snapshot["source"] = {
         "profile": "parquet",
-        "uri": "s3://relify-fixtures/v1/valid/composite_no_vectors/source/",
+        "uri": "s3://relify-fixtures/v1/valid/composite/source/",
     }
     snapshot["source-key-fields"] = ["tenant_id", "document_id"]
-    snapshot["parameters"]["store_vectors"] = "false"
+    descriptor = shared_descriptor(snapshot["source"]["uri"])
+    snapshot["parameters"]["shared_ivf_fingerprint"] = fingerprint(descriptor)
+    snapshot["parameters"]["shared_ivf_uuid"] = COMPOSITE_SHARED_IVF_UUID
+    snapshot["parameters"]["shared_ivf_metadata_location"] = (
+        "s3://relify-fixtures/v1/valid/composite/shared-ivf.metadata.json"
+    )
     snapshot["index-relations"] = {
         "ivf_centroids": {
             "profile": "parquet",
-            "uri": (
-                "s3://relify-fixtures/v1/valid/composite_no_vectors/ivf_centroids/"
-            ),
+            "uri": ("s3://relify-fixtures/v1/valid/composite/ivf_centroids/"),
         },
         "ivf_postings": {
             "profile": "parquet",
-            "uri": ("s3://relify-fixtures/v1/valid/composite_no_vectors/ivf_postings/"),
+            "uri": ("s3://relify-fixtures/v1/valid/composite/ivf_postings/"),
         },
     }
     return value
@@ -398,12 +469,20 @@ def write_invalid_documents(base: dict[str, object]) -> None:
         "positive integer parameters must use canonical base-10 representation",
     )
 
-    invalid_boolean = copy.deepcopy(base)
-    invalid_boolean["snapshots"][0]["parameters"]["store_vectors"] = "True"  # type: ignore[index]
+    obsolete_storage = copy.deepcopy(base)
+    obsolete_storage["snapshots"][0]["parameters"]["store_vectors"] = "true"  # type: ignore[index]
     write_case(
-        "noncanonical-store-vectors.metadata.json",
-        invalid_boolean,
-        "store_vectors must be exactly true or false",
+        "unsupported-store-vectors.metadata.json",
+        obsolete_storage,
+        "store_vectors is not part of IVF schema version 1",
+    )
+
+    obsolete_flat = copy.deepcopy(base)
+    obsolete_flat["snapshots"][0]["parameters"]["posting_encoding"] = "flat"  # type: ignore[index]
+    write_case(
+        "unsupported-flat-encoding.metadata.json",
+        obsolete_flat,
+        "posting_encoding must be source, lvq4, or lvq8",
     )
 
     unsupported_metric = copy.deepcopy(base)
@@ -411,7 +490,7 @@ def write_invalid_documents(base: dict[str, object]) -> None:
     write_case(
         "unsupported-metric.metadata.json",
         unsupported_metric,
-        "IVF schema version 1 supports only l2_squared",
+        "IVF metric must be l2_squared or cosine",
     )
 
     unsupported_profile = copy.deepcopy(base)
@@ -522,7 +601,16 @@ def main() -> None:
         path.unlink()
     base = metadata()
     write_json(VALID / "metadata.json", base)
-    write_json(VALID / "metadata-v2.json", next_metadata(base))
+    write_json(VALID / "metadata-next.json", next_metadata(base))
+    source_descriptor = shared_descriptor("s3://relify-fixtures/v1/valid/source/")
+    write_json(
+        VALID / "shared-ivf.metadata.json",
+        shared_metadata(
+            "s3://relify-fixtures/v1/valid",
+            SHARED_IVF_UUID,
+            source_descriptor,
+        ),
+    )
     write_json(ROOT / "catalog.json", catalog_operations())
     write_json(
         VALID / "queries.json",
@@ -598,6 +686,17 @@ def main() -> None:
         ],
     )
     write_json(COMPOSITE / "metadata.json", composite_metadata())
+    composite_descriptor = shared_descriptor(
+        "s3://relify-fixtures/v1/valid/composite/source/"
+    )
+    write_json(
+        COMPOSITE / "shared-ivf.metadata.json",
+        shared_metadata(
+            "s3://relify-fixtures/v1/valid/composite",
+            COMPOSITE_SHARED_IVF_UUID,
+            composite_descriptor,
+        ),
+    )
     write_json(
         COMPOSITE / "queries.json",
         [
@@ -615,7 +714,7 @@ def main() -> None:
                 ],
             },
             {
-                "name": "composite-index-without-stored-vectors",
+                "name": "composite-source-encoding",
                 "query-vector": [0.0, 0.0],
                 "nprobe": 1,
                 "k": 10,
@@ -630,6 +729,7 @@ def main() -> None:
     )
     write_tables()
     write_composite_tables()
+    write_lvq_fixtures()
     write_invalid_documents(base)
 
 

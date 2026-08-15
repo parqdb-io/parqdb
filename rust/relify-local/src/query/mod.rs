@@ -19,8 +19,8 @@ use datafusion::logical_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
     Volatility,
 };
-use datafusion::prelude::{Expr, col};
-use relify_meta::{IndexSnapshot, PostingEncoding};
+use datafusion::prelude::{Expr, col, lit};
+use relify_meta::{DistanceMetric, IndexSnapshot, PostingEncoding};
 
 #[cfg(test)]
 use crate::ivf::read_centroids;
@@ -359,7 +359,6 @@ pub(crate) fn compile_index_only_plan(
         None,
     );
     let distance = match resolved.posting_encoding {
-        PostingEncoding::Flat => squared_l2_udf().call(vec![col("vector"), query]),
         PostingEncoding::Lvq4 => lvq_squared_l2_udf(LvqBits::Four).call(vec![
             col("code"),
             col("offset"),
@@ -379,10 +378,11 @@ pub(crate) fn compile_index_only_plan(
         }
     };
     projection.push(distance.alias("_distance"));
-    Ok(postings
+    let ranked = postings
         .select(projection)?
         .sort(vec![col("_distance").sort(true, false)])?
-        .limit(0, Some(resolved.limit))?)
+        .limit(0, Some(resolved.limit))?;
+    scale_distance_projection(ranked, resolved)
 }
 
 /// Compiles one resolved search into `DataFusion` SQL over registered relations.
@@ -453,7 +453,22 @@ pub fn compile_datafusion_sql(
         .iter()
         .map(|name| format!("c.{}", quote_identifier(name)))
         .collect::<Vec<_>>();
-    output.push("c.\"_distance\"".into());
+    output.push(if resolved.metric == DistanceMetric::Cosine {
+        "c.\"_distance\" * CAST(0.5 AS REAL) AS \"_distance\"".into()
+    } else {
+        "c.\"_distance\"".into()
+    });
+    if resolved.metric == DistanceMetric::Cosine {
+        ctes.push(format!(
+            "relify_output AS (\n        SELECT {}\n        FROM relify_candidates AS c\n    )",
+            output.join(", ")
+        ));
+        return Ok(format!(
+            "WITH\n    {}\nSELECT *\nFROM relify_output\nORDER BY \"_distance\" ASC\nLIMIT {}",
+            ctes.join(",\n    "),
+            resolved.limit
+        ));
+    }
     Ok(format!(
         "WITH\n    {}\nSELECT {}\nFROM relify_candidates AS c\nORDER BY c.\"_distance\" ASC\nLIMIT {}",
         ctes.join(",\n    "),
@@ -467,13 +482,17 @@ fn datafusion_distance_sql(resolved: &ResolvedSearch, query_literal: &str) -> St
     if resolved.postings_relation_key.is_none()
         || resolved.posting_encoding == PostingEncoding::Source
     {
-        return format!(
-            "relify_squared_l2(s.{}, {query})",
-            quote_identifier(&resolved.vector_field)
-        );
+        let vector = format!("s.{}", quote_identifier(&resolved.vector_field));
+        let vector = match resolved.metric {
+            DistanceMetric::Cosine => format!("relify_normalize_vector({vector})"),
+            DistanceMetric::L2Squared if resolved.source_vector_is_f64 => {
+                format!("relify_vector_f32({vector})")
+            }
+            DistanceMetric::L2Squared => vector,
+        };
+        return format!("relify_squared_l2({vector}, {query})");
     }
     match resolved.posting_encoding {
-        PostingEncoding::Flat => format!("relify_squared_l2(p.\"vector\", {query})"),
         PostingEncoding::Lvq4 => {
             format!("relify_lvq4_l2(p.\"code\", p.\"offset\", p.\"scale\", {query})")
         }
@@ -564,16 +583,22 @@ fn datafusion_index_only_columns(resolved: &ResolvedSearch) -> Result<Vec<(Strin
             "index-only search requires source data".into(),
         ));
     }
-    let mut columns = resolved
+    let columns = resolved
         .source_key_fields
         .iter()
         .enumerate()
         .map(|(position, key)| (format!("key_{}", position + 1), key.clone()))
         .collect::<Vec<_>>();
-    if resolved.posting_encoding == PostingEncoding::Flat {
-        columns.push(("vector".into(), resolved.vector_field.clone()));
-    }
     Ok(columns)
+}
+
+fn scale_distance_projection(dataframe: DataFrame, resolved: &ResolvedSearch) -> Result<DataFrame> {
+    if resolved.metric == DistanceMetric::L2Squared {
+        return Ok(dataframe);
+    }
+    let mut output = resolved.projection.iter().map(col).collect::<Vec<_>>();
+    output.push((col("_distance") * lit(0.5_f32)).alias("_distance"));
+    Ok(dataframe.select(output)?)
 }
 
 fn validated_datafusion_cluster_filter(
@@ -707,11 +732,10 @@ pub fn datafusion_source_relation_required(resolved: &ResolvedSearch) -> Result<
     if resolved.posting_encoding == PostingEncoding::Source || resolved.filter.is_some() {
         return Ok(true);
     }
-    Ok(resolved.projection.iter().any(|column| {
-        !resolved.source_key_fields.contains(column)
-            && (resolved.posting_encoding != PostingEncoding::Flat
-                || column != &resolved.vector_field)
-    }))
+    Ok(resolved
+        .projection
+        .iter()
+        .any(|column| !resolved.source_key_fields.contains(column)))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -910,37 +934,24 @@ pub(crate) fn execute(input: &SearchInput<'_>) -> Result<(Vec<RecordBatch>, Sche
         &source_by_key,
     )?;
     let posting_encoding = PostingEncoding::from_snapshot(input.snapshot)?;
-    let posting_vectors = if posting_encoding == PostingEncoding::Flat {
-        let (vectors, posting_dimension) = borrow_source_vectors(input.postings, "vector")?;
-        if posting_dimension != dimension {
-            return Err(Error::InvalidSchema(format!(
-                "posting vector dimension {posting_dimension} does not match index dimension \
-                 {dimension}"
-            )));
-        }
-        Some(vectors)
-    } else if posting_encoding == PostingEncoding::Source {
-        if input.postings.schema().field_with_name("vector").is_ok() {
-            return Err(Error::InvalidSchema(
-                "ivf_postings.vector must be absent when store_vectors is false".into(),
-            ));
-        }
-        None
-    } else {
+    if posting_encoding != PostingEncoding::Source {
         return Err(Error::InvalidArgument(
             "the test-only reference executor does not support quantized postings".into(),
         ));
-    };
+    }
+    if input.postings.schema().field_with_name("vector").is_ok() {
+        return Err(Error::InvalidSchema(
+            "ivf_postings.vector is not part of IVF schema version 1".into(),
+        ));
+    }
 
     let mut hits = Vec::with_capacity(candidates.len());
     let distance_kernel = detect();
-    for (_, source_row, posting_row) in candidates {
-        let (distance_vectors, vector_row) =
-            posting_vectors.map_or((vectors, source_row), |vectors| (vectors, posting_row));
-        let start = vector_row * dimension;
+    for (_, source_row, _) in candidates {
+        let start = source_row * dimension;
         let distance = distance_kernel.squared_l2(
             input.query,
-            &distance_vectors[start..start.saturating_add(dimension)],
+            &vectors[start..start.saturating_add(dimension)],
         );
         if !distance.is_finite() {
             return Err(Error::InvalidArgument(

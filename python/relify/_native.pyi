@@ -57,6 +57,7 @@ class _NativeIndexRepository:
         vector_field: str,
         source_key_fields: Sequence[str],
         builder: str,
+        metric: str,
         parameters: Mapping[str, str],
         index_relations: Mapping[str, str],
     ) -> str: ...
@@ -136,6 +137,7 @@ class _NativeSession:
         source_key_fields: Sequence[str],
         nlist: int,
         posting_encoding: str,
+        metric: str,
         writer_options: _ParquetWriterOptions,
         partitions: int | None,
         threads: int | None,
@@ -146,6 +148,7 @@ class _NativeSession:
         index_name: str,
         nlist: int | None,
         posting_encoding: str | None,
+        metric: str | None,
         writer_options: _ParquetWriterOptions,
         partitions: int | None,
         threads: int | None,

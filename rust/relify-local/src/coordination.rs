@@ -32,6 +32,8 @@ pub(crate) struct SessionGuard {
 pub(crate) struct BuildLease {
     file: File,
     setup_guard: Option<SessionGuard>,
+    session_lock_path: PathBuf,
+    roots: Vec<String>,
 }
 
 impl SessionCoordination {
@@ -50,9 +52,7 @@ impl SessionCoordination {
     }
 
     pub(crate) fn read(&self) -> Result<SessionGuard> {
-        let file = open_lock_file(&self.lock_path)?;
-        file.lock_shared()?;
-        Ok(SessionGuard { _file: file })
+        shared_guard(&self.lock_path)
     }
 
     pub(crate) fn write(&self) -> Result<SessionGuard> {
@@ -76,6 +76,8 @@ impl SessionCoordination {
                 Ok(BuildLease {
                     file,
                     setup_guard: Some(setup_guard),
+                    session_lock_path: self.lock_path.clone(),
+                    roots: Vec::new(),
                 })
             }
             Err(std::fs::TryLockError::WouldBlock) => {
@@ -97,12 +99,27 @@ impl BuildLease {
                 "build snapshot root is already set".into(),
             ));
         }
-        validate_lease_root(root)?;
+        self.roots.push(validate_lease_root(root)?);
+        self.write_roots()?;
+        drop(self.setup_guard.take());
+        Ok(())
+    }
+
+    pub(crate) fn add_snapshot_root(&mut self, root: &str) -> Result<()> {
+        let _guard = shared_guard(&self.session_lock_path)?;
+        let root = validate_lease_root(root)?;
+        if !self.roots.contains(&root) {
+            self.roots.push(root);
+            self.write_roots()?;
+        }
+        Ok(())
+    }
+
+    fn write_roots(&mut self) -> Result<()> {
         self.file.set_len(0)?;
         self.file.rewind()?;
-        self.file.write_all(root.as_bytes())?;
+        self.file.write_all(self.roots.join("\n").as_bytes())?;
         self.file.sync_all()?;
-        drop(self.setup_guard.take());
         Ok(())
     }
 }
@@ -131,17 +148,14 @@ fn active_lease_roots(root: &Path, allow_empty: bool) -> Result<HashSet<String>>
                 removed_stale_lease = true;
             }
             Err(std::fs::TryLockError::WouldBlock) => {
-                let mut lease_root = String::new();
-                file.read_to_string(&mut lease_root)?;
-                if lease_root.is_empty() && allow_empty {
+                let mut lease_roots = String::new();
+                file.read_to_string(&mut lease_roots)?;
+                if lease_roots.is_empty() && allow_empty {
                     continue;
                 }
-                if validate_lease_root(&lease_root).is_err() {
-                    return Err(crate::Error::InvalidArgument(
-                        "active lease contains an invalid snapshot URI".into(),
-                    ));
+                for root in lease_roots.lines() {
+                    roots.insert(validate_lease_root(root)?);
                 }
-                roots.insert(lease_root);
             }
             Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
         }
@@ -152,13 +166,13 @@ fn active_lease_roots(root: &Path, allow_empty: bool) -> Result<HashSet<String>>
     Ok(roots)
 }
 
-fn validate_lease_root(root: &str) -> Result<()> {
+fn validate_lease_root(root: &str) -> Result<String> {
     if root.is_empty() || root.contains('\n') || root.contains('\r') {
         return Err(crate::Error::InvalidArgument(
             "lease root must be a non-empty single-line URI".into(),
         ));
     }
-    Ok(())
+    Ok(root.to_owned())
 }
 
 fn identifier_lease_key(identifier: &IndexIdentifier) -> Uuid {
@@ -182,6 +196,12 @@ fn open_lock_file(path: &Path) -> Result<File> {
         .create(true)
         .truncate(false)
         .open(path)?)
+}
+
+fn shared_guard(path: &Path) -> Result<SessionGuard> {
+    let file = open_lock_file(path)?;
+    file.lock_shared()?;
+    Ok(SessionGuard { _file: file })
 }
 
 #[cfg(test)]
@@ -235,6 +255,20 @@ mod tests {
         lease.set_snapshot_root(root).unwrap();
         receiver.recv_timeout(Duration::from_secs(2)).unwrap();
         writer.join().unwrap();
+
+        let extra_root = "file:///tmp/relify/indexes/shared/1/";
+        let maintenance = second.write().unwrap();
+        let (sender, receiver) = mpsc::channel();
+        let updater = std::thread::spawn(move || {
+            lease.add_snapshot_root(extra_root).unwrap();
+            sender.send(()).unwrap();
+            lease
+        });
+        assert!(receiver.recv_timeout(Duration::from_millis(100)).is_err());
+        drop(maintenance);
+        receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+        let lease = updater.join().unwrap();
+
         assert!(matches!(
             second.reserve_build(&identifier),
             Err(crate::Error::BuildAlreadyRunning(running))
@@ -244,7 +278,7 @@ mod tests {
         assert!(second.reserve_build(&namespaced).is_ok());
         assert_eq!(
             second.active_build_roots().unwrap(),
-            HashSet::from([root.into()])
+            HashSet::from([root.into(), extra_root.into()])
         );
 
         drop(lease);

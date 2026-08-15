@@ -47,7 +47,7 @@ class ResolvedSearch:
     nprobe: int
     source_key_fields: tuple[str, ...]
     vector_field: str
-    store_vectors: bool
+    posting_encoding: str
     needs_source: bool
     snapshot_id: int
     family: str
@@ -119,12 +119,13 @@ def resolve_vector_field(
         if requested not in source_fields:
             raise ValueError(f"unknown vector column: {requested}")
         if requested not in vector_fields:
-            raise TypeError("vector column must be a list<float> field")
+            raise TypeError("vector column must be a list<float> or list<double> field")
         return requested
     candidates = tuple(vector_fields)
     if len(candidates) != 1:
         raise ValueError(
-            "column is required unless the source has one list<float> field"
+            "column is required unless the source has one list<float> or "
+            "list<double> field"
         )
     return candidates[0]
 
@@ -177,12 +178,16 @@ def resolve_indexed_search(
 
     source_key_fields = tuple(str(field) for field in snapshot["source-key-fields"])
     vector_field = str(snapshot["vector-field"])
-    store_vectors = boolean_parameter(snapshot, "store_vectors")
+    posting_encoding = str(snapshot["parameters"]["posting_encoding"])
+    if posting_encoding not in {"source", "lvq4", "lvq8"}:
+        raise ValueError(f"unsupported IVF posting encoding: {posting_encoding}")
+    metric = str(snapshot["metric"])
+    query_vector = _transform_query(query.query, metric)
     relations = snapshot["index-relations"]
     needs_source = (
-        not store_vectors
+        posting_encoding == "source"
         or query.predicate is not None
-        or any(field not in {*source_key_fields, vector_field} for field in projection)
+        or any(field not in source_key_fields for field in projection)
         or query.projection is None
     )
     return ResolvedSearch(
@@ -191,7 +196,7 @@ def resolve_indexed_search(
         index=index,
         centroids_relation=_freeze_relation(relations["ivf_centroids"]),
         postings_relation=_freeze_relation(relations["ivf_postings"]),
-        query_vector=query.query,
+        query_vector=query_vector,
         projection=projection,
         predicate=query.predicate,
         limit=query.result_limit,
@@ -200,12 +205,12 @@ def resolve_indexed_search(
         nprobe=nprobe,
         source_key_fields=source_key_fields,
         vector_field=vector_field,
-        store_vectors=store_vectors,
+        posting_encoding=posting_encoding,
         needs_source=needs_source,
         snapshot_id=int(snapshot["snapshot-id"]),
         family=str(snapshot["index-family"]),
         index_schema_version=int(snapshot["index-schema-version"]),
-        metric=str(snapshot["metric"]),
+        metric=metric,
         ntotal=ntotal,
     )
 
@@ -228,11 +233,20 @@ def positive_parameter(snapshot: Mapping[str, Any], name: str) -> int:
     return value
 
 
-def boolean_parameter(snapshot: Mapping[str, Any], name: str) -> bool:
-    value = snapshot["parameters"][name]
-    if value not in {"true", "false"}:
-        raise ValueError(f"invalid IVF parameter: {name}")
-    return value == "true"
+def _transform_query(query: tuple[float, ...], metric: str) -> tuple[float, ...]:
+    canonical = tuple(
+        struct.unpack("!f", struct.pack("!f", value))[0] for value in query
+    )
+    if metric == "l2_squared":
+        return canonical
+    if metric != "cosine":
+        raise ValueError(f"unsupported IVF metric: {metric}")
+    norm = math.sqrt(sum(value * value for value in canonical))
+    if not math.isfinite(norm) or norm == 0.0:
+        raise ValueError("cosine query vector must have a finite, non-zero norm")
+    return tuple(
+        struct.unpack("!f", struct.pack("!f", value / norm))[0] for value in canonical
+    )
 
 
 def _freeze_relation(relation: Mapping[str, Any]) -> Mapping[str, Any]:

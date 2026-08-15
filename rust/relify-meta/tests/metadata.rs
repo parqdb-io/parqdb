@@ -28,7 +28,19 @@ fn valid_snapshot() -> IndexSnapshot {
             ("dimension".into(), "2".into()),
             ("nlist".into(), "2".into()),
             ("ntotal".into(), "4".into()),
-            ("store_vectors".into(), "true".into()),
+            ("posting_encoding".into(), "source".into()),
+            (
+                "shared_ivf_fingerprint".into(),
+                "73a6be1d-5c50-4f9f-a70b-035ca68b105d".into(),
+            ),
+            (
+                "shared_ivf_uuid".into(),
+                "fe985f6d-3592-4385-a1ca-71347057a210".into(),
+            ),
+            (
+                "shared_ivf_metadata_location".into(),
+                "file:///tmp/relify/shared/v1.metadata.json".into(),
+            ),
         ]),
         index_relations: BTreeMap::from([
             (
@@ -87,40 +99,28 @@ fn accepts_valid_metadata_round_trip() {
 }
 
 #[test]
-fn accepts_both_vector_storage_modes() {
-    for value in ["true", "false"] {
+fn accepts_all_posting_encodings() {
+    for encoding in ["source", "lvq4", "lvq8"] {
         let mut metadata = valid_metadata();
-        metadata.snapshots[0]
-            .parameters
-            .insert("store_vectors".into(), value.into());
-
-        metadata.validate().unwrap();
-        assert_eq!(
-            metadata.snapshots[0]
-                .parameter_bool("store_vectors")
-                .unwrap(),
-            value == "true"
-        );
-    }
-}
-
-#[test]
-fn accepts_ivf_v2_posting_encodings() {
-    for encoding in ["source", "flat", "lvq4", "lvq8"] {
-        let mut metadata = valid_metadata();
-        metadata.snapshots[0].index_schema_version = 2;
-        metadata.snapshots[0].parameters.remove("store_vectors");
         metadata.snapshots[0]
             .parameters
             .insert("posting_encoding".into(), encoding.into());
 
         metadata.validate().unwrap();
         assert_eq!(
-            PostingEncoding::from_snapshot(&metadata.snapshots[0])
-                .unwrap()
-                .as_str(),
-            encoding
+            PostingEncoding::from_snapshot(&metadata.snapshots[0]).unwrap(),
+            PostingEncoding::from_metadata(encoding).unwrap()
         );
+    }
+}
+
+#[test]
+fn accepts_supported_metrics() {
+    for metric in ["l2_squared", "cosine"] {
+        let mut metadata = valid_metadata();
+        metadata.snapshots[0].metric = metric.into();
+
+        metadata.validate().unwrap();
     }
 }
 
@@ -131,7 +131,7 @@ fn rejects_parameters_from_another_ivf_schema_version() {
 
     assert!(metadata.validate().is_err());
 
-    metadata.snapshots[0].parameters.remove("store_vectors");
+    metadata.snapshots[0].index_schema_version = 1;
     metadata.snapshots[0]
         .parameters
         .insert("posting_encoding".into(), "unknown".into());
@@ -219,15 +219,18 @@ fn rejects_unknown_ivf_parameter() {
 }
 
 #[test]
-fn rejects_noncanonical_store_vectors_parameter() {
-    for value in ["True", "1", "yes", ""] {
-        let mut metadata = valid_metadata();
-        metadata.snapshots[0]
-            .parameters
-            .insert("store_vectors".into(), value.into());
+fn rejects_pre_release_storage_parameters() {
+    let mut metadata = valid_metadata();
+    metadata.snapshots[0]
+        .parameters
+        .insert("store_vectors".into(), "true".into());
+    assert!(metadata.validate().is_err());
 
-        assert!(metadata.validate().is_err(), "{value:?} must be rejected");
-    }
+    let mut metadata = valid_metadata();
+    metadata.snapshots[0]
+        .parameters
+        .insert("posting_encoding".into(), "flat".into());
+    assert!(metadata.validate().is_err());
 }
 
 #[test]

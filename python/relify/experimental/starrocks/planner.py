@@ -66,6 +66,10 @@ def compile_query(session: Any, query: VectorQuery) -> CompiledQuery:
         metadata=selected.metadata,
         projection=projection,
     )
+    if search.metric != "l2_squared" or search.posting_encoding != "source":
+        raise NotImplementedError(
+            "the experimental StarRocks backend supports only source-encoded L2 IVF indexes"
+        )
     centroids = resolve_reference(
         session.iceberg_catalog,
         session.catalog_name,
@@ -131,61 +135,35 @@ def _indexed_sql(
         {*_schema_names(source.schema), *search.projection},
         "__relify_squared_l2",
     )
-    if search.needs_source:
-        source_name = "_relify_source"
-        source_body = f"    SELECT *\n    FROM {relation_sql(source)}"
-        if search.predicate is not None:
-            source_body += f"\n    WHERE ({search.predicate})"
-        ctes.append(f"{source_name} AS (\n{source_body}\n)")
-        outputs = ",\n        ".join(
-            f"s.{quote_identifier(field)} AS {quote_identifier(field)}"
-            for field in search.projection
+    if not search.needs_source:
+        raise ValueError("source-encoded IVF searches must resolve the source relation")
+    source_name = "_relify_source"
+    source_body = f"    SELECT *\n    FROM {relation_sql(source)}"
+    if search.predicate is not None:
+        source_body += f"\n    WHERE ({search.predicate})"
+    ctes.append(f"{source_name} AS (\n{source_body}\n)")
+    outputs = ",\n        ".join(
+        f"s.{quote_identifier(field)} AS {quote_identifier(field)}"
+        for field in search.projection
+    )
+    joins = " AND ".join(
+        f"p.{quote_identifier(f'key_{position}')} = s.{quote_identifier(source_field)}"
+        for position, source_field in enumerate(
+            search.source_key_fields,
+            start=1,
         )
-        joins = " AND ".join(
-            f"p.{quote_identifier(f'key_{position}')} = "
-            f"s.{quote_identifier(source_field)}"
-            for position, source_field in enumerate(
-                search.source_key_fields,
-                start=1,
-            )
-        )
-        vector = (
-            "p.`vector`"
-            if search.store_vectors
-            else f"s.{quote_identifier(search.vector_field)}"
-        )
-        scored = (
-            "_relify_scored AS (\n"
-            "    SELECT\n"
-            f"        {outputs},\n"
-            f"        l2_distance({query_array}, {vector}) "
-            f"AS {quote_identifier(internal_distance)}\n"
-            "    FROM _relify_postings AS p\n"
-            f"    INNER JOIN {source_name} AS s ON {joins}\n"
-            ")"
-        )
-    else:
-        key_positions = {
-            field: position
-            for position, field in enumerate(search.source_key_fields, start=1)
-        }
-        output_expressions = []
-        for field in search.projection:
-            if field == search.vector_field:
-                value = "p.`vector`"
-            else:
-                value = f"p.{quote_identifier(f'key_{key_positions[field]}')}"
-            output_expressions.append(f"{value} AS {quote_identifier(field)}")
-        outputs = ",\n        ".join(output_expressions)
-        scored = (
-            "_relify_scored AS (\n"
-            "    SELECT\n"
-            f"        {outputs},\n"
-            f"        l2_distance({query_array}, p.`vector`) "
-            f"AS {quote_identifier(internal_distance)}\n"
-            "    FROM _relify_postings AS p\n"
-            ")"
-        )
+    )
+    vector = f"s.{quote_identifier(search.vector_field)}"
+    scored = (
+        "_relify_scored AS (\n"
+        "    SELECT\n"
+        f"        {outputs},\n"
+        f"        l2_distance({query_array}, {vector}) "
+        f"AS {quote_identifier(internal_distance)}\n"
+        "    FROM _relify_postings AS p\n"
+        f"    INNER JOIN {source_name} AS s ON {joins}\n"
+        ")"
+    )
     ctes.append(scored)
     return _finish_sql(
         ctes,

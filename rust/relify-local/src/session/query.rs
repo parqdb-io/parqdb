@@ -4,16 +4,17 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array};
 use arrow::compute::concat_batches;
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion::prelude::{SessionContext, col, lit};
-use relify_meta::{IndexSnapshot, PostingEncoding, RelationReference};
+use relify_meta::{DistanceMetric, IndexSnapshot, PostingEncoding, RelationReference};
 use uuid::Uuid;
 
 use super::LocalSession;
 use super::index_relation::IndexRelationLayout;
 use super::source::{
-    exact_vector_field, relation_key, resolve_search_projection, validate_index_source_schema,
+    SourceBinding, exact_vector_field, relation_key, resolve_search_projection,
+    validate_index_source_schema, vector_elements_are_f64,
 };
 use crate::query::{
     compile_datafusion_sql, compile_index_only_plan, datafusion_centroid_relation_required,
@@ -116,83 +117,52 @@ impl LocalSession {
         } else {
             Some(self.coordination.read()?)
         };
-        if request.limit == 0 {
-            return Err(Error::InvalidArgument("limit must be positive".into()));
-        }
-        if request
-            .filter
-            .as_ref()
-            .is_some_and(|filter| filter.trim().is_empty())
-        {
-            return Err(Error::InvalidArgument(
-                "filter must not be empty".to_owned(),
-            ));
-        }
-
+        validate_search_request(request)?;
         let source = self.bind_relation(&request.source).await?;
-        let source_reference = source.reference.clone();
-        let source_relation_key = source.key;
-        let source_schema = source.schema;
         let projection =
-            resolve_search_projection(source_schema.as_ref(), request.projection.as_deref())?;
+            resolve_search_projection(source.schema.as_ref(), request.projection.as_deref())?;
 
         if request.bypass_index {
-            if request.index.is_some() {
-                return Err(Error::InvalidArgument(
-                    "index cannot be set when bypassing the vector index".into(),
-                ));
-            }
-            if request.nprobe.is_some() {
-                return Err(Error::InvalidArgument(
-                    "nprobes cannot be set when bypassing the vector index".into(),
-                ));
-            }
-            if request.query.is_empty() || request.query.iter().any(|value| !value.is_finite()) {
-                return Err(Error::InvalidArgument(
-                    "query vector must contain finite float values and must not be empty".into(),
-                ));
-            }
-            let vector_field =
-                exact_vector_field(source_schema.as_ref(), request.column.as_deref())?;
-            return Ok(ResolvedSearch {
-                source_relation_key,
-                query: request.query.clone(),
-                vector_field,
-                source_key_fields: Vec::new(),
-                postings_relation_key: None,
-                posting_encoding: PostingEncoding::Source,
-                cluster_selection: None,
-                nlist: None,
-                ntotal: None,
-                projection,
-                filter: request.filter.clone(),
-                limit: request.limit,
-            });
+            return resolve_exact_search(request, &source, projection);
         }
+        self.resolve_indexed_search(request, &source, projection)
+            .await
+    }
 
+    async fn resolve_indexed_search(
+        &self,
+        request: &SearchRequest,
+        source: &SourceBinding,
+        projection: Vec<String>,
+    ) -> Result<ResolvedSearch> {
         let loaded = self
             .select_index(
-                &source_reference,
+                &source.reference,
                 request.index.as_deref(),
                 request.column.as_deref(),
             )
             .await?;
         let snapshot = loaded.metadata.current_snapshot()?;
-        validate_index_source_schema(source_schema.as_ref(), snapshot)?;
+        validate_index_source_schema(source.schema.as_ref(), snapshot)?;
+        let metric = DistanceMetric::from_metadata(&snapshot.metric).ok_or_else(|| {
+            Error::InvalidMetadata(format!("unsupported IVF metric: {}", snapshot.metric))
+        })?;
+        let query = crate::vector::transform_query(&request.query, metric)?;
+        let shared = self.indexes.load_snapshot_shared_ivf(snapshot).await?;
         let postings_relation_key = relation_key(index_relation(snapshot, "ivf_postings")?);
-        let centroid_cache_key = format!("{}\0ivf_centroids", loaded.entry.metadata_location);
+        let centroid_cache_key = format!("{}\0ivf_centroids", shared.entry.metadata_location);
         let (cluster_selection, nlist) = self
-            .resolve_cluster_selection(
-                snapshot,
-                &centroid_cache_key,
-                &request.query,
-                request.nprobe,
-            )
+            .resolve_cluster_selection(snapshot, &centroid_cache_key, &query, request.nprobe)
             .await?;
         Ok(ResolvedSearch {
-            source_relation_key,
-            query: request.query.clone(),
+            source_relation_key: source.key.clone(),
+            query,
+            metric,
             vector_field: snapshot.vector_field.clone(),
+            source_vector_is_f64: source_vector_uses_f64(
+                source.schema.as_ref(),
+                &snapshot.vector_field,
+            )?,
             source_key_fields: snapshot.source_key_fields.clone(),
             postings_relation_key: Some(postings_relation_key),
             posting_encoding: PostingEncoding::from_snapshot(snapshot)?,
@@ -459,6 +429,64 @@ impl LocalSession {
         };
         Ok((selection, nlist))
     }
+}
+
+fn validate_search_request(request: &SearchRequest) -> Result<()> {
+    if request.limit == 0 {
+        return Err(Error::InvalidArgument("limit must be positive".into()));
+    }
+    if request
+        .filter
+        .as_ref()
+        .is_some_and(|filter| filter.trim().is_empty())
+    {
+        return Err(Error::InvalidArgument(
+            "filter must not be empty".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn resolve_exact_search(
+    request: &SearchRequest,
+    source: &SourceBinding,
+    projection: Vec<String>,
+) -> Result<ResolvedSearch> {
+    if request.index.is_some() {
+        return Err(Error::InvalidArgument(
+            "index cannot be set when bypassing the vector index".into(),
+        ));
+    }
+    if request.nprobe.is_some() {
+        return Err(Error::InvalidArgument(
+            "nprobes cannot be set when bypassing the vector index".into(),
+        ));
+    }
+    let query = crate::vector::transform_query(&request.query, DistanceMetric::L2Squared)?;
+    let vector_field = exact_vector_field(source.schema.as_ref(), request.column.as_deref())?;
+    Ok(ResolvedSearch {
+        source_relation_key: source.key.clone(),
+        query,
+        metric: DistanceMetric::L2Squared,
+        source_vector_is_f64: source_vector_uses_f64(source.schema.as_ref(), &vector_field)?,
+        vector_field,
+        source_key_fields: Vec::new(),
+        postings_relation_key: None,
+        posting_encoding: PostingEncoding::Source,
+        cluster_selection: None,
+        nlist: None,
+        ntotal: None,
+        projection,
+        filter: request.filter.clone(),
+        limit: request.limit,
+    })
+}
+
+fn source_vector_uses_f64(schema: &Schema, vector_field: &str) -> Result<bool> {
+    let field = schema
+        .field_with_name(vector_field)
+        .map_err(|_| Error::InvalidSchema(format!("vector column not found: {vector_field}")))?;
+    Ok(vector_elements_are_f64(field.data_type()))
 }
 
 fn select_clusters(

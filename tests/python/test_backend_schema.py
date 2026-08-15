@@ -4,6 +4,7 @@ import pyarrow as pa
 import pytest
 import relify
 from relify.backends.v1 import (
+    BINARY,
     FLOAT,
     INT,
     LONG,
@@ -55,7 +56,7 @@ def test_pyarrow_schema_maps_to_canonical_iceberg_types() -> None:
 
 
 def test_shared_ivf_schema_validation_accepts_optional_source_declarations() -> None:
-    search = _search(store_vectors=True)
+    search = _search(posting_encoding="source")
     source = CanonicalSchema(
         (
             Field("id", LONG, required=False),
@@ -80,11 +81,6 @@ def test_shared_ivf_schema_validation_accepts_optional_source_declarations() -> 
         (
             Field("cid", INT, required=True),
             Field("key_1", LONG, required=True),
-            Field(
-                "vector",
-                ListType(FLOAT, element_required=True),
-                required=True,
-            ),
         )
     )
 
@@ -97,7 +93,7 @@ def test_shared_ivf_schema_validation_accepts_optional_source_declarations() -> 
 
 
 def test_shared_ivf_schema_validation_accepts_unknown_index_nullability() -> None:
-    search = _search(store_vectors=True)
+    search = _search(posting_encoding="source")
     source = CanonicalSchema(
         (
             Field("id", LONG, required=False),
@@ -123,11 +119,6 @@ def test_shared_ivf_schema_validation_accepts_unknown_index_nullability() -> Non
     postings = CanonicalSchema(
         (
             Field("key_1", LONG, required=False),
-            Field(
-                "vector",
-                ListType(FLOAT, element_required=False),
-                required=False,
-            ),
             Field("cid", INT, required=False),
         ),
         nullability_known=False,
@@ -142,7 +133,7 @@ def test_shared_ivf_schema_validation_accepts_unknown_index_nullability() -> Non
 
 
 def test_shared_ivf_schema_validation_rejects_known_optional_index_fields() -> None:
-    search = _search(store_vectors=True)
+    search = _search(posting_encoding="source")
     source = CanonicalSchema(
         (
             Field("id", LONG, required=True),
@@ -167,11 +158,6 @@ def test_shared_ivf_schema_validation_rejects_known_optional_index_fields() -> N
         (
             Field("cid", INT, required=True),
             Field("key_1", LONG, required=True),
-            Field(
-                "vector",
-                ListType(FLOAT, element_required=True),
-                required=True,
-            ),
         )
     )
 
@@ -185,7 +171,7 @@ def test_shared_ivf_schema_validation_rejects_known_optional_index_fields() -> N
 
 
 def test_shared_ivf_schema_validation_rejects_unsupported_keys() -> None:
-    search = _search(store_vectors=False)
+    search = _search(posting_encoding="source")
     source = CanonicalSchema(
         (
             Field("id", FLOAT, required=True),
@@ -222,6 +208,33 @@ def test_shared_ivf_schema_validation_rejects_unsupported_keys() -> None:
         )
 
 
+def test_shared_ivf_schema_validation_accepts_lvq_fields() -> None:
+    search = _search(posting_encoding="lvq8")
+    source = CanonicalSchema(
+        (
+            Field("id", LONG, required=True),
+            Field("embedding", ListType(FLOAT, element_required=True), required=True),
+        )
+    )
+    centroids = CanonicalSchema(
+        (
+            Field("cid", INT, required=True),
+            Field("centroid", ListType(FLOAT, element_required=True), required=True),
+        )
+    )
+    postings = CanonicalSchema(
+        (
+            Field("cid", INT, required=True),
+            Field("key_1", LONG, required=True),
+            Field("offset", FLOAT, required=True),
+            Field("scale", FLOAT, required=True),
+            Field("code", BINARY, required=True),
+        )
+    )
+
+    validate_ivf_schemas(search, source=source, centroids=centroids, postings=postings)
+
+
 def test_canonical_schema_rejects_duplicate_names() -> None:
     with pytest.raises(ValueError, match="must be unique"):
         CanonicalSchema(
@@ -232,7 +245,7 @@ def test_canonical_schema_rejects_duplicate_names() -> None:
         )
 
 
-def _search(*, store_vectors: bool) -> ResolvedSearch:
+def _search(*, posting_encoding: str) -> ResolvedSearch:
     source = {"profile": "parquet", "uri": "file:///source"}
     return ResolvedSearch(
         source=relify.TableIdentifier("relify", ("test",), "source"),
@@ -255,8 +268,8 @@ def _search(*, store_vectors: bool) -> ResolvedSearch:
         nprobe=1,
         source_key_fields=("id",),
         vector_field="embedding",
-        store_vectors=store_vectors,
-        needs_source=not store_vectors,
+        posting_encoding=posting_encoding,
+        needs_source=posting_encoding == "source",
         snapshot_id=1,
         family="ivf",
         index_schema_version=1,

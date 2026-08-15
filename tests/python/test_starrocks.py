@@ -19,6 +19,7 @@ from pyiceberg.types import (
     NestedField,
     StringType,
 )
+from support.indexes import write_shared_ivf_metadata
 
 
 @dataclass(frozen=True)
@@ -108,7 +109,7 @@ def _field(
     )
 
 
-def _schemas(*, store_vectors: bool = True) -> tuple[Schema, Schema, Schema]:
+def _schemas() -> tuple[Schema, Schema, Schema]:
     vector = ListType(
         element_id=20,
         element=FloatType(),
@@ -134,23 +135,11 @@ def _schemas(*, store_vectors: bool = True) -> tuple[Schema, Schema, Schema]:
         ),
         schema_id=2,
     )
-    posting_fields = [
+    postings = Schema(
         _field(30, "cid", IntegerType()),
         _field(31, "key_1", LongType()),
-    ]
-    if store_vectors:
-        posting_fields.append(
-            _field(
-                32,
-                "vector",
-                ListType(
-                    element_id=33,
-                    element=FloatType(),
-                    element_required=True,
-                ),
-            )
-        )
-    postings = Schema(*posting_fields, schema_id=3)
+        schema_id=3,
+    )
     return source, centroids, postings
 
 
@@ -169,14 +158,8 @@ def _relation(
     }
 
 
-def _session(
-    tmp_path: Path,
-    *,
-    store_vectors: bool = True,
-) -> tuple[Any, _Connection, _IcebergCatalog]:
-    source_schema, centroid_schema, posting_schema = _schemas(
-        store_vectors=store_vectors
-    )
+def _session(tmp_path: Path) -> tuple[Any, _Connection, _IcebergCatalog]:
+    source_schema, centroid_schema, posting_schema = _schemas()
     catalog = _IcebergCatalog()
     catalog.tables = {
         ("analytics", "documents"): _IcebergTable(101, source_schema),
@@ -190,28 +173,36 @@ def _session(
         ),
     }
     connection = _Connection()
+    metadata_root = tmp_path / "metadata"
     session = relify.experimental.starrocks.connect(
         connection,
         index_catalog=f"sqlite://{tmp_path / 'catalog.sqlite'}",
         iceberg_catalog=catalog,
+        metadata_root=metadata_root.as_uri(),
     )
     source = _relation(catalog, ("analytics", "documents"))
+    centroids = _relation(catalog, ("relify", "documents_embedding_centroids"))
+    shared = write_shared_ivf_metadata(
+        metadata_root,
+        source=source,
+        centroids=centroids,
+    )
     session._native.publish_initial(
         index_name="documents_embedding",
         source_json=json.dumps(source),
         vector_field="embedding",
         source_key_fields=["document_id"],
         builder="fixture",
+        metric="l2_squared",
         parameters={
             "dimension": "2",
             "nlist": "2",
             "ntotal": "3",
-            "store_vectors": str(store_vectors).lower(),
+            "posting_encoding": "source",
+            **shared,
         },
         index_relations={
-            "ivf_centroids": json.dumps(
-                _relation(catalog, ("relify", "documents_embedding_centroids"))
-            ),
+            "ivf_centroids": json.dumps(centroids),
             "ivf_postings": json.dumps(
                 _relation(catalog, ("relify", "documents_embedding_postings"))
             ),
@@ -276,7 +267,7 @@ def test_starrocks_compiles_and_collects_an_iceberg_vector_query(
     assert connection.closed_cursors == 2
 
 
-def test_starrocks_uses_an_index_only_plan_when_source_fields_are_not_needed(
+def test_starrocks_source_encoding_joins_the_source_for_scoring(
     tmp_path: Path,
 ) -> None:
     session, _, _ = _session(tmp_path)
@@ -288,15 +279,15 @@ def test_starrocks_uses_an_index_only_plan_when_source_fields_are_not_needed(
         .select(["document_id"])
     )
 
-    assert "`lakehouse`.`analytics`.`documents`" not in sql
-    assert "p.`key_1` AS `document_id`" in sql
-    assert "INNER JOIN _relify_source" not in sql
+    assert "`lakehouse`.`analytics`.`documents`" in sql
+    assert "s.`document_id` AS `document_id`" in sql
+    assert "INNER JOIN _relify_source" in sql
 
 
 def test_starrocks_source_join_supplies_vectors_when_postings_omit_them(
     tmp_path: Path,
 ) -> None:
-    session, _, _ = _session(tmp_path, store_vectors=False)
+    session, _, _ = _session(tmp_path)
     documents = session.table("analytics.documents")
 
     sql = session.to_sql(
@@ -396,6 +387,11 @@ def test_starrocks_table_builds_through_an_explicit_independent_builder(
 ) -> None:
     session, _, catalog = _session(tmp_path)
     documents = session.table("analytics.documents")
+    parameters = dict(
+        session.indexes.load("documents_embedding").metadata["snapshots"][0][
+            "parameters"
+        ]
+    )
 
     class _Builder:
         info = relify.builders.BuilderInfo(
@@ -423,12 +419,7 @@ def test_starrocks_table_builds_through_an_explicit_independent_builder(
             assert request.source["snapshot-id"] == 101
             assert context.iceberg_catalog is catalog
             return relify.builders.BuildOutput(
-                parameters={
-                    "dimension": "2",
-                    "nlist": "2",
-                    "ntotal": "3",
-                    "store_vectors": "true",
-                },
+                parameters=parameters,
                 index_relations={
                     "ivf_centroids": _relation(
                         catalog,

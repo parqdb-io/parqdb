@@ -51,6 +51,10 @@ def plan_query(session: Any, query: VectorQuery) -> Any:
         metadata=selected.metadata,
         projection=projection,
     )
+    if search.metric != "l2_squared" or search.posting_encoding != "source":
+        raise NotImplementedError(
+            "the experimental Spark backend supports only source-encoded L2 IVF indexes"
+        )
     centroids = _read_relation(session, search.centroids_relation)
     postings = _read_relation(session, search.postings_relation)
     validate_ivf_schemas(
@@ -130,30 +134,7 @@ def _rank_candidates(
 ) -> Any:
     functions = _functions()
     if not search.needs_source:
-        source_fields = {field.name: field for field in source.schema.fields}
-        outputs = []
-        for field in search.projection:
-            if field == search.vector_field:
-                value = functions.col("vector")
-            else:
-                position = search.source_key_fields.index(field) + 1
-                value = functions.col(f"key_{position}")
-            outputs.append(
-                _preserve_source_nullability(
-                    functions,
-                    value,
-                    source_fields[field],
-                ).alias(field)
-            )
-        distance = _squared_l2(
-            functions.col("vector"),
-            search.query_vector,
-        ).alias("_distance")
-        return (
-            candidates.select(*outputs, distance)
-            .orderBy(functions.col("_distance").asc())
-            .limit(search.limit)
-        )
+        raise ValueError("source-encoded IVF searches must resolve the source relation")
 
     filtered_source = (
         source.filter(search.predicate) if search.predicate is not None else source
@@ -168,12 +149,9 @@ def _rank_candidates(
     for next_condition in conditions[1:]:
         condition = condition & next_condition
     joined = posting_alias.join(source_alias, on=condition, how="inner")
-    vector = (
-        posting_alias["vector"]
-        if search.store_vectors
-        else source_alias[search.vector_field]
-    )
-    distance = _squared_l2(vector, search.query_vector).alias("_distance")
+    distance = _squared_l2(
+        source_alias[search.vector_field], search.query_vector
+    ).alias("_distance")
     return (
         joined.select(
             *(source_alias[field].alias(field) for field in search.projection),
@@ -182,16 +160,6 @@ def _rank_candidates(
         .orderBy(functions.col("_distance").asc())
         .limit(search.limit)
     )
-
-
-def _preserve_source_nullability(functions: Any, value: Any, field: Any) -> Any:
-    value = value.cast(field.dataType)
-    if not field.nullable:
-        return value
-    return functions.when(
-        functions.lit(False),
-        functions.lit(None).cast(field.dataType),
-    ).otherwise(value)
 
 
 def _read_relation(session: Any, relation: Mapping[str, Any]) -> Any:

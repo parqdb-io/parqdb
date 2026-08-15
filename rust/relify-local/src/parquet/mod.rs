@@ -12,7 +12,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow::array::{Array, Int32Array};
-#[cfg(test)]
 use arrow::compute::concat_batches;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -94,8 +93,8 @@ impl ParquetWriterOptions {
         self.writer_properties_for(None)
     }
 
-    fn postings_writer_properties(&self, vector_path: ColumnPath) -> Result<WriterProperties> {
-        self.writer_properties_for(Some(vector_path))
+    fn code_writer_properties(&self) -> Result<WriterProperties> {
+        self.writer_properties_for(Some(ColumnPath::new(vec!["code".into()])))
     }
 
     fn writer_properties_for(
@@ -153,7 +152,6 @@ impl ParquetStore {
         Ok(Arc::clone(dataframe.schema().inner()))
     }
 
-    #[cfg(test)]
     pub(crate) async fn read(
         &self,
         location: &str,
@@ -454,30 +452,10 @@ async fn write_hive_cid_stream(
         .filter(|index| *index != cid_index)
         .collect::<Vec<_>>();
     let output_schema = Arc::new(schema.project(&projection)?);
-    let plain_encoded_column = match output_schema.field_with_name("vector") {
-        Ok(vector_field) => {
-            let vector_path = match vector_field.data_type() {
-                DataType::List(element)
-                | DataType::LargeList(element)
-                | DataType::FixedSizeList(element, _) => {
-                    ColumnPath::new(vec!["vector".into(), "list".into(), element.name().clone()])
-                }
-                other => {
-                    return Err(Error::InvalidSchema(format!(
-                        "IVF postings vector must be a list, got {other}"
-                    )));
-                }
-            };
-            Some(vector_path)
-        }
-        Err(_) if output_schema.field_with_name("code").is_ok() => {
-            Some(ColumnPath::new(vec!["code".into()]))
-        }
-        Err(_) => None,
-    };
-    let properties = match plain_encoded_column {
-        Some(column) => options.postings_writer_properties(column)?,
-        None => options.writer_properties()?,
+    let properties = if output_schema.field_with_name("code").is_ok() {
+        options.code_writer_properties()?
+    } else {
+        options.writer_properties()?
     };
     let mut current_cid = None;
     let mut writer: Option<AsyncArrowWriter<ParquetObjectWriter>> = None;

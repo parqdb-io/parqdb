@@ -148,16 +148,4 @@ def test_postings_use_one_hive_partitioned_file_per_cluster(tmp_path: Path) -> N
     assert sum(pq.ParquetFile(path).metadata.num_rows for path in paths) == row_count
     assert {path.name for path in paths} == {"part-00000.parquet"}
     assert {path.parent.name for path in paths} == {f"cid={cid}" for cid in range(16)}
-    assert all("cid" not in pq.ParquetFile(path).schema_arrow.names for path in paths)
-    vector_chunks = [
-        parquet_file.metadata.row_group(row_group).column(column)
-        for path in paths
-        for parquet_file in [pq.ParquetFile(path)]
-        for row_group in range(parquet_file.metadata.num_row_groups)
-        for column in range(parquet_file.metadata.row_group(row_group).num_columns)
-        if parquet_file.metadata.row_group(row_group)
-        .column(column)
-        .path_in_schema.startswith("vector.list.")
-    ]
-    assert vector_chunks
-    assert all("RLE_DICTIONARY" not in chunk.encodings for chunk in vector_chunks)
+    assert all(pq.ParquetFile(path).schema_arrow.names == ["key_1"] for path in paths)

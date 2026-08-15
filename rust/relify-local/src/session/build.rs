@@ -1,20 +1,54 @@
 //! Session-scoped index construction and refresh.
 
 use std::collections::HashSet;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parallite::ParalliteContext;
+use relify_catalog::{IndexCatalog, SharedIvfClaim, SharedIvfClaimResult};
 use relify_index::{
     InitialIndex, RefreshedIndex, new_snapshot_id, publish_initial, publish_refresh,
 };
-use relify_meta::PostingEncoding;
+use relify_meta::{
+    DistanceMetric, IVF_CLUSTERING_PROFILE_VERSION, PostingEncoding, RelationReference,
+    SharedIvfDescriptor, SharedIvfMetadata, SharedIvfReference,
+};
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use super::LocalSession;
 use super::catalog::local_index_identifier;
-use crate::builder::{IvfBuildContext, build_ivf_datafusion};
-use crate::parquet::ParquetWriterOptions;
+use crate::builder::{
+    IvfBuildContext, IvfPostingsSpec, PreparedIvf, TrainedIvf, build_ivf_postings,
+    prepare_ivf_datafusion, reused_ivf, train_prepared_ivf, write_ivf_centroids,
+};
+use crate::coordination::BuildLease;
+use crate::parquet::{ParquetWriterOptions, child_location};
 use crate::progress::BuildPhase;
 use crate::{Error, IvfConfig, LocalBuildProgress, PublishedIndex, Result};
+
+const SHARED_IVF_LEASE_MS: i64 = 30_000;
+const SHARED_IVF_RENEW_INTERVAL: Duration = Duration::from_secs(10);
+const SHARED_IVF_WAIT_INTERVAL: Duration = Duration::from_millis(250);
+
+struct ResolvedSharedIvf {
+    reference: SharedIvfReference,
+    centroids: RelationReference,
+    trained: TrainedIvf,
+}
+
+struct SharedIvfBuildContext<'a> {
+    prepared: &'a PreparedIvf,
+    parallel: &'a ParalliteContext,
+    writer_options: &'a ParquetWriterOptions,
+    progress: &'a LocalBuildProgress,
+    build_lease: &'a mut BuildLease,
+}
+
+struct ClaimHeartbeat {
+    stop: oneshot::Sender<()>,
+    task: tokio::task::JoinHandle<relify_catalog::Result<()>>,
+}
 
 /// Resource options for one local index build.
 #[derive(Debug, Clone, Default)]
@@ -44,7 +78,7 @@ impl LocalSession {
             index_name,
             vector_field,
             source_key_fields,
-            IvfConfig::new(nlist, PostingEncoding::Flat),
+            IvfConfig::new(nlist, PostingEncoding::Source),
             &LocalBuildOptions::default(),
         )
         .await
@@ -86,11 +120,35 @@ impl LocalSession {
             true,
         )?;
         build_lease.set_snapshot_root(&snapshot_root)?;
-        let build = build_ivf_datafusion(
+        let prepared = prepare_ivf_datafusion(
             self.context.read_table(source.provider)?,
             vector_field,
             source_key_fields,
             config,
+            &progress,
+        )
+        .await?;
+        let shared = {
+            let mut context = SharedIvfBuildContext {
+                prepared: &prepared,
+                parallel: &parallel,
+                writer_options: &options.writer_options,
+                progress: &progress,
+                build_lease: &mut build_lease,
+            };
+            self.resolve_shared_ivf(&source_reference, vector_field, config, &mut context)
+                .await?
+        };
+        let build = build_ivf_postings(
+            prepared,
+            IvfPostingsSpec {
+                vector_field,
+                source_key_fields,
+                config,
+                trained: &shared.trained,
+                shared_ivf: &shared.reference,
+                centroids: shared.centroids,
+            },
             IvfBuildContext {
                 parquet: &self.parquet,
                 output_root: &snapshot_root,
@@ -143,15 +201,7 @@ impl LocalSession {
         if current.source.identity_key() != source_reference.identity_key() {
             return Err(Error::IndexNotFound(index_name.to_owned()));
         }
-        let config = config.unwrap_or(IvfConfig::new(
-            current.parameter_usize("nlist")?,
-            PostingEncoding::from_snapshot(current)?,
-        ));
-        if config.nlist == 0 || config.nlist > i32::MAX as usize {
-            return Err(Error::InvalidArgument(
-                "nlist must be in 1..=2147483647".into(),
-            ));
-        }
+        let config = resolve_refresh_config(current, config)?;
         let snapshot_id = new_snapshot_id();
         let snapshot_root = self.warehouse.location(
             &format!(
@@ -161,11 +211,40 @@ impl LocalSession {
             true,
         )?;
         build_lease.set_snapshot_root(&snapshot_root)?;
-        let build = build_ivf_datafusion(
+        let prepared = prepare_ivf_datafusion(
             self.context.read_table(source.provider)?,
             &current.vector_field,
             &current.source_key_fields,
             config,
+            &progress,
+        )
+        .await?;
+        let shared = {
+            let mut context = SharedIvfBuildContext {
+                prepared: &prepared,
+                parallel: &parallel,
+                writer_options: &options.writer_options,
+                progress: &progress,
+                build_lease: &mut build_lease,
+            };
+            self.resolve_shared_ivf(
+                &source_reference,
+                &current.vector_field,
+                config,
+                &mut context,
+            )
+            .await?
+        };
+        let build = build_ivf_postings(
+            prepared,
+            IvfPostingsSpec {
+                vector_field: &current.vector_field,
+                source_key_fields: &current.source_key_fields,
+                config,
+                trained: &shared.trained,
+                shared_ivf: &shared.reference,
+                centroids: shared.centroids,
+            },
             IvfBuildContext {
                 parquet: &self.parquet,
                 output_root: &snapshot_root,
@@ -195,6 +274,196 @@ impl LocalSession {
         progress.finish();
         Ok(result)
     }
+
+    async fn resolve_shared_ivf(
+        &self,
+        source: &RelationReference,
+        vector_field: &str,
+        config: IvfConfig,
+        context: &mut SharedIvfBuildContext<'_>,
+    ) -> Result<ResolvedSharedIvf> {
+        let descriptor = SharedIvfDescriptor {
+            source: source.clone(),
+            vector_field: vector_field.to_owned(),
+            dimension: i32::try_from(context.prepared.dimension)
+                .map_err(|_| Error::InvalidSchema("vector dimension exceeds int32".into()))?,
+            metric: config.metric,
+            nlist: i32::try_from(context.prepared.nlist)
+                .map_err(|_| Error::InvalidArgument("nlist exceeds int32".into()))?,
+            clustering_profile_version: IVF_CLUSTERING_PROFILE_VERSION,
+        };
+        let fingerprint = descriptor.fingerprint()?;
+        let owner = Uuid::new_v4();
+        loop {
+            match self
+                .catalog
+                .claim_shared_ivf(&descriptor, owner, SHARED_IVF_LEASE_MS)?
+            {
+                SharedIvfClaimResult::Ready(_) => {
+                    return self
+                        .load_shared_ivf(&fingerprint, &descriptor, context.prepared)
+                        .await;
+                }
+                SharedIvfClaimResult::Busy { .. } => {
+                    tokio::time::sleep(SHARED_IVF_WAIT_INTERVAL).await;
+                }
+                SharedIvfClaimResult::Claimed(claim) => {
+                    return self.build_shared_ivf(descriptor, claim, context).await;
+                }
+            }
+        }
+    }
+
+    async fn load_shared_ivf(
+        &self,
+        fingerprint: &str,
+        descriptor: &SharedIvfDescriptor,
+        prepared: &PreparedIvf,
+    ) -> Result<ResolvedSharedIvf> {
+        let loaded = self.indexes.load_shared_ivf(fingerprint).await?;
+        if !loaded.metadata.descriptor.is_compatible_with(descriptor) {
+            return Err(Error::InvalidMetadata(
+                "shared IVF descriptor does not match the requested build".into(),
+            ));
+        }
+        let RelationReference::Parquet { uri } = &loaded.metadata.centroids else {
+            return Err(Error::InvalidMetadata(
+                "the local builder requires Parquet shared centroids".into(),
+            ));
+        };
+        let batch = self.parquet.read(uri, None).await?;
+        let centroids = crate::ivf::read_centroids(&batch, prepared.nlist, prepared.dimension)?;
+        let reference = SharedIvfReference::new(
+            loaded.entry.fingerprint,
+            loaded.entry.artifact_uuid,
+            loaded.entry.metadata_location,
+        )?;
+        Ok(ResolvedSharedIvf {
+            reference,
+            centroids: loaded.metadata.centroids,
+            trained: reused_ivf(prepared, centroids)?,
+        })
+    }
+
+    async fn build_shared_ivf(
+        &self,
+        descriptor: SharedIvfDescriptor,
+        claim: SharedIvfClaim,
+        context: &mut SharedIvfBuildContext<'_>,
+    ) -> Result<ResolvedSharedIvf> {
+        let heartbeat = ClaimHeartbeat::start(Arc::clone(&self.catalog), claim.clone());
+        let artifact_uuid = Uuid::new_v4();
+        let artifact_root = self
+            .warehouse
+            .location(&format!("indexes/{}/1", artifact_uuid.simple()), true)?;
+        context.build_lease.add_snapshot_root(&artifact_root)?;
+        let centroids_location = child_location(&artifact_root, "ivf_centroids", true)?;
+        let result: Result<ResolvedSharedIvf> = async {
+            let trained = train_prepared_ivf(context.prepared, context.parallel, context.progress)?;
+            write_ivf_centroids(
+                &self.parquet,
+                &centroids_location,
+                &trained,
+                context.writer_options,
+                context.progress,
+            )
+            .await?;
+            let metadata = SharedIvfMetadata {
+                format_version: 1,
+                artifact_uuid,
+                fingerprint: claim.fingerprint.clone(),
+                location: self
+                    .indexes
+                    .metadata_store()
+                    .shared_ivf_location(artifact_uuid)?,
+                created_at_ms: now_ms()?,
+                descriptor: descriptor.clone(),
+                centroids: RelationReference::Parquet {
+                    uri: centroids_location.clone(),
+                },
+            };
+            let metadata_location = self
+                .indexes
+                .metadata_store()
+                .write_shared_ivf(&metadata)
+                .await?;
+            let entry = self
+                .catalog
+                .publish_shared_ivf(&claim, &metadata_location, &metadata)?;
+            let reference = SharedIvfReference::new(
+                entry.fingerprint,
+                entry.artifact_uuid,
+                entry.metadata_location,
+            )?;
+            Ok(ResolvedSharedIvf {
+                reference,
+                centroids: metadata.centroids,
+                trained,
+            })
+        }
+        .await;
+        let heartbeat_result = heartbeat.stop().await;
+        match result {
+            Ok(shared) => {
+                // Publication clears the owner. A simultaneous heartbeat may
+                // observe that ready state after this owner has committed it.
+                if let Err(error) = heartbeat_result
+                    && !matches!(
+                        &error,
+                        Error::Catalog(relify_catalog::Error::SharedIvfClaimLost(fingerprint))
+                            if fingerprint == &shared.reference.fingerprint
+                    )
+                {
+                    return Err(error);
+                }
+                Ok(shared)
+            }
+            Err(error) => {
+                let _ = self.catalog.abandon_shared_ivf(&claim, &error.to_string());
+                if let Ok(shared) = self
+                    .load_shared_ivf(&claim.fingerprint, &descriptor, context.prepared)
+                    .await
+                {
+                    return Ok(shared);
+                }
+                Err(error)
+            }
+        }
+    }
+}
+
+impl ClaimHeartbeat {
+    fn start(catalog: Arc<dyn IndexCatalog>, claim: SharedIvfClaim) -> Self {
+        let (stop, mut stopped) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = &mut stopped => return Ok(()),
+                    () = tokio::time::sleep(SHARED_IVF_RENEW_INTERVAL) => {
+                        catalog.renew_shared_ivf_claim(&claim, SHARED_IVF_LEASE_MS)?;
+                    }
+                }
+            }
+        });
+        Self { stop, task }
+    }
+
+    async fn stop(self) -> Result<()> {
+        let _ = self.stop.send(());
+        self.task.await.map_err(|error| {
+            Error::InvalidArgument(format!("shared IVF heartbeat failed: {error}"))
+        })??;
+        Ok(())
+    }
+}
+
+fn now_ms() -> Result<i64> {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| Error::InvalidArgument(error.to_string()))?
+        .as_millis();
+    i64::try_from(millis)
+        .map_err(|_| Error::InvalidArgument("current timestamp is out of range".into()))
 }
 
 fn validate_partitions(partitions: Option<usize>) -> Result<()> {
@@ -204,6 +473,31 @@ fn validate_partitions(partitions: Option<usize>) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn resolve_refresh_config(
+    current: &relify_meta::IndexSnapshot,
+    requested: Option<IvfConfig>,
+) -> Result<IvfConfig> {
+    let current_metric = DistanceMetric::from_metadata(&current.metric).ok_or_else(|| {
+        Error::InvalidMetadata(format!("unsupported IVF metric: {}", current.metric))
+    })?;
+    let config = requested.unwrap_or(IvfConfig::with_metric(
+        current.parameter_usize("nlist")?,
+        PostingEncoding::from_snapshot(current)?,
+        current_metric,
+    ));
+    if config.nlist == 0 || config.nlist > i32::MAX as usize {
+        return Err(Error::InvalidArgument(
+            "nlist must be in 1..=2147483647".into(),
+        ));
+    }
+    if config.metric != current_metric {
+        return Err(Error::InvalidArgument(
+            "refresh cannot change the distance metric; create a new index instead".into(),
+        ));
+    }
+    Ok(config)
 }
 
 fn build_context(threads: Option<usize>) -> Result<ParalliteContext> {
