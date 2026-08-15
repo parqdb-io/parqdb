@@ -5,7 +5,14 @@ from pathlib import Path
 
 import pytest
 import relify
-from _support import register_source, relation_files, write_vectors
+from _support import (
+    drop_table_index_entry,
+    load_table_index,
+    register_source,
+    register_table_index,
+    relation_files,
+    write_vectors,
+)
 
 
 def test_catalog_lifecycle_survives_session_reopen(tmp_path: Path) -> None:
@@ -35,9 +42,10 @@ def test_catalog_lifecycle_survives_session_reopen(tmp_path: Path) -> None:
         timeout=timedelta(seconds=30),
     )
     assert vectors.index_status("vectors_embedding").state == "ready"
-    assert session.indexes.list() == ["vectors_embedding"]
+    namespace = vectors.identifier.index_namespace
+    assert session.indexes.list(namespace=namespace) == ["vectors_embedding"]
 
-    entry = session.indexes.load("vectors_embedding")
+    entry = load_table_index(session, vectors, "vectors_embedding")
     assert entry.identifier == "vectors_embedding"
     assert isinstance(entry.metadata["snapshots"], tuple)
     assert set(entry.metadata["snapshots"][0]["index-relations"]) == {
@@ -45,7 +53,7 @@ def test_catalog_lifecycle_survives_session_reopen(tmp_path: Path) -> None:
         "ivf_postings",
     }
     source_reference = entry.metadata["snapshots"][0]["source"]
-    assert session.indexes.list_for(source_reference) == [
+    assert session.indexes.list_for(source_reference, namespace=namespace) == [
         relify.IndexInfo(
             name="vectors_embedding",
             column="embedding",
@@ -55,15 +63,17 @@ def test_catalog_lifecycle_survives_session_reopen(tmp_path: Path) -> None:
             current_snapshot_id=entry.metadata["current-snapshot-id"],
         )
     ]
-    assert session.indexes.select(source_reference) == entry
+    assert session.indexes.select(source_reference, namespace=namespace) == entry
     with pytest.raises(TypeError):
         entry.metadata["current-snapshot-id"] = 0  # type: ignore[index]
     with pytest.raises(TypeError):
         entry.metadata["snapshots"][0]["metric"] = "other"
 
     reopened = relify.connect(tmp_path / "relify-data")
-    assert reopened.indexes.list() == ["vectors_embedding"]
-    assert reopened.indexes.load("vectors_embedding") == entry
+    reopened_vectors = reopened.table("vectors")
+    assert isinstance(reopened_vectors, relify.SourceTable)
+    assert reopened.indexes.list(namespace=namespace) == ["vectors_embedding"]
+    assert load_table_index(reopened, reopened_vectors, "vectors_embedding") == entry
 
 
 def test_public_index_catalog_can_be_opened_without_an_execution_session(
@@ -85,16 +95,20 @@ def test_public_index_catalog_can_be_opened_without_an_execution_session(
         config=relify.IVF(nlist=1),
         wait_timeout=timedelta(seconds=30),
     )
-    expected = session.indexes.load("vectors_embedding")
+    expected = load_table_index(session, vectors, "vectors_embedding")
+    namespace = vectors.identifier.index_namespace
 
     catalog = relify.open_index_catalog(
         f"sqlite://{catalog_path}",
         metadata_root=metadata_root,
     )
 
-    assert catalog.load("vectors_embedding") == expected
+    assert catalog.load("vectors_embedding", namespace=namespace) == expected
     source_reference = expected.metadata["snapshots"][0]["source"]
-    assert catalog.select(source_reference).identifier == "vectors_embedding"
+    assert (
+        catalog.select(source_reference, namespace=namespace).identifier
+        == "vectors_embedding"
+    )
 
 
 def test_catalog_load_reports_a_missing_index(tmp_path: Path) -> None:
@@ -118,33 +132,37 @@ def test_catalog_drop_and_register_recover_an_existing_index(
         config=relify.IVF(nlist=1),
         wait_timeout=timedelta(seconds=30),
     )
-    entry = session.indexes.load("vectors_embedding")
+    entry = load_table_index(session, vectors, "vectors_embedding")
     index_files = [
         path
         for reference in entry.metadata["snapshots"][0]["index-relations"].values()
         for path in relation_files(reference)
     ]
 
-    session.indexes.drop("vectors_embedding")
+    drop_table_index_entry(session, vectors, "vectors_embedding")
 
-    assert session.indexes.list() == []
+    assert session.indexes.list(namespace=vectors.identifier.index_namespace) == []
     assert all(path.exists() for path in index_files)
     with pytest.raises(relify.IndexNotFoundError):
         vectors.index_status("vectors_embedding")
     with pytest.raises(relify.IndexNotFoundError):
-        session.indexes.load("vectors_embedding")
+        load_table_index(session, vectors, "vectors_embedding")
 
-    session.indexes.register(
+    register_table_index(
+        session,
+        vectors,
         "vectors_embedding",
         entry.metadata_location,
     )
 
-    assert session.indexes.load("vectors_embedding") == entry
+    assert load_table_index(session, vectors, "vectors_embedding") == entry
     recovered = vectors.index_status("vectors_embedding")
     assert recovered.state == "ready"
     assert recovered.current_snapshot_id == entry.metadata["current-snapshot-id"]
     with pytest.raises(relify.AlreadyExistsError):
-        session.indexes.register(
+        register_table_index(
+            session,
+            vectors,
             "vectors_embedding",
             entry.metadata_location,
         )

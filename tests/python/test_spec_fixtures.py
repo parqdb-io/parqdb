@@ -261,7 +261,11 @@ def test_lvq_pyarrow_fixtures_are_queryable_by_the_native_reader(
     session = relify.connect(tmp_path / "relify-data")
     source, metadata = localize_lvq_fixture(session.root, directory)
     documents = register_source(session, source, "documents")
-    session.indexes.register(encoding, metadata.as_uri())
+    session.indexes.register(
+        encoding,
+        metadata.as_uri(),
+        namespace=documents.identifier.index_namespace,
+    )
     case = json.loads((directory / "queries.json").read_text(encoding="utf-8"))[0]
 
     hits = session.to_arrow(

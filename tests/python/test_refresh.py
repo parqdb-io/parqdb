@@ -6,7 +6,7 @@ from typing import Any, cast
 
 import pytest
 import relify
-from _support import WAIT, build_index, register_source, write_vectors
+from _support import WAIT, build_index, load_table_index, register_source, write_vectors
 
 
 def test_refresh_reuses_ivf_centroids_for_the_same_immutable_source(
@@ -17,11 +17,11 @@ def test_refresh_reuses_ivf_centroids_for_the_same_immutable_source(
     session = relify.connect(tmp_path / "relify-data")
     vectors = register_source(session, source)
     build_index(vectors, nlist=2)
-    before = session.indexes.load("vectors_embedding")
+    before = load_table_index(session, vectors, "vectors_embedding")
 
     vectors.refresh_index("vectors_embedding", wait_timeout=WAIT)
 
-    after = session.indexes.load("vectors_embedding")
+    after = load_table_index(session, vectors, "vectors_embedding")
     snapshots = after.metadata["snapshots"]
     assert after.metadata_location != before.metadata_location
     assert after.metadata["index-uuid"] == before.metadata["index-uuid"]
@@ -75,7 +75,7 @@ def test_refresh_can_change_ivf_configuration(tmp_path: Path) -> None:
     )
     vectors.wait_for_index("vectors_embedding", timeout=WAIT)
 
-    metadata = session.indexes.load("vectors_embedding").metadata
+    metadata = load_table_index(session, vectors, "vectors_embedding").metadata
     assert metadata["snapshots"][0]["parameters"]["nlist"] == "2"
     assert metadata["snapshots"][1]["parameters"]["nlist"] == "1"
     assert metadata["snapshots"][0]["parameters"]["posting_encoding"] == "source"
@@ -92,7 +92,7 @@ def test_refresh_rejects_changing_the_distance_metric(tmp_path: Path) -> None:
     session = relify.connect(tmp_path / "relify-data")
     vectors = register_source(session, source)
     build_index(vectors, nlist=1)
-    before = session.indexes.load("vectors_embedding")
+    before = load_table_index(session, vectors, "vectors_embedding")
 
     with pytest.raises(
         relify.InvalidArgumentError,
@@ -104,7 +104,7 @@ def test_refresh_rejects_changing_the_distance_metric(tmp_path: Path) -> None:
             wait_timeout=WAIT,
         )
 
-    after = session.indexes.load("vectors_embedding")
+    after = load_table_index(session, vectors, "vectors_embedding")
     assert after.metadata_location == before.metadata_location
     assert after.metadata == before.metadata
 
@@ -115,7 +115,7 @@ def test_failed_refresh_preserves_the_published_snapshot(tmp_path: Path) -> None
     session = relify.connect(tmp_path / "relify-data")
     vectors = register_source(session, source)
     build_index(vectors, nlist=1)
-    before = session.indexes.load("vectors_embedding")
+    before = load_table_index(session, vectors, "vectors_embedding")
 
     with pytest.raises(relify.RelifyError):
         vectors.refresh_index(
@@ -124,7 +124,7 @@ def test_failed_refresh_preserves_the_published_snapshot(tmp_path: Path) -> None
             wait_timeout=WAIT,
         )
 
-    after = session.indexes.load("vectors_embedding")
+    after = load_table_index(session, vectors, "vectors_embedding")
     status = vectors.index_status("vectors_embedding")
     assert after.metadata_location == before.metadata_location
     assert after.metadata == before.metadata

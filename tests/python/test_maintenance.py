@@ -9,7 +9,15 @@ from urllib.parse import unquote, urlparse
 
 import pytest
 import relify
-from _support import WAIT, build_index, register_source, write_vectors
+from _support import (
+    WAIT,
+    build_index,
+    drop_table_index_entry,
+    load_table_index,
+    register_source,
+    register_table_index,
+    write_vectors,
+)
 
 
 def _uri_path(uri: str) -> Path:
@@ -58,7 +66,7 @@ def test_refresh_exposes_only_superseded_metadata_as_an_orphan(
     session = relify.connect(tmp_path / "relify-data")
     vectors = register_source(session, source)
     build_index(vectors, nlist=1)
-    before = session.indexes.load("vectors_embedding")
+    before = load_table_index(session, vectors, "vectors_embedding")
     old = (datetime.now(UTC) - timedelta(days=30)).timestamp()
     os.utime(_uri_path(before.metadata_location), (old, old))
 
@@ -93,7 +101,7 @@ def test_remove_orphans_dry_run_and_delete_dropped_index_data(
     old = (datetime.now(UTC) - timedelta(days=30)).timestamp()
     _set_tree_mtime(session.root / "metadata", old)
     _set_tree_mtime(session.root / "indexes", old)
-    session.indexes.drop("vectors_embedding")
+    drop_table_index_entry(session, vectors, "vectors_embedding")
     cutoff = datetime.now(UTC) - timedelta(days=7)
 
     assert session.maintenance.remove_orphans(older_than=cutoff) == ()
@@ -123,8 +131,8 @@ def test_removed_metadata_cannot_be_registered_from_session_cache(
     session = relify.connect(tmp_path / "relify-data")
     vectors = register_source(session, source)
     build_index(vectors, nlist=1)
-    entry = session.indexes.load("vectors_embedding")
-    session.indexes.drop("vectors_embedding")
+    entry = load_table_index(session, vectors, "vectors_embedding")
+    drop_table_index_entry(session, vectors, "vectors_embedding")
     _set_tombstone_time(session, datetime.now(UTC) - timedelta(days=30))
 
     removed = session.maintenance.remove_orphans(
@@ -135,8 +143,13 @@ def test_removed_metadata_cannot_be_registered_from_session_cache(
     assert any(candidate.kind == "metadata" for candidate in removed)
     assert not _uri_path(entry.metadata_location).exists()
     with pytest.raises(relify.StorageError):
-        session.indexes.register("resurrected", entry.metadata_location)
-    assert session.indexes.list() == []
+        register_table_index(
+            session,
+            vectors,
+            "resurrected",
+            entry.metadata_location,
+        )
+    assert session.indexes.list(namespace=vectors.identifier.index_namespace) == []
 
 
 def test_lazy_query_is_protected_by_retention_without_a_query_lease(
@@ -153,7 +166,7 @@ def test_lazy_query_is_protected_by_retention_without_a_query_lease(
     old = (datetime.now(UTC) - timedelta(days=30)).timestamp()
     _set_tree_mtime(session.root / "metadata", old)
     _set_tree_mtime(session.root / "indexes", old)
-    session.indexes.drop("vectors_embedding")
+    drop_table_index_entry(session, vectors, "vectors_embedding")
 
     first_removed = session.maintenance.remove_orphans(
         older_than=datetime.now(UTC),
@@ -188,7 +201,7 @@ def test_temp_view_remains_readable_during_retention(
     old = (datetime.now(UTC) - timedelta(days=30)).timestamp()
     _set_tree_mtime(session.root / "metadata", old)
     _set_tree_mtime(session.root / "indexes", old)
-    session.indexes.drop("vectors_embedding")
+    drop_table_index_entry(session, vectors, "vectors_embedding")
 
     first_removed = session.maintenance.remove_orphans(
         older_than=datetime.now(UTC),
@@ -213,7 +226,7 @@ def test_remove_orphans_ignores_recent_and_unknown_objects(tmp_path: Path) -> No
     write_vectors(source, [0], [[0.0, 0.0]])
     vectors = register_source(session, source)
     build_index(vectors, nlist=1)
-    session.indexes.drop("vectors_embedding")
+    drop_table_index_entry(session, vectors, "vectors_embedding")
     metadata_unknown = (
         session.root
         / "metadata"
@@ -251,7 +264,7 @@ def test_remove_orphans_enforces_minimum_retention(
     old = (datetime.now(UTC) - timedelta(days=30)).timestamp()
     _set_tree_mtime(session.root / "metadata", old)
     _set_tree_mtime(session.root / "indexes", old)
-    session.indexes.drop("vectors_embedding")
+    drop_table_index_entry(session, vectors, "vectors_embedding")
     cutoff = datetime.now(UTC)
 
     assert session.maintenance.remove_orphans(older_than=cutoff) == ()

@@ -14,11 +14,11 @@ use crate::{BuildFailureKind, Error, LocalBuildProgress, Result};
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) struct BuildKey {
     source_identity: String,
-    index: String,
+    index: IndexIdentifier,
 }
 
 impl BuildKey {
-    pub(super) fn new(source_identity: String, index: String) -> Self {
+    pub(super) fn new(source_identity: String, index: IndexIdentifier) -> Self {
         Self {
             source_identity,
             index,
@@ -40,6 +40,7 @@ pub(super) struct ActiveBuildSnapshot {
     pub(super) base_snapshot_id: Option<i64>,
     pub(super) progress: LocalBuildProgressSnapshot,
     pub(super) error: Option<String>,
+    pub(super) failure_kind: Option<BuildFailureKind>,
 }
 
 #[derive(Debug, Clone)]
@@ -91,17 +92,22 @@ impl BuildRecord {
 
     fn snapshot(&self) -> ActiveBuildSnapshot {
         let state = self.state.borrow();
-        let (state, error) = match &*state {
-            RecordState::Pending => (ActiveBuildState::Pending, None),
-            RecordState::Building => (ActiveBuildState::Building, None),
-            RecordState::Complete => (ActiveBuildState::Complete, None),
-            RecordState::Failed(error) => (ActiveBuildState::Failed, Some(error.message.clone())),
+        let (state, error, failure_kind) = match &*state {
+            RecordState::Pending => (ActiveBuildState::Pending, None, None),
+            RecordState::Building => (ActiveBuildState::Building, None, None),
+            RecordState::Complete => (ActiveBuildState::Complete, None, None),
+            RecordState::Failed(error) => (
+                ActiveBuildState::Failed,
+                Some(error.message.clone()),
+                Some(error.kind),
+            ),
         };
         ActiveBuildSnapshot {
             state,
             base_snapshot_id: self.base_snapshot_id,
             progress: self.progress.snapshot(),
             error,
+            failure_kind,
         }
     }
 
@@ -181,9 +187,7 @@ impl BuildCoordinator {
                 )
             });
             if already_running {
-                return Err(Error::BuildAlreadyRunning(IndexIdentifier::root(
-                    &key.index,
-                )?));
+                return Err(Error::BuildAlreadyRunning(key.index.clone()));
             }
             records.insert(key.clone(), Arc::clone(&record));
         }
@@ -275,7 +279,10 @@ mod tests {
     use super::*;
 
     fn key(source: &str, index: &str) -> BuildKey {
-        BuildKey::new(source.to_owned(), index.to_owned())
+        BuildKey::new(
+            source.to_owned(),
+            IndexIdentifier::root(index).expect("valid test index"),
+        )
     }
 
     async fn wait_for_state(
@@ -459,6 +466,7 @@ mod tests {
         ));
         let snapshot = coordinator.snapshot(&build_key).unwrap();
         assert_eq!(snapshot.state, ActiveBuildState::Failed);
+        assert_eq!(snapshot.failure_kind, Some(BuildFailureKind::InvalidSchema));
         assert_eq!(
             snapshot.error.as_deref(),
             Some("invalid source schema: missing vector column")

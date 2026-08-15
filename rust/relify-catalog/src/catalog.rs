@@ -106,6 +106,14 @@ pub trait IndexCatalog: Send + Sync {
         Err(Error::UnsupportedOperation("list"))
     }
 
+    /// Lists every published identifier across all namespaces.
+    ///
+    /// This runtime extension is used by maintenance operations that must
+    /// establish reachability for the complete catalog.
+    fn list_all(&self) -> Result<Vec<IndexIdentifier>> {
+        Err(Error::UnsupportedOperation("list_all"))
+    }
+
     /// Finds indexes in a namespace that refer to an exact source-table state.
     ///
     /// Source discovery is a Relify runtime extension to the portable catalog

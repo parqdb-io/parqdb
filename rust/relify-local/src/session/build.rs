@@ -7,7 +7,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parallite::ParalliteContext;
-use relify_catalog::{IndexCatalog, IvfCentroidsClaim, IvfCentroidsClaimResult};
+use relify_catalog::{IndexCatalog, IndexIdentifier, IvfCentroidsClaim, IvfCentroidsClaimResult};
 use relify_index::{
     InitialIndex, RefreshedIndex, new_snapshot_id, publish_initial, publish_refresh,
 };
@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use super::LocalSession;
 use super::build_coordinator::{ActiveBuildState, BuildKey};
-use super::catalog::local_index_identifier;
+use super::catalog::{local_index_identifier, namespaced_index_identifier};
 use crate::builder::{
     IvfBuildContext, IvfPostingsSpec, PreparedIvf, TrainedIvf, build_ivf_postings,
     prepare_ivf_datafusion, reused_ivf, train_prepared_ivf, write_ivf_centroids,
@@ -27,7 +27,7 @@ use crate::builder::{
 use crate::coordination::BuildLease;
 use crate::parquet::{ParquetWriterOptions, child_location};
 use crate::progress::BuildPhase;
-use crate::{Error, IvfConfig, LocalBuildProgress, PublishedIndex, Result};
+use crate::{BuildFailureKind, Error, IvfConfig, LocalBuildProgress, PublishedIndex, Result};
 
 const IVF_CENTROIDS_LEASE_MS: i64 = 30_000;
 const IVF_CENTROIDS_RENEW_INTERVAL: Duration = Duration::from_secs(10);
@@ -63,6 +63,8 @@ pub struct IndexBuildStatus {
     pub current_snapshot_id: Option<i64>,
     /// Most recent process-local build failure.
     pub error: Option<String>,
+    /// Stable category of the most recent process-local build failure.
+    pub error_code: Option<&'static str>,
 }
 
 struct ResolvedIvfCentroids {
@@ -103,6 +105,7 @@ impl LocalSession {
     pub fn submit_create_index(
         &self,
         source: &RelationReference,
+        index_namespace: &[String],
         index_name: String,
         vector_field: String,
         source_key_fields: Vec<String>,
@@ -114,11 +117,12 @@ impl LocalSession {
         writer_options.validate()?;
         validate_partitions(partitions)?;
         validate_build_request(&vector_field, &source_key_fields, config.nlist)?;
-        if self.index_exists(&index_name)? {
+        let identifier = namespaced_index_identifier(index_namespace, &index_name)?;
+        if self.index_exists_identifier(&identifier)? {
             return Err(Error::AlreadyExists(index_name));
         }
         let source_uri = parquet_source_uri(source)?.to_owned();
-        let key = build_key(source, &index_name);
+        let key = build_key(source, &identifier);
         let progress = LocalBuildProgress::default();
         let options = LocalBuildOptions {
             writer_options,
@@ -129,9 +133,9 @@ impl LocalSession {
         let session = self.clone();
         self.builds.submit(key, None, progress, async move {
             session
-                .create_index_with_options(
+                .create_index_with_identifier(
                     &source_uri,
-                    &index_name,
+                    identifier,
                     &vector_field,
                     &source_key_fields,
                     config,
@@ -146,6 +150,7 @@ impl LocalSession {
     pub async fn submit_refresh_index(
         &self,
         source: &RelationReference,
+        index_namespace: Vec<String>,
         index_name: String,
         config: Option<IvfConfig>,
         writer_options: ParquetWriterOptions,
@@ -155,13 +160,14 @@ impl LocalSession {
         writer_options.validate()?;
         validate_partitions(partitions)?;
         let published = self
-            .list_relation_indexes(source)
+            .list_relation_indexes_in(&index_namespace, source)
             .await?
             .into_iter()
             .find(|index| index.name == index_name)
             .ok_or_else(|| Error::IndexNotFound(index_name.clone()))?;
         let source_uri = parquet_source_uri(source)?.to_owned();
-        let key = build_key(source, &index_name);
+        let identifier = namespaced_index_identifier(&index_namespace, &index_name)?;
+        let key = build_key(source, &identifier);
         let progress = LocalBuildProgress::default();
         let options = LocalBuildOptions {
             writer_options,
@@ -176,7 +182,7 @@ impl LocalSession {
             progress,
             async move {
                 session
-                    .refresh_index_with_options(&source_uri, &index_name, config, &options)
+                    .refresh_index_with_identifier(&source_uri, identifier, config, &options)
                     .await
                     .map(|_| ())
             },
@@ -187,14 +193,15 @@ impl LocalSession {
     pub async fn index_build_status(
         &self,
         source: &RelationReference,
+        index_namespace: &[String],
         index_name: &str,
     ) -> Result<IndexBuildStatus> {
         source.validate()?;
-        let _ = local_index_identifier(index_name)?;
-        let key = build_key(source, index_name);
+        let identifier = namespaced_index_identifier(index_namespace, index_name)?;
+        let key = build_key(source, &identifier);
         let active = self.builds.snapshot(&key);
         let published = self
-            .list_relation_indexes(source)
+            .list_relation_indexes_in(index_namespace, source)
             .await?
             .into_iter()
             .find(|index| index.name == index_name);
@@ -217,6 +224,15 @@ impl LocalSession {
                     None
                 }
             });
+            let error_code = active.as_ref().and_then(|active| {
+                if active.state == ActiveBuildState::Failed
+                    && active.base_snapshot_id == Some(published.current_snapshot_id)
+                {
+                    active.failure_kind.map(BuildFailureKind::code)
+                } else {
+                    None
+                }
+            });
             if active.as_ref().is_some_and(|active| {
                 active.state == ActiveBuildState::Failed
                     && active.base_snapshot_id != Some(published.current_snapshot_id)
@@ -231,6 +247,7 @@ impl LocalSession {
                 total: None,
                 current_snapshot_id: Some(published.current_snapshot_id),
                 error,
+                error_code,
             });
         }
         if let Some(active) = active
@@ -244,6 +261,7 @@ impl LocalSession {
                 total: Some(active.progress.total),
                 current_snapshot_id: None,
                 error: active.error,
+                error_code: active.failure_kind.map(BuildFailureKind::code),
             });
         }
         Err(Error::IndexNotFound(index_name.to_owned()))
@@ -253,16 +271,17 @@ impl LocalSession {
     pub async fn wait_for_index_build(
         &self,
         source: &RelationReference,
+        index_namespace: &[String],
         index_name: &str,
     ) -> Result<()> {
         source.validate()?;
-        let _ = local_index_identifier(index_name)?;
-        let key = build_key(source, index_name);
+        let identifier = namespaced_index_identifier(index_namespace, index_name)?;
+        let key = build_key(source, &identifier);
         if let Some(result) = self.builds.wait(&key).await {
             result?;
             return Ok(());
         }
-        self.index_build_status(source, index_name)
+        self.index_build_status(source, index_namespace, index_name)
             .await
             .map(|_| ())
     }
@@ -297,14 +316,33 @@ impl LocalSession {
         config: IvfConfig,
         options: &LocalBuildOptions,
     ) -> Result<PublishedIndex> {
+        self.create_index_with_identifier(
+            source,
+            local_index_identifier(index_name)?,
+            vector_field,
+            source_key_fields,
+            config,
+            options,
+        )
+        .await
+    }
+
+    async fn create_index_with_identifier(
+        &self,
+        source: &str,
+        identifier: IndexIdentifier,
+        vector_field: &str,
+        source_key_fields: &[String],
+        config: IvfConfig,
+        options: &LocalBuildOptions,
+    ) -> Result<PublishedIndex> {
         options.writer_options.validate()?;
         validate_partitions(options.partitions)?;
         let progress = options.progress.clone().unwrap_or_default();
         let parallel = build_context(options.threads)?;
-        let identifier = local_index_identifier(index_name)?;
         let mut build_lease = self.coordination.reserve_build(&identifier)?;
-        if self.index_exists(index_name)? {
-            return Err(Error::AlreadyExists(index_name.to_owned()));
+        if self.index_exists_identifier(&identifier)? {
+            return Err(Error::AlreadyExists(identifier.name().to_owned()));
         }
         validate_build_request(vector_field, source_key_fields, config.nlist)?;
 
@@ -391,18 +429,33 @@ impl LocalSession {
         config: Option<IvfConfig>,
         options: &LocalBuildOptions,
     ) -> Result<PublishedIndex> {
+        self.refresh_index_with_identifier(
+            source,
+            local_index_identifier(index_name)?,
+            config,
+            options,
+        )
+        .await
+    }
+
+    async fn refresh_index_with_identifier(
+        &self,
+        source: &str,
+        identifier: IndexIdentifier,
+        config: Option<IvfConfig>,
+        options: &LocalBuildOptions,
+    ) -> Result<PublishedIndex> {
         options.writer_options.validate()?;
         validate_partitions(options.partitions)?;
         let progress = options.progress.clone().unwrap_or_default();
         let parallel = build_context(options.threads)?;
-        let identifier = local_index_identifier(index_name)?;
         let mut build_lease = self.coordination.reserve_build(&identifier)?;
         let loaded = self.load_entry(&identifier).await?;
         let current = loaded.metadata.current_snapshot()?;
         let source = self.bind_source(source).await?;
         let source_reference = source.reference.clone();
         if current.source.identity_key() != source_reference.identity_key() {
-            return Err(Error::IndexNotFound(index_name.to_owned()));
+            return Err(Error::IndexNotFound(identifier.name().to_owned()));
         }
         let config = resolve_refresh_config(current, config)?;
         let snapshot_id = new_snapshot_id();
@@ -645,8 +698,8 @@ impl LocalSession {
     }
 }
 
-fn build_key(source: &RelationReference, index_name: &str) -> BuildKey {
-    BuildKey::new(source.identity_key(), index_name.to_owned())
+fn build_key(source: &RelationReference, identifier: &IndexIdentifier) -> BuildKey {
+    BuildKey::new(source.identity_key(), identifier.clone())
 }
 
 fn parquet_source_uri(source: &RelationReference) -> Result<&str> {
@@ -675,6 +728,7 @@ fn active_status(
         total: Some(active.progress.total),
         current_snapshot_id: published.map(|index| index.current_snapshot_id),
         error: active.error.clone(),
+        error_code: active.failure_kind.map(BuildFailureKind::code),
     }
 }
 

@@ -27,6 +27,25 @@ pub enum BuildFailureKind {
     Backend,
 }
 
+impl BuildFailureKind {
+    /// Returns the stable transport code for this failure category.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::InvalidArgument => "invalid_argument",
+            Self::InvalidSchema => "invalid_schema",
+            Self::IndexNotFound => "index_not_found",
+            Self::AlreadyExists => "already_exists",
+            Self::BuildAlreadyRunning => "build_already_running",
+            Self::AmbiguousIndex => "ambiguous_index",
+            Self::InvalidMetadata => "invalid_metadata",
+            Self::Catalog => "catalog_error",
+            Self::Storage => "storage_error",
+            Self::Backend => "backend_error",
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 #[error("{0}")]
 pub(crate) struct InvalidSchemaDataFusionError(String);

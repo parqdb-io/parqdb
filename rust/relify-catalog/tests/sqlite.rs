@@ -411,10 +411,21 @@ fn namespaces_are_structural_and_isolated() {
     let catalog = SqliteCatalog::open(temporary.path().join("catalog.sqlite")).unwrap();
     let metadata = metadata(temporary.path());
     let location = file_uri(&temporary.path().join("v1.metadata.json"));
+    let root = IndexIdentifier::root("root-index").unwrap();
+    catalog.register(&root, &location, &metadata).unwrap();
+    let nested_location = file_uri(&temporary.path().join("nested.metadata.json"));
+    let mut nested_metadata = metadata.clone();
+    nested_metadata.index_uuid = Uuid::new_v4();
     let nested = IndexIdentifier::new(vec!["a".into(), "b".into()], "documents").unwrap();
-    catalog.register(&nested, &location, &metadata).unwrap();
+    catalog
+        .register(&nested, &nested_location, &nested_metadata)
+        .unwrap();
 
-    assert_eq!(catalog.list(nested.namespace()).unwrap(), [nested]);
+    assert_eq!(
+        catalog.list(nested.namespace()).unwrap(),
+        std::slice::from_ref(&nested)
+    );
+    assert_eq!(catalog.list_all().unwrap(), [nested, root]);
     assert!(matches!(
         catalog.list(&["a.b".into()]),
         Err(Error::NamespaceNotFound(_))

@@ -58,15 +58,24 @@ class _NativeIndexRepository:
     ) -> None: ...
     def index_exists(self, name: str) -> bool: ...
     def list_indexes(self) -> list[str]: ...
+    def list_indexes_in(self, namespace: Sequence[str]) -> list[str]: ...
     def load_index_entry(self, name: str) -> tuple[str, str]: ...
+    def load_index_entry_in(
+        self, namespace: Sequence[str], name: str
+    ) -> tuple[str, str]: ...
     def register_index(self, name: str, metadata_location: str) -> None: ...
+    def register_index_in(
+        self, namespace: Sequence[str], name: str, metadata_location: str
+    ) -> None: ...
     def drop_index(self, name: str) -> None: ...
+    def drop_index_in(self, namespace: Sequence[str], name: str) -> None: ...
     def list_source_indexes(
-        self, source_json: str
+        self, source_json: str, namespace: Sequence[str]
     ) -> list[tuple[str, str, str, str, Mapping[str, str], int]]: ...
     def select_index(
         self,
         source_json: str,
+        namespace: Sequence[str],
         index: str | None = ...,
         column: str | None = ...,
     ) -> tuple[str, str, str]: ...
@@ -122,11 +131,16 @@ class _NativeSession:
     def load_index_entry(self, name: str) -> tuple[str, str]: ...
     def register_index(self, name: str, metadata_location: str) -> None: ...
     def select_index_metadata(
-        self, source: str, index: str | None, column: str | None
+        self,
+        source: str,
+        index_namespace: Sequence[str],
+        index: str | None,
+        column: str | None,
     ) -> str: ...
     def select_index(
         self,
         source: str,
+        index_namespace: Sequence[str],
         index: str | None = ...,
         column: str | None = ...,
     ) -> tuple[str, str, str]: ...
@@ -148,12 +162,15 @@ class _NativeSession:
         dry_run: bool,
     ) -> list[tuple[str, str, int]]: ...
     def list_source_indexes(
-        self, source: str
+        self, source: str, index_namespace: Sequence[str]
     ) -> list[tuple[str, str, str, str, Mapping[str, str], int]]: ...
-    def drop_source_index(self, source: str, name: str) -> None: ...
+    def drop_source_index(
+        self, source: str, index_namespace: Sequence[str], name: str
+    ) -> None: ...
     async def submit_create_index(
         self,
         source: str,
+        index_namespace: Sequence[str],
         index_name: str,
         vector_field: str,
         source_key_fields: Sequence[str],
@@ -166,6 +183,7 @@ class _NativeSession:
     async def submit_refresh_index(
         self,
         source: str,
+        index_namespace: Sequence[str],
         index_name: str,
         nlist: int | None,
         posting_encoding: str | None,
@@ -176,6 +194,7 @@ class _NativeSession:
     async def index_build_status(
         self,
         source: str,
+        index_namespace: Sequence[str],
         index_name: str,
     ) -> tuple[
         str,
@@ -185,11 +204,15 @@ class _NativeSession:
         int | None,
         int | None,
         str | None,
+        str | None,
     ]: ...
-    async def wait_for_index_build(self, source: str, index_name: str) -> None: ...
+    async def wait_for_index_build(
+        self, source: str, index_namespace: Sequence[str], index_name: str
+    ) -> None: ...
     def plan_search(
         self,
         source: str,
+        index_namespace: Sequence[str],
         query: Sequence[float],
         index: str | None = ...,
         column: str | None = ...,
@@ -202,6 +225,7 @@ class _NativeSession:
     async def stream_search(
         self,
         source: str,
+        index_namespace: Sequence[str],
         query: Sequence[float],
         index: str | None = ...,
         column: str | None = ...,
@@ -214,6 +238,7 @@ class _NativeSession:
     async def stream_explain_search(
         self,
         source: str,
+        index_namespace: Sequence[str],
         query: Sequence[float],
         index: str | None = ...,
         column: str | None = ...,
@@ -229,6 +254,7 @@ class _NativeSession:
     def search_sql(
         self,
         source: str,
+        index_namespace: Sequence[str],
         query: Sequence[float],
         index: str | None = ...,
         column: str | None = ...,

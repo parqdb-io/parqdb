@@ -5,7 +5,15 @@ from pathlib import Path
 
 import pytest
 import relify
-from _support import WAIT, build_index, register_source, write_vectors
+from _support import (
+    WAIT,
+    build_index,
+    drop_table_index_entry,
+    load_table_index,
+    register_source,
+    register_table_index,
+    write_vectors,
+)
 
 
 def test_published_index_cannot_be_created_again(tmp_path: Path) -> None:
@@ -33,7 +41,7 @@ def test_wait_validation_and_missing_index_errors(tmp_path: Path) -> None:
             config=relify.IVF(nlist=1),
             wait_timeout=timedelta(0),
         )
-    assert session.indexes.list() == []
+    assert vectors.list_indexes() == []
 
     with pytest.raises(ValueError, match="timeout must be positive"):
         vectors.wait_for_index("missing", timeout=timedelta(0))
@@ -58,7 +66,7 @@ def test_invalid_index_names_fail_as_invalid_arguments(
 
     with pytest.raises(relify.InvalidArgumentError, match="index name"):
         vectors.index_status(name)
-    assert session.indexes.list() == []
+    assert vectors.list_indexes() == []
 
 
 @pytest.mark.parametrize(
@@ -92,7 +100,7 @@ def test_invalid_build_requests_fail_before_training(
 
     with pytest.raises(relify.IndexNotFoundError):
         vectors.index_status("vectors_embedding")
-    assert session.indexes.list() == []
+    assert vectors.list_indexes() == []
 
 
 def test_create_index_rejects_unsupported_python_objects(tmp_path: Path) -> None:
@@ -108,7 +116,7 @@ def test_create_index_rejects_unsupported_python_objects(tmp_path: Path) -> None
             key=["id"],
             config=object(),  # type: ignore[arg-type]
         )
-    assert session.indexes.list() == []
+    assert vectors.list_indexes() == []
 
 
 def test_failed_build_can_be_retried_under_the_same_name(tmp_path: Path) -> None:
@@ -123,7 +131,7 @@ def test_failed_build_can_be_retried_under_the_same_name(tmp_path: Path) -> None
 
     build_index(vectors)
     assert vectors.index_status("vectors_embedding").state == "ready"
-    assert session.indexes.list() == ["vectors_embedding"]
+    assert [index.name for index in vectors.list_indexes()] == ["vectors_embedding"]
 
 
 def test_catalog_publication_supersedes_an_unpublished_failure(
@@ -139,9 +147,14 @@ def test_catalog_publication_supersedes_an_unpublished_failure(
     assert vectors.index_status("failed_embedding").state == "failed"
 
     build_index(vectors, "published_embedding")
-    published = session.indexes.load("published_embedding")
-    session.indexes.drop("published_embedding")
-    session.indexes.register("failed_embedding", published.metadata_location)
+    published = load_table_index(session, vectors, "published_embedding")
+    drop_table_index_entry(session, vectors, "published_embedding")
+    register_table_index(
+        session,
+        vectors,
+        "failed_embedding",
+        published.metadata_location,
+    )
 
     recovered = vectors.index_status("failed_embedding")
     assert recovered.state == "ready"

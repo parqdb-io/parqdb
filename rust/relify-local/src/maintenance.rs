@@ -192,7 +192,7 @@ async fn reachable_locations(
     catalog: &dyn IndexCatalog,
 ) -> Result<HashSet<String>> {
     let mut reachable = HashSet::new();
-    for identifier in catalog.list(&[])? {
+    for identifier in catalog.list_all()? {
         let entry = catalog.load(&identifier)?;
         let metadata = metadata_store.load(&entry.metadata_location).await?;
         if warehouse.managed(&entry.metadata_location).is_ok() {

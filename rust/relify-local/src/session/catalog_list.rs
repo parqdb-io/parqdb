@@ -106,6 +106,10 @@ impl IndexCatalog for RelifyCatalogList {
         self.indexes.list(namespace)
     }
 
+    fn list_all(&self) -> relify_catalog::Result<Vec<IndexIdentifier>> {
+        self.indexes.list_all()
+    }
+
     fn find_by_source(
         &self,
         namespace: &[String],

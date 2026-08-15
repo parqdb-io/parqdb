@@ -11,3 +11,4 @@ class IndexStatus:
     total: int | None = None
     current_snapshot_id: int | None = None
     error: str | None = None
+    error_code: str | None = None

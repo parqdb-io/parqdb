@@ -70,6 +70,8 @@ impl IvfConfig {
 pub struct SearchRequest {
     /// Exact portable reference for the source table.
     pub source: RelationReference,
+    /// Catalog namespace containing indexes for this table binding.
+    pub index_namespace: Vec<String>,
     /// Explicit index name, or `None` for source-based discovery.
     pub index: Option<String>,
     /// Vector column used to disambiguate implicit index discovery.

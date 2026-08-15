@@ -7,7 +7,7 @@ from typing import Any, cast
 import pyarrow
 import pytest
 import relify
-from _support import build_index, register_source, write_vectors
+from _support import build_index, load_table_index, register_source, write_vectors
 
 
 def test_connect_rejects_invalid_capabilities(tmp_path: Path) -> None:
@@ -370,7 +370,7 @@ def test_explicit_sqlite_catalog_and_file_index_root_are_independent(
     write_vectors(source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
     vectors = register_source(session, source)
     build_index(vectors, nlist=1)
-    entry = session.indexes.load("vectors_embedding")
+    entry = load_table_index(session, vectors, "vectors_embedding")
 
     assert entry.metadata_location.startswith(index_root.as_uri() + "/metadata/")
     assert any((index_root / "indexes").rglob("*.parquet"))

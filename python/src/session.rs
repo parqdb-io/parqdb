@@ -38,6 +38,7 @@ type PyIndexBuildStatus = (
     Option<u64>,
     Option<i64>,
     Option<String>,
+    Option<&'static str>,
 );
 static SHARED_RUNTIME: OnceLock<std::result::Result<Arc<Runtime>, String>> = OnceLock::new();
 
@@ -55,6 +56,7 @@ fn parse_metric(value: &str) -> PyResult<DistanceMetric> {
 #[allow(clippy::too_many_arguments)]
 fn search_request(
     source: &str,
+    index_namespace: Vec<String>,
     query: Vec<f32>,
     index: Option<String>,
     column: Option<String>,
@@ -66,6 +68,7 @@ fn search_request(
 ) -> PyResult<SearchRequest> {
     Ok(SearchRequest {
         source: parse_relation_reference(source)?,
+        index_namespace,
         index,
         column,
         query,
@@ -351,6 +354,7 @@ impl PyNativeSession {
         &self,
         py: Python<'_>,
         source: &str,
+        index_namespace: Vec<String>,
         index: Option<String>,
         column: Option<String>,
     ) -> PyResult<String> {
@@ -358,7 +362,8 @@ impl PyNativeSession {
         let session = Arc::clone(&self.session);
         let runtime = Arc::clone(&self.runtime);
         py.detach(move || {
-            runtime.block_on(session.select_index_metadata(
+            runtime.block_on(session.select_index_metadata_in(
+                &index_namespace,
                 &source,
                 index.as_deref(),
                 column.as_deref(),
@@ -367,11 +372,12 @@ impl PyNativeSession {
         .map_err(|error| core_error(&error))
     }
 
-    #[pyo3(signature = (source, index=None, column=None))]
+    #[pyo3(signature = (source, index_namespace, index=None, column=None))]
     fn select_index(
         &self,
         py: Python<'_>,
         source: &str,
+        index_namespace: Vec<String>,
         index: Option<String>,
         column: Option<String>,
     ) -> PyResult<(String, String, String)> {
@@ -380,7 +386,12 @@ impl PyNativeSession {
         let runtime = Arc::clone(&self.runtime);
         let loaded = py
             .detach(move || {
-                runtime.block_on(session.select_index(&source, index.as_deref(), column.as_deref()))
+                runtime.block_on(session.select_index_in(
+                    &index_namespace,
+                    &source,
+                    index.as_deref(),
+                    column.as_deref(),
+                ))
             })
             .map_err(|error| core_error(&error))?;
         Ok((
@@ -466,39 +477,55 @@ impl PyNativeSession {
             .map_err(|error| core_error(&error))
     }
 
-    fn list_source_indexes(&self, py: Python<'_>, source: &str) -> PyResult<Vec<PyIndexInfo>> {
+    fn list_source_indexes(
+        &self,
+        py: Python<'_>,
+        source: &str,
+        index_namespace: Vec<String>,
+    ) -> PyResult<Vec<PyIndexInfo>> {
         let source = parse_relation_reference(source)?;
         let session = Arc::clone(&self.session);
         let runtime = Arc::clone(&self.runtime);
-        py.detach(move || runtime.block_on(session.list_relation_indexes(&source)))
-            .map(|indexes| {
-                indexes
-                    .into_iter()
-                    .map(|index| {
-                        (
-                            index.name,
-                            index.column,
-                            index.family,
-                            index.metric,
-                            index.parameters,
-                            index.current_snapshot_id,
-                        )
-                    })
-                    .collect()
-            })
-            .map_err(|error| core_error(&error))
+        py.detach(move || {
+            runtime.block_on(session.list_relation_indexes_in(&index_namespace, &source))
+        })
+        .map(|indexes| {
+            indexes
+                .into_iter()
+                .map(|index| {
+                    (
+                        index.name,
+                        index.column,
+                        index.family,
+                        index.metric,
+                        index.parameters,
+                        index.current_snapshot_id,
+                    )
+                })
+                .collect()
+        })
+        .map_err(|error| core_error(&error))
     }
 
-    fn drop_source_index(&self, py: Python<'_>, source: &str, name: String) -> PyResult<()> {
+    fn drop_source_index(
+        &self,
+        py: Python<'_>,
+        source: &str,
+        index_namespace: Vec<String>,
+        name: String,
+    ) -> PyResult<()> {
         let source = parse_relation_reference(source)?;
         let session = Arc::clone(&self.session);
         let runtime = Arc::clone(&self.runtime);
-        py.detach(move || runtime.block_on(session.drop_relation_index(&source, &name)))
-            .map_err(|error| core_error(&error))
+        py.detach(move || {
+            runtime.block_on(session.drop_relation_index_in(&index_namespace, &source, &name))
+        })
+        .map_err(|error| core_error(&error))
     }
 
     #[pyo3(signature = (
         source,
+        index_namespace,
         index_name,
         vector_field,
         source_key_fields,
@@ -513,6 +540,7 @@ impl PyNativeSession {
         &self,
         py: Python<'py>,
         source: &str,
+        index_namespace: Vec<String>,
         index_name: String,
         vector_field: String,
         source_key_fields: Vec<String>,
@@ -534,6 +562,7 @@ impl PyNativeSession {
                 .spawn(async move {
                     session.submit_create_index(
                         &source,
+                        &index_namespace,
                         index_name,
                         vector_field,
                         source_key_fields,
@@ -551,6 +580,7 @@ impl PyNativeSession {
 
     #[pyo3(signature = (
         source,
+        index_namespace,
         index_name,
         nlist,
         posting_encoding,
@@ -563,6 +593,7 @@ impl PyNativeSession {
         &self,
         py: Python<'py>,
         source: &str,
+        index_namespace: Vec<String>,
         index_name: String,
         nlist: Option<usize>,
         posting_encoding: Option<String>,
@@ -594,6 +625,7 @@ impl PyNativeSession {
                     session
                         .submit_refresh_index(
                             &source,
+                            index_namespace,
                             index_name,
                             config,
                             writer_options,
@@ -612,6 +644,7 @@ impl PyNativeSession {
         &self,
         py: Python<'py>,
         source: &str,
+        index_namespace: Vec<String>,
         index_name: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         let source = parse_relation_reference(source)?;
@@ -620,7 +653,11 @@ impl PyNativeSession {
         let build_runtime = Arc::clone(&runtime);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let status = build_runtime
-                .spawn(async move { session.index_build_status(&source, &index_name).await })
+                .spawn(async move {
+                    session
+                        .index_build_status(&source, &index_namespace, &index_name)
+                        .await
+                })
                 .await
                 .map_err(|error| runtime_error(error.to_string()))?
                 .map_err(|error| core_error(&error))?;
@@ -638,6 +675,7 @@ impl PyNativeSession {
                 status.total,
                 status.current_snapshot_id,
                 status.error,
+                status.error_code,
             ) as PyIndexBuildStatus)
         })
     }
@@ -646,6 +684,7 @@ impl PyNativeSession {
         &self,
         py: Python<'py>,
         source: &str,
+        index_namespace: Vec<String>,
         index_name: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         let source = parse_relation_reference(source)?;
@@ -654,7 +693,11 @@ impl PyNativeSession {
         let build_runtime = Arc::clone(&runtime);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             build_runtime
-                .spawn(async move { session.wait_for_index_build(&source, &index_name).await })
+                .spawn(async move {
+                    session
+                        .wait_for_index_build(&source, &index_namespace, &index_name)
+                        .await
+                })
                 .await
                 .map_err(|error| runtime_error(error.to_string()))?
                 .map_err(|error| core_error(&error))?;
@@ -664,6 +707,7 @@ impl PyNativeSession {
 
     #[pyo3(signature = (
         source,
+        index_namespace,
         query,
         index=None,
         column=None,
@@ -678,6 +722,7 @@ impl PyNativeSession {
         &self,
         py: Python<'_>,
         source: &str,
+        index_namespace: Vec<String>,
         query: Vec<f32>,
         index: Option<String>,
         column: Option<String>,
@@ -691,6 +736,7 @@ impl PyNativeSession {
         let runtime = Arc::clone(&self.runtime);
         let request = search_request(
             source,
+            index_namespace,
             query,
             index,
             column,
@@ -707,6 +753,7 @@ impl PyNativeSession {
 
     #[pyo3(signature = (
         source,
+        index_namespace,
         query,
         index=None,
         column=None,
@@ -721,6 +768,7 @@ impl PyNativeSession {
         &self,
         py: Python<'py>,
         source: &str,
+        index_namespace: Vec<String>,
         query: Vec<f32>,
         index: Option<String>,
         column: Option<String>,
@@ -735,6 +783,7 @@ impl PyNativeSession {
         let query_runtime = Arc::clone(&runtime);
         let request = search_request(
             source,
+            index_namespace,
             query,
             index,
             column,
@@ -758,6 +807,7 @@ impl PyNativeSession {
 
     #[pyo3(signature = (
         source,
+        index_namespace,
         query,
         index=None,
         column=None,
@@ -774,6 +824,7 @@ impl PyNativeSession {
         &self,
         py: Python<'py>,
         source: &str,
+        index_namespace: Vec<String>,
         query: Vec<f32>,
         index: Option<String>,
         column: Option<String>,
@@ -790,6 +841,7 @@ impl PyNativeSession {
         let query_runtime = Arc::clone(&runtime);
         let request = search_request(
             source,
+            index_namespace,
             query,
             index,
             column,
@@ -833,6 +885,7 @@ impl PyNativeSession {
 
     #[pyo3(signature = (
         source,
+        index_namespace,
         query,
         index=None,
         column=None,
@@ -847,6 +900,7 @@ impl PyNativeSession {
         &self,
         py: Python<'_>,
         source: &str,
+        index_namespace: Vec<String>,
         query: Vec<f32>,
         index: Option<String>,
         column: Option<String>,
@@ -860,6 +914,7 @@ impl PyNativeSession {
         let runtime = Arc::clone(&self.runtime);
         let request = search_request(
             source,
+            index_namespace,
             query,
             index,
             column,

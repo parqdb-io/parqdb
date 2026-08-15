@@ -328,6 +328,20 @@ impl IndexCatalog for SqliteCatalog {
             .collect()
     }
 
+    fn list_all(&self) -> Result<Vec<IndexIdentifier>> {
+        let connection = self.connection()?;
+        let mut statement =
+            connection.prepare("SELECT namespace, name FROM indexes ORDER BY namespace, name")?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|(namespace, name)| IndexIdentifier::new(serde_json::from_str(&namespace)?, name))
+            .collect()
+    }
+
     fn list_tombstones(&self) -> Result<Vec<CatalogTombstone>> {
         let connection = self.connection()?;
         let mut statement = connection.prepare(

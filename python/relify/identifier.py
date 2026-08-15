@@ -23,3 +23,8 @@ class TableIdentifier:
             not isinstance(segment, str) or not segment for segment in self.namespace
         ):
             raise ValueError("namespace must contain non-empty string segments")
+
+    @property
+    def index_namespace(self) -> tuple[str, ...]:
+        """Catalog namespace used by indexes owned by this table."""
+        return (self.catalog, *self.namespace, self.name)

@@ -5,7 +5,13 @@ from pathlib import Path
 import pyarrow.parquet as pq
 import pytest
 import relify
-from _support import build_index, register_source, relation_files, write_vectors
+from _support import (
+    build_index,
+    load_table_index,
+    register_source,
+    relation_files,
+    write_vectors,
+)
 
 
 @pytest.mark.parametrize(
@@ -48,7 +54,9 @@ def test_parquet_source_reference_forms(
 
     hits = session.to_arrow(vectors.search([10.0, 0.0]).nprobes(2).limit(2))
     assert hits["id"].to_pylist() == [2, 3]
-    snapshot = session.indexes.load("vectors_embedding").metadata["snapshots"][0]
+    snapshot = load_table_index(session, vectors, "vectors_embedding").metadata[
+        "snapshots"
+    ][0]
     source_uri = snapshot["source"]["uri"]
     assert source_uri.startswith("file://")
     assert source_uri.endswith("/") == reference_kind.startswith("directory")
@@ -74,7 +82,9 @@ def test_zstd_writer_options_reach_every_index_relation(tmp_path: Path) -> None:
         ),
     )
 
-    snapshot = session.indexes.load("vectors_embedding").metadata["snapshots"][0]
+    snapshot = load_table_index(session, vectors, "vectors_embedding").metadata[
+        "snapshots"
+    ][0]
     for role, reference in snapshot["index-relations"].items():
         paths = relation_files(reference)
         if role == "ivf_postings":
@@ -102,7 +112,9 @@ def test_postings_row_groups_default_to_bounded_average_cluster_size(
     vectors = register_source(session, source)
     build_index(vectors, nlist=2)
 
-    snapshot = session.indexes.load("vectors_embedding").metadata["snapshots"][0]
+    snapshot = load_table_index(session, vectors, "vectors_embedding").metadata[
+        "snapshots"
+    ][0]
     postings = snapshot["index-relations"]["ivf_postings"]
     row_groups = [
         parquet_file.metadata.row_group(row_group)
@@ -140,7 +152,9 @@ def test_postings_use_one_hive_partitioned_file_per_cluster(tmp_path: Path) -> N
         ),
     )
 
-    snapshot = session.indexes.load("vectors_embedding").metadata["snapshots"][0]
+    snapshot = load_table_index(session, vectors, "vectors_embedding").metadata[
+        "snapshots"
+    ][0]
     postings = snapshot["index-relations"]["ivf_postings"]
     paths = relation_files(postings)
     assert len(paths) == 16
