@@ -74,6 +74,12 @@ Native SQL and vector queries return `ManagedQueryStream`. The stream owns the
 DataFusion stream, cancellation token, and admission permit. Exhaustion,
 explicit close, cancellation, or Arrow reader destruction releases the permit.
 
+The network boundary uses the Arrow IPC streaming format. Encoding pulls one
+record batch at a time and emits bounded byte chunks through a shared executor.
+The native incremental decoder accepts arbitrary transport boundaries, returns
+at most one batch per pull, and bounds each incomplete IPC frame. Neither side
+collects a complete result before forwarding it.
+
 Centroid routing uses a bounded native matrix path for ordinary indexes and a
 relational path for larger matrices. Selected cluster IDs become static
 postings predicates. Hive-style `cid=<value>` partitions allow file pruning

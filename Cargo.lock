@@ -4615,6 +4615,7 @@ name = "relify-python"
 version = "0.1.0-rc.2"
 dependencies = [
  "arrow",
+ "arrow-ipc",
  "datafusion-python",
  "futures",
  "pyo3",

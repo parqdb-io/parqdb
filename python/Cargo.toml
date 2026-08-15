@@ -15,6 +15,7 @@ workspace = true
 
 [dependencies]
 arrow.workspace = true
+arrow-ipc.workspace = true
 datafusion-python.workspace = true
 futures.workspace = true
 pyo3 = { workspace = true, features = ["abi3-py310", "extension-module"] }
