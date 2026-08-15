@@ -2,6 +2,8 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parallite::ParalliteContext;
@@ -13,7 +15,6 @@ use relify_meta::{
     DistanceMetric, IVF_CLUSTERING_PROFILE_VERSION, PostingEncoding, RelationReference,
     SharedIvfDescriptor, SharedIvfMetadata, SharedIvfReference,
 };
-use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use super::LocalSession;
@@ -46,8 +47,8 @@ struct SharedIvfBuildContext<'a> {
 }
 
 struct ClaimHeartbeat {
-    stop: oneshot::Sender<()>,
-    task: tokio::task::JoinHandle<relify_catalog::Result<()>>,
+    stop: Sender<()>,
+    task: JoinHandle<relify_catalog::Result<()>>,
 }
 
 /// Resource options for one local index build.
@@ -351,14 +352,20 @@ impl LocalSession {
         claim: SharedIvfClaim,
         context: &mut SharedIvfBuildContext<'_>,
     ) -> Result<ResolvedSharedIvf> {
-        let heartbeat = ClaimHeartbeat::start(Arc::clone(&self.catalog), claim.clone());
-        let artifact_uuid = Uuid::new_v4();
-        let artifact_root = self
-            .warehouse
-            .location(&format!("indexes/{}/1", artifact_uuid.simple()), true)?;
-        context.build_lease.add_snapshot_root(&artifact_root)?;
-        let centroids_location = child_location(&artifact_root, "ivf_centroids", true)?;
+        let heartbeat = match ClaimHeartbeat::start(Arc::clone(&self.catalog), claim.clone()) {
+            Ok(heartbeat) => heartbeat,
+            Err(error) => {
+                let _ = self.catalog.abandon_shared_ivf(&claim, &error.to_string());
+                return Err(error);
+            }
+        };
         let result: Result<ResolvedSharedIvf> = async {
+            let artifact_uuid = Uuid::new_v4();
+            let artifact_root = self
+                .warehouse
+                .location(&format!("indexes/{}/1", artifact_uuid.simple()), true)?;
+            context.build_lease.add_snapshot_root(&artifact_root)?;
+            let centroids_location = child_location(&artifact_root, "ivf_centroids", true)?;
             let trained = train_prepared_ivf(context.prepared, context.parallel, context.progress)?;
             write_ivf_centroids(
                 &self.parquet,
@@ -402,7 +409,7 @@ impl LocalSession {
             })
         }
         .await;
-        let heartbeat_result = heartbeat.stop().await;
+        let heartbeat_result = heartbeat.stop();
         match result {
             Ok(shared) => {
                 // Publication clears the owner. A simultaneous heartbeat may
@@ -433,26 +440,31 @@ impl LocalSession {
 }
 
 impl ClaimHeartbeat {
-    fn start(catalog: Arc<dyn IndexCatalog>, claim: SharedIvfClaim) -> Self {
-        let (stop, mut stopped) = oneshot::channel();
-        let task = tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    _ = &mut stopped => return Ok(()),
-                    () = tokio::time::sleep(SHARED_IVF_RENEW_INTERVAL) => {
-                        catalog.renew_shared_ivf_claim(&claim, SHARED_IVF_LEASE_MS)?;
+    fn start(catalog: Arc<dyn IndexCatalog>, claim: SharedIvfClaim) -> Result<Self> {
+        let (stop, stopped) = mpsc::channel();
+        let task = thread::Builder::new()
+            .name("relify-shared-ivf-heartbeat".into())
+            .spawn(move || {
+                loop {
+                    match stopped.recv_timeout(SHARED_IVF_RENEW_INTERVAL) {
+                        Ok(()) | Err(RecvTimeoutError::Disconnected) => return Ok(()),
+                        Err(RecvTimeoutError::Timeout) => {
+                            catalog.renew_shared_ivf_claim(&claim, SHARED_IVF_LEASE_MS)?;
+                        }
                     }
                 }
-            }
-        });
-        Self { stop, task }
+            })
+            .map_err(|error| {
+                Error::InvalidArgument(format!("failed to start shared IVF heartbeat: {error}"))
+            })?;
+        Ok(Self { stop, task })
     }
 
-    async fn stop(self) -> Result<()> {
+    fn stop(self) -> Result<()> {
         let _ = self.stop.send(());
-        self.task.await.map_err(|error| {
-            Error::InvalidArgument(format!("shared IVF heartbeat failed: {error}"))
-        })??;
+        self.task
+            .join()
+            .map_err(|_| Error::InvalidArgument("shared IVF heartbeat thread panicked".into()))??;
         Ok(())
     }
 }
