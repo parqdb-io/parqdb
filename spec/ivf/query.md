@@ -1,158 +1,105 @@
 # IVF Query Spec
 
-## Overview
+## 1. Inputs
 
-This spec defines query semantics for IVF
-[schema version 1](index-schema.md) and
-[schema version 2](index-schema-v2.md). It does not prescribe SQL syntax,
-functions, operators, or an execution strategy.
-
-## Inputs
-
-| Input | Type | Description |
+| Input | Type | Definition |
 |---|---|---|
-| `query-vector` | `list<float>` | Query vector. |
+| `query-vector` | `list<float>` or `list<double>` | Query vector. |
 | `nprobe` | positive integer | Number of clusters to search. |
 | `k` | positive integer | Maximum result count. |
-| `filter` | optional row predicate | Source rows eligible for the result. |
-| `projection` | optional list of source field names | Source fields returned before `_distance`. |
+| `filter` | optional row predicate | Source rows eligible before Top-K. |
+| `projection` | optional source field list | Fields returned before `_distance`. |
 
-`query-vector` must be non-null, contain exactly `dimension` finite values, and
-have required elements. `nprobe` must be in `[1, nlist]`, and `k` must be
-positive. When supplied, `projection` must be non-empty, contain no duplicate
-names, and reference source fields only. When omitted, it is the source schema
-fields in schema order.
+The query vector is non-null and contains exactly `dimension` non-null values
+that produce finite canonical `float` values. `nprobe` is in `[1, nlist]`, and
+`k` is positive. A projection is non-empty, contains no duplicates, and names
+source fields only. An omitted projection selects all source fields in schema
+order. A filter references source fields only; a row is eligible only when the
+predicate evaluates to `true`, while `false` and `null` both exclude it.
 
-The representation of `filter` is an API or protocol concern and is not
-specified here. It may reference source columns only. A source row is eligible
-when the predicate evaluates to `true`; `false` and `null` both exclude the
-row.
+## 2. Search
 
-## Candidate Vector
+A query:
 
-The index schema and posting encoding determine the vector used to rank each
-candidate:
+1. converts the query vector to canonical `float` values;
+2. normalizes it when the metric is `cosine`;
+3. selects `nprobe` centroids ordered by squared-L2 distance and then `cid`;
+4. reads postings in the selected clusters;
+5. resolves source rows required by source encoding, filtering, or projection;
+6. applies the optional source predicate;
+7. computes candidate distance from the representation defined below;
+8. retains at most `k` rows ordered by distance; and
+9. returns projected source fields followed by `_distance`.
 
-| Schema | Posting configuration | Candidate vector |
-|---|---|---|
-| v1 | `store_vectors = false` | Exact vector from the source row. |
-| v1 | `store_vectors = true` | Exact `ivf_postings.vector`. |
-| v2 | `posting_encoding = source` | Exact vector from the source row. |
-| v2 | `posting_encoding = flat` | Exact `ivf_postings.vector`. |
-| v2 | `posting_encoding = lvq4` or `lvq8` | Reconstructed vector `x_hat` defined by schema v2. |
+When fewer than `k` eligible candidates exist, all are returned. Setting
+`nprobe = nlist` evaluates every indexed source row, although LVQ distances
+remain approximate. Equal final distances have unspecified order.
 
-An LVQ candidate vector is an approximation of the source vector. Search does
-not rerank LVQ candidates against the source vector.
+## 3. Candidate Distance
 
-## Search
-
-Given the selected index snapshot, its source table, and its IVF index tables, a
-query:
-
-1. computes the squared Euclidean distance from `query-vector` to every
-   centroid;
-2. selects `nprobe` clusters ordered by `(distance ASC, cid ASC)`;
-3. selects postings whose `cid` belongs to those clusters;
-4. resolves candidate source-key tuples to source rows when required for
-   filtering, the candidate vector, or result fields;
-5. discards candidates whose source rows do not satisfy `filter`, when
-   supplied;
-6. computes squared Euclidean distance from `query-vector` to the candidate
-   vector defined above;
-7. selects at most `k` candidates ordered by `distance ASC`; and
-8. returns the projected source fields in projection order followed by
-   `_distance`.
-
-If selected clusters contain fewer than `k` candidates, all candidates are
-returned. Setting `nprobe = nlist` evaluates every indexed point, but LVQ
-distances remain approximate. The relative order of candidates with equal
-distance is unspecified.
-
-## Distance
-
-For query vector `q` and candidate vector `x` of dimension `D`:
+For `l2_squared`:
 
 ```text
 distance(q, x) = SUM((q[i] - x[i]) * (q[i] - x[i])), i = 0..D-1
 ```
 
-The square root is not computed. Query, centroid, posting-vector, reconstructed,
-and source-vector elements have canonical type `float`, and `_distance` has
-canonical type `float`.
-Intermediate precision, evaluation order, reassociation, and fused operations
-are implementation-specific. Results from different engines need not be
-bit-for-bit identical.
+For `cosine`, source and query vectors are normalized by their L2 norm before
+use, and the reported value is:
 
-A query fails without returning partial results if its final distance is
-non-finite.
+```text
+distance(q, x) = squared_l2(normalize(q), normalize(x)) / 2
+```
 
-## Source Resolution
+For non-zero exact vectors this equals `1 - cosine_similarity(q, x)`. Exact
+source scoring produces a result in `[0, 2]` up to floating-point error:
+orthogonal vectors have distance `1`, and negative similarity produces a value
+greater than `1`. Norms are accumulated with at least binary64 precision over
+canonical `float` elements. Zero norm means every canonical element is zero;
+no epsilon threshold is applied. Normalization must produce finite canonical
+`float` elements or the build or query fails.
+
+Centroids are trained from normalized source vectors but are not guaranteed to
+have unit norm. Routing uses squared-L2 distance to each persisted centroid
+without normalizing it again. LVQ reconstructs `x_hat` from normalized source
+data and reports
+`squared_l2(normalize(q), x_hat) / 2`; `x_hat` is not normalized again and its
+approximate distance is not required to remain in `[0, 2]`.
+
+`source` encoding therefore returns exact distances under the canonical float
+contract. LVQ4 and LVQ8 return approximate distances and do not rerank against
+the source vector.
+
+Intermediate precision and operation order are implementation specific.
+Different engines need not return bit-identical floating-point values. A query
+fails without partial results if a final distance is non-finite.
+
+## 4. Source Resolution
 
 ```text
 ivf_postings.(key_1, ..., key_K)
     -> source[source-key-fields]
 ```
 
-The ordered posting fields `key_1` through `key_K` correspond to
-`source-key-fields` in the same order. Every candidate must resolve to exactly
-one source row.
+Every candidate resolves to exactly one source row. Implementations may defer
+source resolution until after Top-K when neither source encoding nor a source
+filter requires the row earlier.
 
-Source resolution is part of the query. Callers are not required to join
-postings to the source table. An implementation may elide source resolution
-when no source-row filter requires it and the projection contains only
-source-key fields. The vector field may also be returned without source
-resolution when the posting contains its exact value.
+## 5. Result
 
-## Result
+The result contains projected source fields in projection order followed by a
+required `float` field named `_distance`. Source field names, canonical types,
+nullability, and values are preserved.
 
-The result contains the source fields selected by `projection`, in projection
-order, followed by non-null `float` `_distance`. When `projection` is omitted,
-the result contains every source field in source schema order followed by
-`_distance`. Source names, canonical types, nullability, and values are
-preserved.
+Post-search relational filtering, joins, and aggregation operate on this
+result and are distinct from the optional pre-Top-K source filter.
 
-`_distance` contains the distance to the candidate vector. It is exact for
-`source` and `flat` representations and approximate for LVQ representations.
-The result is ordered by `distance ASC`. The relative order of rows with equal
-distance is unspecified.
+## Appendix A: Example
 
-Callers may apply ordinary relational projection, filtering, joins, and
-aggregation to the result. Such filtering is post-search and may return fewer
-than `k` rows; it is distinct from the optional source-row filter, which is
-applied before Top-K.
+For centroids `[0.5, 0.0]` and `[10.0, 0.0]`, source vectors `[0.0, 0.0]`,
+`[1.0, 0.0]`, and `[10.0, 0.0]`, query `[0.0, 0.0]`, `nprobe = 1`, and
+`k = 2`, cluster `0` is selected. Source encoding returns:
 
-## Appendix A: Query Example
-
-The following non-normative example uses `dimension = 2`, `nlist = 2`, and
-`ntotal = 3`.
-
-Source table:
-
-| `document_id` | `embedding` |
+| source key | `_distance` |
 |---|---|
-| `a` | `[0.0, 0.0]` |
-| `b` | `[1.0, 0.0]` |
-| `c` | `[10.0, 0.0]` |
-
-`ivf_centroids`:
-
-| `cid` | `centroid` |
-|---|---|
-| `0` | `[0.5, 0.0]` |
-| `1` | `[10.0, 0.0]` |
-
-Schema v1 `ivf_postings` with `store_vectors = true`:
-
-| `cid` | `key_1` | `vector` |
-|---|---|---|
-| `0` | `a` | `[0.0, 0.0]` |
-| `0` | `b` | `[1.0, 0.0]` |
-| `1` | `c` | `[10.0, 0.0]` |
-
-For `query-vector = [0.0, 0.0]`, `nprobe = 1`, and `k = 2`, cluster `0` is
-selected. The result is:
-
-| `document_id` | `embedding` | `_distance` |
-|---|---|---|
-| `a` | `[0.0, 0.0]` | `0.0` |
-| `b` | `[1.0, 0.0]` | `1.0` |
+| `a` | `0.0` |
+| `b` | `1.0` |

@@ -102,11 +102,11 @@ sequence number may exceed `last-sequence-number`. Snapshot IDs identify
 logical states; sequence numbers order commits. The two values are independent,
 and the order of `snapshots` has no semantic meaning.
 
-Format version 1 defines relation profiles `parquet` and `iceberg`, index family
-`ivf`, and metric `l2_squared`. An index-family spec defines its supported
-schema versions, parameter syntax, and index-table roles. Missing required roles
-are invalid; unknown roles are allowed only when that family declares them
-optional.
+Format version 1 defines relation profiles `parquet` and `iceberg` and index
+family `ivf`. The IVF family defines metrics `l2_squared` and `cosine`. An
+index-family spec defines its supported schema versions, metrics, parameter
+syntax, and index-table roles. Missing required roles are invalid; unknown
+roles are allowed only when that family declares them optional.
 
 A reader must reject an unsupported `format-version`, relation profile,
 `index-family`, `index-schema-version`, or metric. It must not substitute a
@@ -260,7 +260,10 @@ catalog:
         "dimension": "2",
         "nlist": "2",
         "ntotal": "3",
-        "store_vectors": "true"
+        "posting_encoding": "source",
+        "shared_ivf_fingerprint": "73a6be1d-5c50-4f9f-a70b-035ca68b105d",
+        "shared_ivf_uuid": "fe985f6d-3592-4385-a1ca-71347057a210",
+        "shared_ivf_metadata_location": "s3://warehouse/relify/shared/fe985f6d/v1.metadata.json"
       },
       "index-relations": {
         "ivf_centroids": {

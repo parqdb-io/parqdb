@@ -143,12 +143,9 @@ Relation profiles:
 IVF:
 
 - [`ivf/index-schema.md`](ivf/index-schema.md)
-- [`ivf/index-schema-v2.md`](ivf/index-schema-v2.md)
 - [`ivf/query.md`](ivf/query.md)
 
 Non-normative test vectors:
 
 - [`fixtures/v1/`](fixtures/v1/): valid and invalid metadata, Parquet tables,
-  and ordered IVF query results for format version 1.
-- [`fixtures/v2/`](fixtures/v2/): LVQ4 and LVQ8 metadata, Parquet tables,
-  encoded bytes, and ordered IVF query results for schema version 2.
+  LVQ codes, and ordered IVF query results for format version 1.

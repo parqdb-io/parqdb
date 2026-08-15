@@ -21,6 +21,7 @@ table contents, and reader-writer coordination.
 | `int` | `INT32` |
 | `long` | `INT64` |
 | `float` | `FLOAT` |
+| `double` | `DOUBLE` |
 | `string` | `BYTE_ARRAY` annotated as `STRING` |
 | `uuid` | `FIXED_LEN_BYTE_ARRAY(16)` annotated as `UUID` |
 | `binary` | Unannotated `BYTE_ARRAY` |
@@ -28,6 +29,7 @@ table contents, and reader-writer coordination.
 | `date` | `INT32` annotated as `DATE` |
 | `list<string>` | Parquet `LIST` with required `STRING` elements |
 | `list<float>` | Parquet `LIST` with required `FLOAT` elements |
+| `list<double>` | Parquet `LIST` with required `DOUBLE` elements |
 | `map<string, string>` | Parquet `MAP` with required `STRING` keys and values |
 | `map<string, long>` | Parquet `MAP` with required `STRING` keys and `INT64` values |
 | `map<string, uuid>` | Parquet `MAP` with required `STRING` keys and UUID-annotated `FIXED_LEN_BYTE_ARRAY(16)` values |
