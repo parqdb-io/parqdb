@@ -40,6 +40,7 @@ References:
 | How does an application select the mode? | `relify.connect` selects embedded or client/server execution from the URI. |
 | Does the mode change user operations? | No. Both modes return the same public `Session`, `SourceTable`, and query types. |
 | Is asynchronous I/O supported? | Yes. `connect_async` provides matching `AsyncSession` and `AsyncSourceTable` facades for both deployment modes. |
+| Which implementation is authoritative? | The asynchronous transport and service path. The synchronous API is a blocking facade over that path, not a second implementation. |
 | Is compute execution a public plugin point? | No. The supported engine is DataFusion. External engines may use the open specification or a reference SQL compiler. |
 | Where is query meaning defined? | A transport-neutral `VectorQuery` or SQL string describes the request. |
 | Where is a request executed? | Both transports invoke the same session-service contract backed by DataFusion. |
@@ -50,8 +51,15 @@ References:
 | Is a catalog object exposed to applications? | No. `Session` provides table registration and discovery; index lifecycle remains table-centered. |
 | What does a path mean in client/server mode? | The execution process resolves it. A server must be able to access every registered URI. |
 | Who owns runtime resources? | Embedded applications own them in process; in client/server mode the server owns them and shares bounded caches across requests. |
+| Are runtime resources owned by a session? | No. A process-scoped `RelifyRuntime` owns shareable execution resources; one or more `LocalSession` instances use it for catalog-scoped execution. |
+| How is query concurrency controlled? | Deployment settings independently limit process workers, per-query DOP, active queries, and queued queries. Remote requests cannot override them. |
 | Does client/server execution require session affinity? | No. Every request carries its query-affecting state. Server runtime state is shared but disposable. |
 | Is the first server horizontally stateless? | No. The first deployment is single-instance because it uses SQLite and process-local build coordination. The protocol does not preserve that limitation. |
+| Where is the first server implemented? | In Python as an ASGI application. It calls the same Python `SessionService` as embedded mode; Rust remains responsible for catalog, storage, planning, and DataFusion execution. |
+| Can clients supply an index builder object? | No. Portable index requests contain only serializable index and writer configuration. Builder selection and resource limits are server responsibilities. |
+| Is an accepted index build durable across server restart? | No. Published indexes are durable, but an in-progress build belongs to the first server process and may be abandoned when it exits. |
+| How are table identifiers encoded on HTTP routes? | The request model carries identifier segments; the route uses the Lance delimiter convention and must decode to the same segments. |
+| Can a remote client register any server-visible path? | No. The server accepts only source URI prefixes allowed by deployment configuration. |
 | How is parity enforced? | One conformance suite runs the same operations against both transports. |
 
 ## API Contract
@@ -133,8 +141,8 @@ transport.
 
 Not exposing a catalog object does not remove the catalog boundary. The first
 implementation keeps SQLite as the embedded authority for source definitions,
-index metadata pointers, build state, and reusable artifact records. A future
-server may replace it with a transactional shared implementation without
+published index metadata pointers, and reusable published artifact records. A
+future server may replace it with a transactional shared implementation without
 changing `Session` or `SourceTable`.
 
 #### Table and index lifecycle
@@ -155,10 +163,31 @@ Index metadata publication remains an internal catalog responsibility. Users
 address indexes through their source table rather than manipulating catalog
 records or metadata locations.
 
+The portable index-construction signature is:
+
+```python
+table.create_index(
+    index,
+    *,
+    column,
+    key,
+    config,
+    writer_options=None,
+)
+```
+
+`config` and `writer_options` are immutable, serializable values. The portable
+API has no `builder` argument. In particular, a Python `IndexBuilder` or a local
+thread-pool object cannot cross the transport boundary. The service selects an
+installed implementation from the index configuration; build concurrency,
+worker count, and memory limits are deployment settings. A future extension may
+name a server-installed implementation with a string identifier, but it must
+not transfer executable client objects.
+
 #### Query construction
 
 `VectorQuery` remains an immutable, transport-independent value and supports the
-same builder operations in both modes:
+same query modifiers in both modes:
 
 | API | Meaning |
 | --- | --- |
@@ -225,6 +254,11 @@ Methods that only construct immutable queries remain synchronous. Operations
 that access the catalog, submit work, wait for builds, or consume results are
 awaitable.
 
+The asynchronous implementation is authoritative for both transports. The
+synchronous `Session` and `SourceTable` APIs invoke the same asynchronous
+service through a private, long-lived blocking bridge. They do not maintain a
+second service implementation or create a new event loop for each operation.
+
 `AsyncSession.stream` returns an asynchronous iterator of
 `pyarrow.RecordBatch` values rather than pretending that the synchronous
 `pyarrow.RecordBatchReader` is awaitable. Cancelling the consuming task or
@@ -232,11 +266,18 @@ closing the iterator cancels the HTTP request and propagates cancellation to
 query execution.
 
 Index construction is asynchronous at the server as well. Calling
-`await table.create_index(...)` returns after the build has been durably
-accepted, not after it has completed. Calling
+`await table.create_index(...)` returns after the live server's build
+coordinator has accepted the request, not after it has completed. Calling
 `await table.wait_for_index(...)` polls the same index status operation used by
 the synchronous API without blocking the event loop. The first protocol does
 not require WebSocket or server-sent-event state.
+
+Acceptance is process-scoped in the first server. A server exit may abandon an
+in-progress initial build, after which the index is not found, or an in-progress
+refresh, after which the previously published snapshot remains ready. Partial
+unpublished objects are handled by normal orphan cleanup. Published index
+metadata is durable; the first release does not claim durable job queuing,
+automatic build resumption, or persistent failure history.
 
 ### Reference SQL compiler
 
@@ -296,6 +337,42 @@ operation:
 need one source in both modes should use a shared URI or mount the same path in
 the server environment.
 
+Embedded mode applies the permissions of the application process. Client/server
+mode additionally applies a deployment-configured allowlist of canonical source
+URI prefixes. Bare paths and `file` URIs are rejected unless they resolve below
+an allowed file root. Object-store URIs must match an allowed prefix, and clients
+cannot attach storage credentials to a registration request. Credentials,
+custom endpoints, and network access are configured by the server. The default
+server allowlist is empty; a deployment must explicitly expose each source root.
+
+### HTTP wire models
+
+Service requests use typed values in process and JSON-compatible OpenAPI models
+over HTTP. The HTTP adapter is the only layer that encodes or decodes wire
+representations.
+
+A table identifier is an ordered array of namespace segments followed by the
+table name. The server catalog is selected by the connection and is not repeated
+in every route. HTTP paths follow the Lance delimiter convention: segments are
+joined with the `delimiter` query parameter, whose default is `$`, and each path
+value is percent-encoded. A client must select a delimiter absent from the
+segments. If an identifier is present in both the route and JSON body, the two
+decoded segment arrays must match or the server returns `400 Bad Request`.
+
+Portable request models contain no Python, PyArrow, or DataFusion objects:
+
+- `VectorQuery`, index configuration, and writer options use JSON scalars,
+  arrays, and tagged objects;
+- an optional Arrow schema is encoded as an Arrow IPC schema message in an
+  OpenAPI `string` with `byte` format;
+- partition-column types use the same IPC schema representation; and
+- file sort order contains field-name strings only.
+
+The in-process transport constructs the same service models without base64 or
+JSON conversion. The OpenAPI document is therefore generated from or checked
+against the service operation models rather than maintained as an unrelated set
+of HTTP structs.
+
 ### HTTP protocol
 
 Relify follows the Lance REST Catalog's operation-oriented protocol design
@@ -303,6 +380,10 @@ rather than translating the API into generic CRUD resources. Every public
 operation has one transport-neutral request and response model. The embedded
 transport calls that operation directly; the HTTP transport serializes the same
 model as JSON or Arrow IPC.
+
+This is a route-design precedent, not protocol compatibility. Relify operates
+on registered external sources, open Relify indexes, vector queries, and SQL;
+it does not implement Lance table, version, transaction, or query models.
 
 Routes include the table identifier whenever an operation is table-scoped. This
 lets a reverse proxy perform routing, authentication, authorization, and
@@ -323,12 +404,19 @@ uses these routes:
 | Refresh an index | `POST /v1/table/{id}/index/{index_name}/refresh` | JSON |
 | Drop an index | `POST /v1/table/{id}/index/{index_name}/drop` | JSON |
 
+`GET /v1/table` lists tables across the catalog bound to the server. Its HTTP
+model supports `page_token`, `limit`, and `delimiter`; the Python
+`session.list_tables()` convenience method follows pages and returns the full
+list. Namespace-scoped list routes may be added when namespace management
+becomes a public capability.
+
 `POST /v1/table/{id}/query` accepts the JSON representation of `VectorQuery`.
 `POST /v1/sql` accepts a SQL statement because a join or CTE may not have one
 table that can be named in the route. Both return
 `application/vnd.apache.arrow.stream`. Index construction remains asynchronous;
-the create or refresh response acknowledges the build, and clients poll the
-index stats operation when implementing `wait_for_index`.
+the create or refresh response acknowledges acceptance by the live build
+coordinator, and clients poll the index stats operation when implementing
+`wait_for_index`.
 
 The HTTP API is specified with OpenAPI 3.1. Authentication uses standard HTTP
 headers, and a request identifier is returned in a response header. API version
@@ -347,15 +435,18 @@ flowchart LR
     T -->|embedded| I["InProcessTransport"]
     T -->|client/server| H["HttpTransport"]
 
-    I --> S["SessionService"]
+    I --> S["Python SessionService"]
     H --> N["HTTP with JSON and Arrow IPC"]
-    N --> R["Relify Server"]
+    N --> R["Python ASGI Server"]
     R --> S
 
-    S --> L["DataFusion Execution"]
-    L --> C["Catalog and Warehouse"]
-    L --> E["DataFusion Runtime"]
-    E --> P["Shared Bounded Caches"]
+    S --> L["Rust _NativeSession"]
+    L --> LS["LocalSession"]
+    LS --> C["Catalog and Warehouse"]
+    LS --> E["DataFusion SessionContext"]
+    LS --> RT["RelifyRuntime"]
+    RT --> RE["DataFusion RuntimeEnv"]
+    RT --> P["Shared Execution Resources"]
 ```
 
 `SessionTransport` is a private client-side boundary. It translates public
@@ -368,9 +459,104 @@ through `HttpTransport`. Validation, index selection, planning, and error
 classification happen behind this boundary once, rather than being duplicated
 in a remote client.
 
+### First implementation boundary
+
+The first `SessionService` is a Python component. It owns operation validation,
+portable request and response models, table-centered lifecycle orchestration,
+and exception classification. `InProcessTransport` invokes it directly. The
+server is a Python ASGI application whose handlers decode HTTP requests, invoke
+the same service, and encode its responses. The ASGI framework is private
+implementation detail and is not part of the client API.
+
+Rust remains the execution boundary. The service delegates catalog and storage
+operations, query resolution and planning, index construction, and DataFusion
+execution to `_NativeSession`. These native operations expose the asynchronous
+Rust `LocalSession` methods as Python awaitables; they must not call
+`runtime.block_on` on the ASGI event loop. Query execution crosses back into
+Python as an incremental asynchronous Arrow RecordBatch stream rather than a
+collected table.
+
+This boundary minimizes the first implementation: it extracts the orchestration
+already present in the Python `Session` instead of rewriting it as a Rust server
+before the protocol is proven. A future native server may implement the same
+service operation models, but replacing the private host must not change the
+OpenAPI contract or public Python facades.
+
+### Runtime and session ownership
+
+Relify uses the same execution objects in embedded and client/server modes. It
+does not introduce a separate server runtime:
+
+```text
+RelifyRuntime (process scoped)
+  -> DataFusion RuntimeEnv, worker and memory pools
+  -> query admission, waiting queue, and shared Page-cache budget
+
+LocalSession (catalog scoped)
+  -> catalog, warehouse, and DataFusion SessionContext
+  -> source bindings, index repository, provider caches, and build coordination
+
+QueryContext (request scoped)
+  -> query options, deadline, cancellation, and request identity
+```
+
+`RelifyRuntime` contains only resources that are safe to share between
+independent sessions. `LocalSession` contains state whose meaning depends on one
+catalog and warehouse. A `QueryContext` is created for each operation and is
+discarded when that operation completes.
+
+An embedded connection creates a runtime and a local session by default. A
+server creates them once during startup and shares them across requests. A
+future process may attach multiple `LocalSession` instances to one
+`RelifyRuntime`; this ownership model does not require that capability to be a
+public API in the first release.
+
+### Server asynchronous execution
+
+One ASGI process accepts concurrent requests on an event loop. Each query
+passes through the `RelifyRuntime` admission controller before planning. An
+admitted query awaits asynchronous planning and pulls the result one
+RecordBatch at a time. DataFusion performs storage I/O and parallel execution
+on the shared Rust runtime; CPU work does not run on the ASGI event loop.
+Awaiting each HTTP write provides backpressure, so a slow client does not cause
+the server to collect the remaining result in memory.
+
+The first scheduler has five process-level settings:
+
+| Setting | Meaning |
+| --- | --- |
+| `relify.execution.worker_threads` | Number of worker threads shared by all queries. Defaults to the CPU capacity visible to the process. |
+| `relify.execution.query_dop` | Maximum execution parallelism of one query. |
+| `relify.execution.query_concurrency` | Maximum number of admitted queries, including queries waiting for I/O or client consumption. |
+| `relify.execution.query_queue_capacity` | Maximum number of additional queries waiting for admission. |
+| `relify.execution.query_queue_timeout` | Maximum time a query may wait for admission. |
+
+`query_dop` and `query_concurrency` are independent. For example, a runtime with
+32 workers may admit 16 queries with a DOP of 4. The queries share the 32-worker
+pool; they do not reserve 64 physical threads. This controlled oversubscription
+allows another query to use CPU while some queries wait for storage I/O. A
+conservative default for `query_concurrency` is
+`max(1, worker_threads / query_dop)`, but a deployment may raise it without
+changing either worker count or per-query DOP.
+
+When active query count reaches `query_concurrency`, new queries enter a bounded
+FIFO queue before planning. A request is rejected when the queue reaches
+`query_queue_capacity`, and a queued request fails when its queue timeout or
+client deadline expires. Cancelling a queued request removes it without
+starting query work.
+
+Cancellation of the request cancels its `QueryContext`, drops the DataFusion
+stream, and releases its active-query slot. The slot remains held until the
+result stream finishes, closes, or is cancelled. Index builds use a separate
+bounded coordinator rather than detached per-request tasks. The first
+deployment uses one ASGI worker process because additional worker processes
+would create independent runtimes and duplicate caches; DataFusion can still
+use multiple CPU cores within that process.
+
 ### Server state and horizontal scaling
 
-One server process owns a database runtime containing:
+One server process owns one `RelifyRuntime` and one long-lived `LocalSession`.
+Together they contain:
 
 - the catalog and warehouse configuration;
 - the DataFusion worker pool and memory pool;
@@ -382,8 +568,8 @@ The first server deployment has two classes of state:
 
 | State | Examples | Authority |
 | --- | --- | --- |
-| Durable | Source registrations, index metadata locations, centroid artifacts, and build state. | Catalog and published storage. |
-| Disposable | DataFusion runtime, active queries, Page cache, and metadata, manifest, and centroid caches. | One server process. |
+| Durable | Source registrations, published index metadata locations, and reusable published centroid artifacts. | Catalog and published storage. |
+| Disposable | DataFusion runtime, active queries and builds, build progress, Page cache, and metadata, manifest, and centroid caches. | One server process. |
 
 Correctness must not depend on disposable state. Restarting the server may make
 the next query cold, but the server reconstructs published tables and indexes
@@ -393,8 +579,8 @@ The client-side `Session` is a connection facade, not a promise of mutable
 server-side session state. Every request carries all query-affecting options.
 The portable API does not include SQL variables, temporary tables, or
 connection-local UDFs, so requests do not require routing back to one server.
-Persistent source registration and index lifecycle operations update the
-durable catalog explicitly.
+Persistent source registration and published index lifecycle operations update
+the durable catalog explicitly.
 
 The server, rather than an untrusted client, controls process-wide settings
 such as worker count, memory-pool size, cache capacity, storage credentials,
@@ -405,10 +591,10 @@ local DataFusion settings from a remote client.
 
 The first implementation is single-instance because SQLite and the current
 build coordinator are not shared coordination services. A future stateless
-deployment replaces them with a transactional shared catalog and durable build
-claims while keeping source and index data in shared storage. Multiple server
-replicas may then keep independent disposable caches behind a load balancer;
-the Python API and request protocol do not change.
+deployment replaces them with a transactional shared catalog, a durable job
+queue, and leased build claims while keeping source and index data in shared
+storage. Multiple server replicas may then keep independent disposable caches
+behind a load balancer; the Python API and request protocol do not change.
 
 ## Request Execution
 
@@ -455,10 +641,23 @@ HTTP errors use the status code plus a JSON body containing a stable Relify erro
 code, a safe message, and the request identifier. Python client code must not
 need to catch HTTP-library exceptions for ordinary Relify failures.
 
-Client deadlines and cancellation propagate to query execution. Disconnecting
-a client releases its result stream and query state, but does not implicitly
-cancel an index build that has already been accepted. Build status remains
-observable through the index lifecycle API.
+Validation, catalog lookup, and query planning complete before the server starts
+an Arrow response. Failures during that phase use the normal JSON error model.
+After the response headers and Arrow schema have been sent, the protocol cannot
+replace the response with JSON. A later execution failure terminates the IPC
+stream. The SDK converts a truncated or invalid stream into a Relify stream
+execution error carrying the response request identifier; detailed internal
+diagnostics remain in the server log under that identifier.
+
+Each query response owns one managed query stream. Closing the synchronous
+`RecordBatchReader`, closing an asynchronous iterator, cancelling its consuming
+task, reaching a client deadline, or disconnecting the HTTP request closes that
+managed stream. The ASGI adapter must observe disconnects and drop the underlying
+DataFusion stream so that its execution task and query state are released. The
+first protocol does not add a separate cancel endpoint.
+
+Query cancellation does not cancel an index build that the coordinator has
+accepted. Build status remains observable while that server process is alive.
 
 Transport failures such as an unreachable server are exposed as a dedicated
 Relify availability error with the original transport error as its cause.
@@ -490,6 +689,18 @@ The client/server suite also restarts the server after registration and index
 publication. The same table and index must remain queryable without preserving
 the previous process caches or a server-side session token.
 
+Protocol tests round-trip identifiers containing multiple namespace segments
+and reserved URL characters, reject route/body identifier mismatches, reject
+sources outside the configured URI allowlist, and preserve explicit Arrow
+schemas through registration. Streaming tests cover planning errors before
+headers, execution errors after the Arrow schema, early reader close, client
+disconnect, and deadline expiry.
+
+An in-progress-build restart test verifies the deliberately weaker first-release
+contract: an unpublished initial build is absent after restart, an interrupted
+refresh leaves its previous snapshot queryable, and neither operation exposes a
+partially published index.
+
 The public Python types returned by `connect`, `table`, `search`, and `sql` are
 the same in both modes. Transport implementations remain private.
 
@@ -501,11 +712,14 @@ The public facade is extracted before networking is added:
    `SourceTable` facades;
 2. remove the backend registry, plugin API, capability matrix, and bundled
    Spark and StarRocks sessions;
-3. move current DataFusion behavior behind `SessionService` and
+3. remove the public `builder` object argument and move installed builder
+   selection behind the service;
+4. move current DataFusion behavior behind the Python `SessionService` and
    `InProcessTransport`;
-4. make `VectorQuery` and SQL strings the only inputs to portable terminals;
-5. run the existing local suite through the facade; and
-6. add `HttpTransport` and the server without changing application code.
+5. make `VectorQuery` and SQL strings the only inputs to portable terminals;
+6. run the existing local suite through the facade; and
+7. add `HttpTransport` and the Python ASGI server without changing application
+   code.
 
 This is a deliberate pre-1.0 API correction. Compatibility aliases may be
 kept for `collect` and `to_arrow`, but DataFusion object inheritance must not be
@@ -565,6 +779,7 @@ This RFC does not define:
 
 - distributed or multi-node query execution;
 - high availability or server failover;
+- durable queuing or resumption of in-progress index builds;
 - multi-tenant database isolation;
 - client-side local-file upload;
 - mutable server-side SQL session state;
