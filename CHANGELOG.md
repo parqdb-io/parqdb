@@ -19,6 +19,8 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   comparisons.
 - Native, process-scoped index build coordination with observable status,
   bounded parallelism, failure retention, and retry.
+- Bounded incremental Arrow IPC encoding and decoding with transport-level
+  backpressure and no full-result buffering.
 
 ### Changed
 

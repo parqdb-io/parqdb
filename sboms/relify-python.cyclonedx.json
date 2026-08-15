@@ -18742,6 +18742,7 @@
     },
     {
       "dependsOn": [
+        "pkg:cargo/arrow-ipc@58.4.0",
         "pkg:cargo/arrow@58.4.0",
         "pkg:cargo/datafusion-python@54.0.0",
         "pkg:cargo/futures@0.3.33",
@@ -20208,7 +20209,7 @@
     "properties": [
       {
         "name": "relify:cargo-lock-sha256",
-        "value": "ac67cba3c28b8a67a8655b922e3beb61c9819e74e12afacf4b6de6059f9745a3"
+        "value": "1a89cec291fea029bed712e5e666ab697492c3ecebe66a2df88065ec889e4fbf"
       }
     ]
   },
