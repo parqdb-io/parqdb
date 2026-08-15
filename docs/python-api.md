@@ -79,9 +79,11 @@ documents.wait_for_index(
 )
 ```
 
-`create_index` submits work to the installed local build coordinator. The
-client does not pass executable builder objects. Omitting `wait_timeout` returns
-after submission; passing it combines submission and waiting in one call.
+`create_index` submits work to the native, process-scoped build coordinator.
+The client does not pass executable builder objects. Omitting `wait_timeout`
+returns after submission; passing it combines submission and waiting in one
+call. Accepted work is independent of the waiting client, but does not survive
+a process restart.
 
 Supported `IVF.encoding` values are:
 

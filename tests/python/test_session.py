@@ -126,6 +126,20 @@ def test_async_facade_matches_portable_embedded_operations(tmp_path: Path) -> No
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "CREATE TABLE forbidden (value BIGINT)",
+        "SET datafusion.execution.target_partitions = 1",
+    ],
+)
+def test_portable_sql_is_read_only(tmp_path: Path, sql: str) -> None:
+    session = relify.connect(tmp_path / "read-only-sql")
+
+    with pytest.raises(relify.InvalidArgumentError, match="SQL execution is read-only"):
+        session.sql(sql)
+
+
 def test_query_runtime_settings_apply_at_session_creation(tmp_path: Path) -> None:
     config = (
         relify.SessionConfig()
@@ -222,6 +236,13 @@ def test_session_rejects_invalid_datafusion_initialization_options(
 ) -> None:
     with pytest.raises(TypeError, match=expected):
         relify.connect(tmp_path / name, **cast(Any, {name: value}))
+
+
+def test_session_rejects_zero_build_dop(tmp_path: Path) -> None:
+    config = relify.SessionConfig().set("relify.build.dop", "0")
+
+    with pytest.raises(relify.InvalidArgumentError, match=r"relify\.build\.dop"):
+        relify.connect(tmp_path / "zero-build-dop", config=config)
 
 
 def test_table_only_resolves_registered_names(tmp_path: Path) -> None:

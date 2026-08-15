@@ -2,6 +2,31 @@ use relify_catalog::IndexIdentifier;
 use std::time::Duration;
 use thiserror::Error;
 
+/// Stable error category retained for a completed background build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuildFailureKind {
+    /// Invalid request or configuration.
+    InvalidArgument,
+    /// Invalid source or index schema.
+    InvalidSchema,
+    /// Missing source-scoped index.
+    IndexNotFound,
+    /// Existing index publication.
+    AlreadyExists,
+    /// Conflicting build reservation.
+    BuildAlreadyRunning,
+    /// Ambiguous index selection.
+    AmbiguousIndex,
+    /// Invalid persisted metadata.
+    InvalidMetadata,
+    /// Catalog operation failure.
+    Catalog,
+    /// Storage or serialization failure.
+    Storage,
+    /// Compute, Arrow, or kernel failure.
+    Backend,
+}
+
 #[derive(Debug, Error)]
 #[error("{0}")]
 pub(crate) struct InvalidSchemaDataFusionError(String);
@@ -24,6 +49,14 @@ pub enum Error {
     /// Another process is already building the requested index.
     #[error("an index build is already running: {0}")]
     BuildAlreadyRunning(IndexIdentifier),
+    /// A background index build failed after it was accepted.
+    #[error("{message}")]
+    BuildFailed {
+        /// Stable error category for transport mapping.
+        kind: BuildFailureKind,
+        /// Original safe error message.
+        message: String,
+    },
     /// The runtime's bounded query queue has no free entry.
     #[error("query queue is full (capacity {0})")]
     QueryQueueFull(usize),
@@ -63,6 +96,33 @@ pub enum Error {
     /// A shared numerical kernel rejected its matrix inputs.
     #[error(transparent)]
     Kernel(#[from] relify_kernels::KernelError),
+}
+
+impl Error {
+    pub(crate) fn retained_build_failure(&self) -> Self {
+        let kind = match self {
+            Self::InvalidArgument(_) => BuildFailureKind::InvalidArgument,
+            Self::InvalidSchema(_) => BuildFailureKind::InvalidSchema,
+            Self::IndexNotFound(_) => BuildFailureKind::IndexNotFound,
+            Self::AlreadyExists(_) => BuildFailureKind::AlreadyExists,
+            Self::BuildAlreadyRunning(_) => BuildFailureKind::BuildAlreadyRunning,
+            Self::BuildFailed { kind, .. } => *kind,
+            Self::AmbiguousIndex(_) => BuildFailureKind::AmbiguousIndex,
+            Self::InvalidMetadata(_) => BuildFailureKind::InvalidMetadata,
+            Self::Catalog(_) => BuildFailureKind::Catalog,
+            Self::Storage(_) | Self::Io(_) | Self::Json(_) | Self::Parquet(_) => {
+                BuildFailureKind::Storage
+            }
+            Self::DataFusion(_) | Self::Arrow(_) | Self::Iceberg(_) | Self::Kernel(_) => {
+                BuildFailureKind::Backend
+            }
+            Self::QueryQueueFull(_) | Self::QueryQueueTimeout(_) => BuildFailureKind::Backend,
+        };
+        Self::BuildFailed {
+            kind,
+            message: self.to_string(),
+        }
+    }
 }
 
 /// Result type returned by native Relify operations.

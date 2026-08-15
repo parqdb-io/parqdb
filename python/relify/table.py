@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import timedelta
-from typing import Any, Protocol, SupportsFloat, runtime_checkable
+from typing import Protocol, SupportsFloat, runtime_checkable
 
 from .build import IndexStatus
 from .catalog import IndexInfo
@@ -49,68 +49,6 @@ class Table(Protocol):
         column: str | None = None,
         index: str | None = None,
     ) -> VectorQuery: ...
-
-
-class TableOperations:
-    """Reusable index lifecycle and search operations for concrete tables."""
-
-    _session: Any
-    _identifier: TableIdentifier
-
-    @property
-    def identifier(self) -> TableIdentifier:
-        return self._identifier
-
-    def create_index(
-        self,
-        index: str,
-        *,
-        column: str,
-        key: list[str],
-        config: IVF,
-        writer_options: WriteOptions | None = None,
-        wait_timeout: timedelta | None = None,
-    ) -> None:
-        self._session._builds.create(
-            self._identifier,
-            index=index,
-            column=column,
-            key=key,
-            config=config,
-            writer_options=writer_options,
-            wait_timeout=wait_timeout,
-        )
-
-    def index_status(self, index: str) -> IndexStatus:
-        return self._session._builds.status(self._identifier, index)
-
-    def wait_for_index(
-        self,
-        index: str,
-        *,
-        timeout: timedelta = timedelta(minutes=5),
-    ) -> None:
-        self._session._builds.wait(self._identifier, index, timeout)
-
-    def list_indexes(self) -> list[IndexInfo]:
-        return self._session._list_table_indexes(self._identifier)
-
-    def drop_index(self, index: str) -> None:
-        self._session._drop_table_index(self._identifier, index)
-
-    def search(
-        self,
-        query: Iterable[SupportsFloat],
-        *,
-        column: str | None = None,
-        index: str | None = None,
-    ) -> VectorQuery:
-        return VectorQuery(
-            source=self._identifier,
-            query=_normalize_query(query),
-            column=column,
-            index=index,
-        )
 
 
 def _normalize_query(query: Iterable[SupportsFloat]) -> tuple[float, ...]:

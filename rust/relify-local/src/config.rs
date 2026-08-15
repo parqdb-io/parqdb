@@ -41,6 +41,14 @@ config_namespace! {
 }
 
 config_namespace! {
+    /// Resource options for index construction.
+    pub struct BuildOptions {
+        /// Worker count for one index build, or available parallelism when unset.
+        pub dop: Option<usize>, default = None
+    }
+}
+
+config_namespace! {
     /// Options for index metadata caching.
     pub struct MetadataCacheOptions {
         /// Maximum number of cached metadata documents.
@@ -127,6 +135,8 @@ config_namespace! {
 /// Relify options carried by `DataFusion`'s session configuration.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RelifyConfig {
+    /// Index-construction resource options.
+    pub build: BuildOptions,
     /// Runtime execution options.
     pub execution: ExecutionOptions,
     /// Index metadata options.
@@ -187,6 +197,11 @@ impl ExtensionOptions for RelifyConfig {
 
 impl ConfigField for RelifyConfig {
     fn visit<V: Visit>(&self, visitor: &mut V, key_prefix: &str, _description: &'static str) {
+        self.build.visit(
+            visitor,
+            &format!("{key_prefix}.build"),
+            "Index-construction resource options.",
+        );
         self.execution.visit(
             visitor,
             &format!("{key_prefix}.execution"),
@@ -212,6 +227,7 @@ impl ConfigField for RelifyConfig {
     fn set(&mut self, key: &str, value: &str) -> DataFusionResult<()> {
         let (section, remainder) = key.split_once('.').unwrap_or((key, ""));
         match section {
+            "build" => self.build.set(remainder, value),
             "execution" => self.execution.set(remainder, value),
             "metadata" => self.metadata.set(remainder, value),
             "parquet" => self.parquet.set(remainder, value),
@@ -260,6 +276,7 @@ impl LocalSessionOptions {
         if let Some(query_dop) = query_dop(&config)? {
             config = config.with_target_partitions(query_dop);
         }
+        let _ = build_dop(&config)?;
         let runtime = match self.runtime {
             LocalRuntimeOptions::Builder(builder) => Arc::new(RelifyRuntime::with_query_admission(
                 builder,
@@ -336,6 +353,22 @@ pub(crate) fn query_admission_options(config: &SessionConfig) -> Result<QueryAdm
     })
 }
 
+pub(crate) fn build_dop(config: &SessionConfig) -> Result<Option<usize>> {
+    let dop = config
+        .options()
+        .extensions
+        .get::<RelifyConfig>()
+        .expect("Relify config extension must be installed")
+        .build
+        .dop;
+    if dop == Some(0) {
+        return Err(crate::Error::InvalidArgument(
+            "relify.build.dop must be positive".into(),
+        ));
+    }
+    Ok(dop)
+}
+
 fn query_dop(config: &SessionConfig) -> Result<Option<usize>> {
     let query_dop = config
         .options()
@@ -397,6 +430,7 @@ mod tests {
             .set_str("relify.execution.query_concurrency", "3")
             .set_str("relify.execution.query_queue_capacity", "5")
             .set_str("relify.execution.query_queue_timeout", "750ms")
+            .set_str("relify.build.dop", "4")
             .set_str("relify.metadata.cache.max_entries", "7")
             .set_str("relify.metadata.cache.max_bytes", "4096")
             .set_str("relify.parquet.page_cache.capacity", "8192")
@@ -417,6 +451,7 @@ mod tests {
             }
         );
         assert_eq!(config.target_partitions(), 2);
+        assert_eq!(build_dop(&config).unwrap(), Some(4));
         assert_eq!(
             metadata_cache_config(&config),
             MetadataCacheConfig::new(7, 4096)
@@ -458,6 +493,12 @@ mod tests {
         assert!(matches!(
             LocalSessionOptions::new(zero_dop, RuntimeEnvBuilder::default()).into_parts(),
             Err(crate::Error::InvalidArgument(message)) if message.contains("query_dop")
+        ));
+
+        let zero_build_dop = relify_session_config().set_str("relify.build.dop", "0");
+        assert!(matches!(
+            LocalSessionOptions::new(zero_build_dop, RuntimeEnvBuilder::default()).into_parts(),
+            Err(crate::Error::InvalidArgument(message)) if message.contains("build.dop")
         ));
 
         let invalid_timeout =

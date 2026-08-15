@@ -34,10 +34,6 @@ class _ParquetWriterOptions:
         write_batch_rows: int,
     ) -> None: ...
 
-class _NativeBuildProgress:
-    def __init__(self) -> None: ...
-    def snapshot(self) -> tuple[str, int, int, float]: ...
-
 class _NativeIndexRepository:
     def __init__(
         self,
@@ -140,7 +136,7 @@ class _NativeSession:
         self, source: str
     ) -> list[tuple[str, str, str, str, Mapping[str, str], int]]: ...
     def drop_source_index(self, source: str, name: str) -> None: ...
-    def create_index(
+    async def submit_create_index(
         self,
         source: str,
         index_name: str,
@@ -151,9 +147,8 @@ class _NativeSession:
         metric: str,
         writer_options: _ParquetWriterOptions,
         partitions: int | None,
-        threads: int | None,
-    ) -> str: ...
-    def refresh_index(
+    ) -> None: ...
+    async def submit_refresh_index(
         self,
         source: str,
         index_name: str,
@@ -162,8 +157,21 @@ class _NativeSession:
         metric: str | None,
         writer_options: _ParquetWriterOptions,
         partitions: int | None,
-        threads: int | None,
-    ) -> str: ...
+    ) -> None: ...
+    async def index_build_status(
+        self,
+        source: str,
+        index_name: str,
+    ) -> tuple[
+        str,
+        float | None,
+        str | None,
+        int | None,
+        int | None,
+        int | None,
+        str | None,
+    ]: ...
+    async def wait_for_index_build(self, source: str, index_name: str) -> None: ...
     def plan_search(
         self,
         source: str,

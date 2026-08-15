@@ -55,6 +55,7 @@ config = (
     .set("relify.execution.query_concurrency", "16")
     .set("relify.execution.query_queue_capacity", "64")
     .set("relify.execution.query_queue_timeout", "5s")
+    .set("relify.build.dop", "8")
 )
 
 session = relify.connect("./relify-data", config=config)
@@ -66,6 +67,7 @@ session = relify.connect("./relify-data", config=config)
 | `relify.execution.query_concurrency` | Active query admission slots |
 | `relify.execution.query_queue_capacity` | Maximum queued queries |
 | `relify.execution.query_queue_timeout` | Maximum queue wait |
+| `relify.build.dop` | Worker count used by an accepted index build |
 
 Resource settings are resolved when the session is created. Changing a
 DataFusion `SET` value later does not rebuild the process runtime.
@@ -133,7 +135,9 @@ options = relify.WriteOptions(
 ```
 
 Build implementation and worker ownership are deployment concerns. The public
-API does not accept a Python builder object.
+API does not accept a Python builder object. A native `LocalSession` accepts
+builds into one process-scoped queue and runs one build at a time. Accepted
+work survives client cancellation or disconnect, but not process restart.
 
 ## DataFusion Escape Hatch
 

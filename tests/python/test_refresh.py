@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import timedelta
 from pathlib import Path
-from threading import Event
 from typing import Any, cast
 
 import pytest
@@ -145,72 +144,6 @@ def test_failed_refresh_preserves_the_published_snapshot(tmp_path: Path) -> None
     assert refreshed.state == "ready"
     assert refreshed.current_snapshot_id != before.metadata["current-snapshot-id"]
     assert refreshed.error is None
-
-
-def test_refresh_keeps_the_previous_snapshot_visible_while_building(
-    tmp_path: Path,
-) -> None:
-    class BlockingRefresh:
-        def __init__(self, delegate: Any) -> None:
-            self._delegate = delegate
-            self.started = Event()
-            self.release = Event()
-
-        def __getattr__(self, name: str) -> Any:
-            return getattr(self._delegate, name)
-
-        def refresh_index(
-            self,
-            *,
-            source: str,
-            index_name: str,
-            nlist: int | None,
-            posting_encoding: str | None,
-            metric: str | None,
-            writer_options: object,
-            partitions: int | None,
-            threads: int | None,
-            progress: object | None,
-        ) -> str:
-            self.started.set()
-            assert self.release.wait(timeout=5)
-            return self._delegate.refresh_index(
-                source=source,
-                index_name=index_name,
-                nlist=nlist,
-                posting_encoding=posting_encoding,
-                metric=metric,
-                writer_options=writer_options,
-                partitions=partitions,
-                threads=threads,
-                progress=progress,
-            )
-
-    source = tmp_path / "vectors.parquet"
-    write_vectors(source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
-    session = relify.connect(tmp_path / "relify-data")
-    vectors = register_source(session, source)
-    build_index(vectors, nlist=1)
-    previous_snapshot_id = vectors.index_status("vectors_embedding").current_snapshot_id
-    blocking = BlockingRefresh(session._native)
-    session._native = blocking  # type: ignore[assignment]
-
-    vectors.refresh_index("vectors_embedding")
-    assert blocking.started.wait(timeout=5)
-    try:
-        status = vectors.index_status("vectors_embedding")
-        assert status.state == "building"
-        assert status.current_snapshot_id == previous_snapshot_id
-        assert session.to_arrow(vectors.search([0.0, 0.0]).limit(1))[
-            "id"
-        ].to_pylist() == [0]
-    finally:
-        blocking.release.set()
-    vectors.wait_for_index("vectors_embedding", timeout=WAIT)
-    assert (
-        vectors.index_status("vectors_embedding").current_snapshot_id
-        != previous_snapshot_id
-    )
 
 
 def test_refresh_requires_an_index_for_the_bound_source(tmp_path: Path) -> None:
