@@ -49,25 +49,11 @@ class IcebergConfig:
 
 
 @dataclass(frozen=True)
-class SparkConfig:
-    iceberg_version: str
-
-
-@dataclass(frozen=True)
-class StarRocksConfig:
-    flight_uri: str
-    catalog_name: str
-    db_kwargs: dict[str, Any]
-
-
-@dataclass(frozen=True)
 class TestEnvironment:
     path: Path | None
     s3: S3Config | None = None
     hdfs: HdfsConfig | None = None
     iceberg: IcebergConfig | None = None
-    spark: SparkConfig | None = None
-    starrocks: StarRocksConfig | None = None
 
     def configured(self, capability: str) -> bool:
         if capability == "file":
@@ -91,24 +77,11 @@ def load_test_environment(path: str | Path | None) -> TestEnvironment:
     s3 = _parse_s3(expanded.get("s3"))
     hdfs = _parse_hdfs(expanded.get("hdfs"))
     iceberg = _parse_iceberg(expanded.get("iceberg"))
-    spark = _parse_spark(expanded.get("spark"))
-    starrocks = _parse_starrocks(expanded.get("starrocks"))
-    if starrocks is not None:
-        if iceberg is None:
-            raise TestEnvironmentError(
-                "[starrocks] requires a matching [iceberg] section"
-            )
-        if starrocks.catalog_name != iceberg.name:
-            raise TestEnvironmentError(
-                "[starrocks].catalog_name must match [iceberg].name"
-            )
     return TestEnvironment(
         path=resolved,
         s3=s3,
         hdfs=hdfs,
         iceberg=iceberg,
-        spark=spark,
-        starrocks=starrocks,
     )
 
 
@@ -197,38 +170,6 @@ def _parse_iceberg(section: Any) -> IcebergConfig | None:
     return IcebergConfig(
         name=_required_string(values, "name", "iceberg"),
         properties=_json_object(values, "properties_json", "iceberg"),
-    )
-
-
-def _parse_spark(section: Any) -> SparkConfig | None:
-    values = _section(section, "spark")
-    if values is None:
-        return None
-    return SparkConfig(
-        iceberg_version=_optional_string(
-            values,
-            "iceberg_version",
-            "spark",
-            "1.11.0",
-        )
-    )
-
-
-def _parse_starrocks(section: Any) -> StarRocksConfig | None:
-    values = _section(section, "starrocks")
-    if values is None:
-        return None
-    flight_uri = _required_string(values, "flight_uri", "starrocks")
-    _validate_uri(flight_uri, "grpc", "starrocks.flight_uri")
-    return StarRocksConfig(
-        flight_uri=flight_uri,
-        catalog_name=_required_string(values, "catalog_name", "starrocks"),
-        db_kwargs=_json_object(
-            values,
-            "db_kwargs_json",
-            "starrocks",
-            default={},
-        ),
     )
 
 

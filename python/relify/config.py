@@ -1,25 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 from ._native import _new_session_config, _ParquetWriterOptions
-from .builders.v1 import (
-    BuilderCapabilities,
-    BuilderInfo,
-    BuildProfile,
-)
 from .datafusion import SessionConfig as DataFusionSessionConfig
-
-if TYPE_CHECKING:
-    from .build import _PublishedBuild, _RefreshRequest
-    from .builders.v1 import BuildContext, BuildOutput, BuildRequest
-
-
-LOCAL_BUILDER_INFO = BuilderInfo("local", "Local Rust", "relify")
-LOCAL_BUILDER_CAPABILITIES = BuilderCapabilities(
-    frozenset({BuildProfile("ivf", "parquet", "parquet")})
-)
 
 
 class SessionConfig(DataFusionSessionConfig):
@@ -59,6 +43,8 @@ class WriteOptions:
     partitions: int | None = None
     compression: str = "uncompressed"
     target_file_size: int = 512 * 1024 * 1024
+    max_row_group_rows: int | None = None
+    write_batch_rows: int = 8_192
 
     def __post_init__(self) -> None:
         if self.partitions is not None and (
@@ -90,22 +76,6 @@ class WriteOptions:
             or self.target_file_size <= 0
         ):
             raise ValueError("target_file_size must be a positive integer")
-
-
-@dataclass(frozen=True)
-class Local:
-    """Configure the built-in local Rust builder."""
-
-    threads: int | None = None
-    max_row_group_rows: int | None = None
-    write_batch_rows: int = 8_192
-
-    def __post_init__(self) -> None:
-        if self.threads is not None:
-            if not isinstance(self.threads, int) or isinstance(self.threads, bool):
-                raise TypeError("threads must be an integer")
-            if self.threads <= 0:
-                raise ValueError("threads must be positive")
         if self.max_row_group_rows is not None and (
             not isinstance(self.max_row_group_rows, int)
             or isinstance(self.max_row_group_rows, bool)
@@ -119,40 +89,13 @@ class Local:
         ):
             raise ValueError("write_batch_rows must be a positive integer")
 
-    @property
-    def info(self) -> BuilderInfo:
-        return LOCAL_BUILDER_INFO
-
-    @property
-    def capabilities(self) -> BuilderCapabilities:
-        return LOCAL_BUILDER_CAPABILITIES
-
-    def build(
-        self,
-        request: BuildRequest,
-        context: BuildContext,
-    ) -> BuildOutput | _PublishedBuild:
-        from .build import _build_local
-
-        return _build_local(self, request, context)
-
-    def refresh(
-        self,
-        request: _RefreshRequest,
-        context: BuildContext,
-    ) -> _PublishedBuild:
-        from .build import _refresh_local
-
-        return _refresh_local(self, request, context)
-
 
 def native_writer_options(
-    builder: Local,
     options: WriteOptions,
 ) -> _ParquetWriterOptions:
     return _ParquetWriterOptions(
         compression=options.compression,
-        max_row_group_rows=builder.max_row_group_rows,
+        max_row_group_rows=options.max_row_group_rows,
         target_file_size=options.target_file_size,
-        write_batch_rows=builder.write_batch_rows,
+        write_batch_rows=options.write_batch_rows,
     )

@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import json
 import re
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 from weakref import finalize
 
 from ._native import (
@@ -17,18 +16,7 @@ from ._native import (
     InvalidArgumentError,
     _NativeBuildProgress,
 )
-from .builders.v1 import (
-    BUILDER_API_VERSION,
-    BuildContext,
-    BuildOutput,
-    BuildProfile,
-    BuildProgress,
-    BuildProgressSnapshot,
-    BuildRequest,
-    BuildResult,
-    IndexBuilder,
-)
-from .config import IVF, Local, WriteOptions, native_writer_options
+from .config import IVF, WriteOptions, native_writer_options
 from .identifier import TableIdentifier
 
 _INDEX_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
@@ -47,22 +35,48 @@ class IndexStatus:
 
 
 @dataclass(frozen=True)
-class _PublishedBuild(BuildResult):
-    metadata_location: str
+class _BuildRequest:
+    source_identifier: TableIdentifier
+    source: dict[str, object]
+    index: str
+    column: str
+    key: tuple[str, ...]
+    config: IVF
+    writer_options: WriteOptions
+
+    @property
+    def profile(self) -> str:
+        profile = self.source.get("profile")
+        if not isinstance(profile, str) or not profile:
+            raise ValueError("source relation has no valid profile")
+        return profile
+
+
+@dataclass(frozen=True)
+class _BuildProgressSnapshot:
+    phase: str | None
+    completed: int | None
+    total: int | None
+    fraction: float | None
+
+
+class _BuildProgress(Protocol):
+    def snapshot(self) -> _BuildProgressSnapshot: ...
 
 
 @dataclass(frozen=True)
 class _LocalBuildProgress:
     tracker: _NativeBuildProgress = field(repr=False)
 
-    def snapshot(self) -> BuildProgressSnapshot:
+    def snapshot(self) -> _BuildProgressSnapshot:
         phase, completed, total, fraction = self.tracker.snapshot()
-        return BuildProgressSnapshot(phase, completed, total, fraction)
+        return _BuildProgressSnapshot(phase, completed, total, fraction)
 
 
 @dataclass(frozen=True)
-class _LocalBuildContext(BuildContext):
-    runtime: Any = field(default=None, repr=False)
+class _LocalBuildContext:
+    runtime: Any = field(repr=False)
+    progress: _LocalBuildProgress = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -80,7 +94,7 @@ class _BuildRecord:
     builder: str
     state: Literal["pending", "building", "failed"]
     base_metadata_location: str | None
-    progress: BuildProgress | None = field(default=None, repr=False)
+    progress: _BuildProgress | None = field(default=None, repr=False)
     future: Future[str] | None = None
     error: BaseException | None = None
 
@@ -120,15 +134,9 @@ class BuildOperation:
 class BuildCoordinator:
     """Owns asynchronous lifecycle, publication, and status for one session."""
 
-    def __init__(
-        self,
-        host: Any,
-        *,
-        default_builder: IndexBuilder | None,
-    ) -> None:
+    def __init__(self, host: Any) -> None:
         self._host = host
-        self._default_builder = default_builder
-        self._records: dict[str, _BuildRecord] = {}
+        self._records: dict[tuple[TableIdentifier, str], _BuildRecord] = {}
         self._lock = threading.Lock()
         self._executor = ThreadPoolExecutor(
             max_workers=1,
@@ -140,10 +148,6 @@ class BuildCoordinator:
             self._executor,
         )
 
-    @property
-    def default_builder(self) -> IndexBuilder | None:
-        return self._default_builder
-
     def create(
         self,
         source_identifier: TableIdentifier,
@@ -152,7 +156,6 @@ class BuildCoordinator:
         column: str,
         key: list[str],
         config: IVF,
-        builder: IndexBuilder | None,
         writer_options: WriteOptions | None,
         wait_timeout: timedelta | None,
     ) -> None:
@@ -162,7 +165,6 @@ class BuildCoordinator:
             column=column,
             key=key,
             config=config,
-            builder=builder,
             writer_options=writer_options,
         )
         if wait_timeout is not None:
@@ -180,23 +182,20 @@ class BuildCoordinator:
         column: str,
         key: list[str],
         config: IVF,
-        builder: IndexBuilder | None = None,
         writer_options: WriteOptions | None = None,
     ) -> BuildOperation:
-        selected = self._resolve_builder(builder)
         options = writer_options or WriteOptions()
         _validate_create(index, column, key, config, options)
         source = self._host._resolve_build_relation(source_identifier)
-        request = BuildRequest(
+        request = _BuildRequest(
             source_identifier=source_identifier,
-            source=source,
+            source=dict(source),
             index=index,
             column=column,
             key=tuple(key),
             config=config,
             writer_options=options,
         )
-        profile = self._validate_profile(selected, request)
         context = self._host._build_context()
         repository = self._host._index_repository()
         with self._lock:
@@ -205,34 +204,20 @@ class BuildCoordinator:
             self._reserve(
                 source_identifier,
                 index,
-                selected.info.name,
+                "local",
                 base_metadata_location=None,
                 progress=context.progress,
             )
-            record = self._records[index]
+            record_key = (source_identifier, index)
+            record = self._records[record_key]
 
             def run() -> str:
                 self._mark_building(record)
-                output: BuildResult | None = None
                 try:
-                    output = selected.build(request, context)
-                    location = self._publish(
-                        selected.info.name,
-                        request,
-                        output,
-                        repository,
-                        profile,
-                    )
-                    self._remove_record(index, record)
+                    location = _build_local(request, context)
+                    self._remove_record(record_key, record)
                     return location
                 except BaseException as error:
-                    if isinstance(output, BuildOutput) and output.discard is not None:
-                        try:
-                            output.discard()
-                        except BaseException as cleanup_error:
-                            error.add_note(
-                                f"failed to discard unpublished index data: {cleanup_error}"
-                            )
                     self._mark_failed(record, error)
                     raise
 
@@ -240,7 +225,7 @@ class BuildCoordinator:
             record.future = future
             future.add_done_callback(
                 lambda completed: (
-                    self._remove_record(index, record)
+                    self._remove_record(record_key, record)
                     if completed.cancelled()
                     else None
                 )
@@ -253,18 +238,11 @@ class BuildCoordinator:
         *,
         index: str,
         config: IVF | None,
-        builder: IndexBuilder | None,
         writer_options: WriteOptions | None,
         wait_timeout: timedelta | None,
     ) -> None:
-        selected = self._resolve_builder(builder)
         if wait_timeout is not None:
             _validate_timeout(wait_timeout, "wait_timeout")
-        refresh = getattr(selected, "refresh", None)
-        if not callable(refresh):
-            raise NotImplementedError(
-                f"builder {selected.info.name!r} does not support index refresh"
-            )
         options = writer_options or WriteOptions()
         if config is not None and not isinstance(config, IVF):
             raise TypeError("the first implementation supports only relify.IVF")
@@ -274,13 +252,9 @@ class BuildCoordinator:
         source_profile = source.get("profile")
         if not isinstance(source_profile, str):
             raise ValueError("source relation has no valid profile")
-        if not any(
-            profile.family == "ivf" and profile.source_profile == source_profile
-            for profile in selected.capabilities.profiles
-        ):
+        if source_profile != "parquet":
             raise NotImplementedError(
-                f"builder {selected.info.name!r} cannot refresh an IVF index "
-                f"from {source_profile!r} source tables"
+                "the local builder currently supports Parquet source tables"
             )
         context = self._host._build_context()
         _, base_metadata_location = self._published_state(source_identifier, index)
@@ -295,20 +269,19 @@ class BuildCoordinator:
             self._reserve(
                 source_identifier,
                 index,
-                selected.info.name,
+                "local",
                 base_metadata_location,
                 progress=context.progress,
             )
-            record = self._records[index]
+            record_key = (source_identifier, index)
+            record = self._records[record_key]
 
             def run() -> str:
                 self._mark_building(record)
                 try:
-                    output = refresh(request, context)
-                    if not isinstance(output, _PublishedBuild):
-                        raise TypeError("builder refresh returned an invalid result")
-                    self._remove_record(index, record)
-                    return output.metadata_location
+                    location = _refresh_local(request, context)
+                    self._remove_record(record_key, record)
+                    return location
                 except BaseException as error:
                     self._mark_failed(record, error)
                     raise
@@ -328,8 +301,9 @@ class BuildCoordinator:
     ) -> IndexStatus:
         _validate_index(index)
         with self._lock:
-            record = self._records.get(index)
-            if record is not None and record.source == source_identifier:
+            record_key = (source_identifier, index)
+            record = self._records.get(record_key)
+            if record is not None:
                 state = record.state
                 error = record.error
             else:
@@ -357,7 +331,7 @@ class BuildCoordinator:
                 else None
             )
             if record is not None and published_error is None:
-                self._remove_record(index, record)
+                self._remove_record(record_key, record)
             return IndexStatus(
                 state="ready",
                 builder=self._published_builder(index),
@@ -381,12 +355,8 @@ class BuildCoordinator:
         _validate_index(index)
         _validate_timeout(timeout, "timeout")
         with self._lock:
-            record = self._records.get(index)
-            future = (
-                record.future
-                if record is not None and record.source == source_identifier
-                else None
-            )
+            record = self._records.get((source_identifier, index))
+            future = record.future if record is not None else None
         if future is None:
             self._published_state(source_identifier, index)
             return
@@ -394,81 +364,6 @@ class BuildCoordinator:
             future.result(timeout=timeout.total_seconds())
         except FutureTimeout as error:
             raise TimeoutError(f"timed out waiting for index: {index}") from error
-
-    def _resolve_builder(self, builder: IndexBuilder | None) -> IndexBuilder:
-        selected = self._default_builder if builder is None else builder
-        if selected is None:
-            raise ValueError(
-                "this query session has no default index builder; pass builder="
-            )
-        if not isinstance(selected, IndexBuilder):
-            raise TypeError("builder must implement relify.builders.IndexBuilder")
-        if selected.info.api_version != BUILDER_API_VERSION:
-            raise ValueError(
-                f"unsupported builder API version: {selected.info.api_version}"
-            )
-        return selected
-
-    def _validate_profile(
-        self,
-        builder: IndexBuilder,
-        request: BuildRequest,
-    ) -> BuildProfile:
-        candidates = [
-            profile
-            for profile in builder.capabilities.profiles
-            if profile.family == "ivf" and profile.source_profile == request.profile
-        ]
-        if not candidates:
-            raise NotImplementedError(
-                f"builder {builder.info.name!r} cannot build an IVF index from "
-                f"{request.profile!r} source tables"
-            )
-        if len(candidates) != 1:
-            raise ValueError(
-                f"builder {builder.info.name!r} has ambiguous IVF output profiles"
-            )
-        expected = BuildProfile("ivf", request.profile, candidates[0].index_profile)
-        if not builder.capabilities.supports(expected):
-            raise AssertionError("builder capability selection is inconsistent")
-        return expected
-
-    def _publish(
-        self,
-        builder: str,
-        request: BuildRequest,
-        output: BuildResult,
-        repository: Any,
-        profile: BuildProfile,
-    ) -> str:
-        if isinstance(output, _PublishedBuild):
-            return output.metadata_location
-        if not isinstance(output, BuildOutput):
-            raise TypeError("builder returned an invalid build output")
-        actual_profiles: set[str] = set()
-        for reference in output.index_relations.values():
-            relation_profile = reference.get("profile")
-            if not isinstance(relation_profile, str):
-                raise ValueError("builder returned a relation without a profile")
-            actual_profiles.add(relation_profile)
-        if actual_profiles != {profile.index_profile}:
-            raise ValueError(
-                f"builder {builder!r} declared {profile.index_profile!r} output "
-                f"but returned relation profiles {sorted(actual_profiles)!r}"
-            )
-        return repository.publish_initial(
-            index_name=request.index,
-            source_json=_relation_json(request.source),
-            vector_field=request.column,
-            source_key_fields=list(request.key),
-            builder=builder,
-            metric=request.config.metric,
-            parameters=dict(output.parameters),
-            index_relations={
-                role: _relation_json(reference)
-                for role, reference in output.index_relations.items()
-            },
-        )
 
     def _reserve(
         self,
@@ -478,12 +373,13 @@ class BuildCoordinator:
         base_metadata_location: str | None,
         progress: Any,
     ) -> None:
-        active = self._records.get(index)
+        record_key = (source, index)
+        active = self._records.get(record_key)
         if active is not None and active.state in {"pending", "building"}:
             raise BuildAlreadyRunningError(
                 f"an index build is already running: {index}"
             )
-        self._records[index] = _BuildRecord(
+        self._records[record_key] = _BuildRecord(
             source,
             builder,
             "pending",
@@ -531,10 +427,14 @@ class BuildCoordinator:
         with self._lock:
             record.state = "building"
 
-    def _remove_record(self, index: str, record: _BuildRecord) -> None:
+    def _remove_record(
+        self,
+        record_key: tuple[TableIdentifier, str],
+        record: _BuildRecord,
+    ) -> None:
         with self._lock:
-            if self._records.get(index) is record:
-                del self._records[index]
+            if self._records.get(record_key) is record:
+                del self._records[record_key]
 
     def _mark_failed(self, record: _BuildRecord, error: BaseException) -> None:
         with self._lock:
@@ -543,20 +443,13 @@ class BuildCoordinator:
 
 
 def _build_local(
-    builder: Local,
-    request: BuildRequest,
-    context: BuildContext,
-) -> _PublishedBuild:
+    request: _BuildRequest,
+    context: _LocalBuildContext,
+) -> str:
     if request.profile != "parquet":
         raise NotImplementedError(
             "the local builder currently supports Parquet source tables"
         )
-    if not isinstance(context, _LocalBuildContext) or context.runtime is None:
-        raise NotImplementedError(
-            "the local builder requires a local Relify session runtime"
-        )
-    if not isinstance(context.progress, _LocalBuildProgress):
-        raise NotImplementedError("the local builder requires local progress state")
     source = request.source.get("uri")
     if not isinstance(source, str):
         raise ValueError("Parquet source relation has no URI")
@@ -568,29 +461,22 @@ def _build_local(
         nlist=request.config.nlist,
         posting_encoding=request.config.encoding,
         metric=request.config.metric,
-        writer_options=native_writer_options(builder, request.writer_options),
+        writer_options=native_writer_options(request.writer_options),
         partitions=request.writer_options.partitions,
-        threads=builder.threads,
+        threads=None,
         progress=context.progress.tracker,
     )
-    return _PublishedBuild(location)
+    return location
 
 
 def _refresh_local(
-    builder: Local,
     request: _RefreshRequest,
-    context: BuildContext,
-) -> _PublishedBuild:
+    context: _LocalBuildContext,
+) -> str:
     if request.source.get("profile") != "parquet":
         raise NotImplementedError(
             "the local builder currently supports Parquet source tables"
         )
-    if not isinstance(context, _LocalBuildContext) or context.runtime is None:
-        raise NotImplementedError(
-            "the local builder requires a local Relify session runtime"
-        )
-    if not isinstance(context.progress, _LocalBuildProgress):
-        raise NotImplementedError("the local builder requires local progress state")
     source = request.source.get("uri")
     if not isinstance(source, str):
         raise ValueError("Parquet source relation has no URI")
@@ -602,16 +488,16 @@ def _refresh_local(
             request.config.encoding if request.config is not None else None
         ),
         metric=request.config.metric if request.config is not None else None,
-        writer_options=native_writer_options(builder, request.writer_options),
+        writer_options=native_writer_options(request.writer_options),
         partitions=request.writer_options.partitions,
-        threads=builder.threads,
+        threads=None,
         progress=context.progress.tracker,
     )
-    return _PublishedBuild(location)
+    return location
 
 
 def _progress_snapshot(
-    tracker: BuildProgress | None,
+    tracker: _BuildProgress | None,
 ) -> tuple[str | None, int | None, int | None, float | None]:
     if tracker is None:
         return None, None, None, None
@@ -657,24 +543,6 @@ def _validate_timeout(timeout: timedelta, name: str) -> None:
 def _validate_index(index: str) -> None:
     if not isinstance(index, str) or _INDEX_NAME.fullmatch(index) is None:
         raise InvalidArgumentError("index name must match [A-Za-z_][A-Za-z0-9_]*")
-
-
-def _relation_json(reference: Any) -> str:
-    return json.dumps(
-        _mutable_json(reference),
-        separators=(",", ":"),
-        sort_keys=True,
-    )
-
-
-def _mutable_json(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {name: _mutable_json(child) for name, child in value.items()}
-    if hasattr(value, "items"):
-        return {str(name): _mutable_json(child) for name, child in value.items()}
-    if isinstance(value, (tuple, list)):
-        return [_mutable_json(child) for child in value]
-    return value
 
 
 def _shutdown_executor(executor: ThreadPoolExecutor) -> None:

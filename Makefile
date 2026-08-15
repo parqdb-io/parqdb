@@ -1,11 +1,10 @@
 UV_CACHE_DIR ?= .uv-cache
 UV_RUN = UV_CACHE_DIR=$(UV_CACHE_DIR) uv run --no-sync
-TEST_ENV ?= tests/test-env.toml
 PACKAGE_TARGET_DIR := $(CURDIR)/target/package
 PYTHON_SOURCES := python tests benchmarks examples/python tools spec/fixtures/*/generate.py
 SEARCH_BENCHMARK_RESULT := benchmarks/results/macos-arm64-2026-07-29/1m.json
 
-.PHONY: sync develop develop-debug format lint test test-python test-rust test-interop test-capabilities test-s3 test-hdfs test-spark-iceberg test-starrocks test-remote-storage audit verify-datafusion-vendor fixtures datasets benchmark-smoke benchmark-chart sbom package verify-package check
+.PHONY: sync develop develop-debug format lint test test-python test-rust test-interop test-capabilities test-s3 test-hdfs test-remote-storage audit verify-datafusion-vendor fixtures datasets benchmark-smoke benchmark-chart sbom package verify-package check
 
 sync:
 	UV_CACHE_DIR=$(UV_CACHE_DIR) uv sync --no-install-project
@@ -56,18 +55,6 @@ test-hdfs:
 		--test-env tests/integration/minidfs.toml \
 		--require hdfs \
 		tests/integration/test_hdfs_storage.py
-
-test-spark-iceberg:
-	$(UV_RUN) --extra spark pytest \
-		--test-env $(TEST_ENV) \
-		--require spark \
-		tests/python/test_spark_iceberg.py
-
-test-starrocks:
-	$(UV_RUN) --extra starrocks pytest \
-		--test-env $(TEST_ENV) \
-		--require iceberg,starrocks \
-		tests/integration/test_starrocks_iceberg.py
 
 test-remote-storage: test-s3 test-hdfs
 

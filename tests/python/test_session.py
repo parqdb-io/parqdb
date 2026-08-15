@@ -26,11 +26,6 @@ def test_session_has_explicit_idempotent_lifecycle(tmp_path: Path) -> None:
     assert hasattr(session, "__enter__")
     with pytest.raises(AttributeError):
         session.indexes = cast(Any, object())
-    assert session.backend.name == "local"
-    assert (
-        session.capabilities.declared
-        == relify.backends.load("local").declared_capabilities
-    )
     assert not hasattr(session, "context")
     session.close()
     session.close()

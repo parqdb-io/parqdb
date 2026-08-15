@@ -1,7 +1,7 @@
 # Getting Started
 
 This guide installs Relify, builds an IVF index over a Parquet source, and
-runs a filtered vector query through the embedded DataFusion backend. It uses
+runs a filtered vector query through the embedded DataFusion runtime. It uses
 the small dataset included in the wheel, so no service or external data is
 required.
 
@@ -29,16 +29,11 @@ With uv:
 uv add relify
 ```
 
-Optional integrations are installed separately:
+Install Iceberg support separately when needed:
 
 ```bash
 python -m pip install "relify[iceberg]"
-python -m pip install "relify[spark]"
-python -m pip install "relify[starrocks]"
 ```
-
-The Spark and StarRocks packages provide client-side dependencies. They do not
-deploy either engine or configure an Iceberg catalog.
 
 Use `python -m pip install --pre relify` when explicitly opting into a future
 pre-release while a stable release is also available.
@@ -53,18 +48,16 @@ import relify
 session = relify.connect("./relify-data")
 source = relify.datasets.uri("documents")
 
-if not session.table_exist("documents"):
-    session.register_parquet("documents", source)
+session.register_parquet("documents", source)
 documents = session.table("documents")
 
-if "documents_embedding" not in session.indexes.list():
-    documents.create_index(
-        "documents_embedding",
-        column="embedding",
-        key=["document_id"],
-        config=relify.IVF(nlist=3),
-    )
-    documents.wait_for_index("documents_embedding")
+documents.create_index(
+    "documents_embedding",
+    column="embedding",
+    key=["document_id"],
+    config=relify.IVF(nlist=3),
+)
+documents.wait_for_index("documents_embedding")
 ```
 
 The source table remains in its original Parquet dataset. Relify writes the
@@ -94,9 +87,9 @@ Run it:
 python quickstart.py
 ```
 
-`documents.search(...)` creates an immutable query description. The selected
-backend compiles it only when a terminal such as `to_arrow`, `collect`, or
-`to_dataframe` is called. Results include the requested source columns and a
+`documents.search(...)` creates an immutable query description. Relify compiles
+it only when a terminal such as `to_arrow`, `collect`, or `stream` is called.
+Results include the requested source columns and a
 `_distance` column containing squared L2 distance; smaller values rank first.
 
 ## Inspect the Query
@@ -131,10 +124,9 @@ requirements.
 
 ## Next Steps
 
-- Follow the [local backend guide](guides/local.md) for persistence, query
+- Follow the [embedded runtime guide](guides/local.md) for persistence, query
   composition, build controls, refresh, caching, and maintenance.
-- Read [core concepts](concepts.md) before sharing an index across engines.
-- Review [configuration](configuration.md) before using S3, HDFS, Iceberg,
-  Spark, or StarRocks.
+- Read [core concepts](concepts.md) for catalog and snapshot semantics.
+- Review [configuration](configuration.md) before using S3, HDFS, or Iceberg.
 - Check [current limitations](limitations.md) before planning a production
   deployment.

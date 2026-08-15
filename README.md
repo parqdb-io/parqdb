@@ -17,7 +17,7 @@
   <p>
     <a href="#quick-start">Quick Start</a> |
     <a href="#why-relify">Why Relify</a> |
-    <a href="#compute-engines">Compute Engines</a> |
+    <a href="#status">Status</a> |
     <a href="#documentation">Documentation</a>
   </p>
 </div>
@@ -25,9 +25,9 @@
 ---
 
 Relify is an open-source Python and Rust library for indexing and searching
-lakehouse data with the compute engines you already use. It stores vector
-indexes as open Parquet or Iceberg tables, allowing DataFusion, StarRocks, and
-Spark to query them directly with SQL while source data stays where it is.
+lakehouse data with SQL. It stores vector indexes as open Parquet or Iceberg
+tables rather than engine-owned binary artifacts. The current runtime embeds
+DataFusion and keeps source data in place.
 
 If Relify is useful to you, a ⭐ helps others find the project.
 
@@ -39,9 +39,6 @@ arm64. Install the embedded DataFusion and Parquet path:
 ```bash
 python -m pip install relify
 ```
-
-Spark and StarRocks are optional integrations with separate setup; see
-[Compute Engines](#compute-engines).
 
 From a new working directory, build a source-encoded IVF index over the dataset
 included in the package and run a filtered vector query:
@@ -72,24 +69,22 @@ query = (
 print(session.collect(query).to_pylist())
 ```
 
-Vector search remains a relation rather than a terminal service call. Keep the
-query lazy, register it as a DataFusion view, and continue with SQL in the same
-execution context:
+Vector search remains relational rather than becoming a terminal service call.
+Compile it as a SQL subquery and compose it with the rest of the analysis:
 
 ```python
 session.register_parquet(
     "document_stats",
     relify.datasets.uri("document_stats"),
 )
-session.register_view("vector_hits", session.to_dataframe(query))
-
-summary = session.sql("""
+search_sql = session.to_sql(query)
+summary = session.sql(f"""
     SELECT
         h.category,
         COUNT(*) AS matches,
         AVG(h._distance) AS avg_distance,
         MAX(s.popularity) AS max_popularity
-    FROM vector_hits AS h
+    FROM ({search_sql}) AS h
     JOIN document_stats AS s USING (document_id)
     GROUP BY h.category
     ORDER BY h.category
@@ -109,27 +104,25 @@ requirements.
 - **One open vector index.** IVF centroids and postings are ordinary relational
   data, published as Parquet datasets or Iceberg tables rather than an
   engine-owned binary artifact.
-- **Across compute engines.** Engine-specific backends consume the same index
-  model and query contract instead of maintaining a separate copy per runtime.
+- **Engine-independent storage.** Index data follows a published table schema
+  instead of being coupled to one process or proprietary runtime.
 - **SQL-native execution.** Cluster pruning, source filtering, joins, distance
   computation, and top-k remain inside the host engine's relational plan.
 
-## Compute Engines
+## Status
 
-| Engine | Model | Current capability | Status |
+| Runtime | Storage | Current capability | Status |
 | --- | --- | --- | --- |
-| DataFusion | Embedded | Build and query Parquet indexes in one Python process | Supported |
-| Spark Classic | Batch | Query source-encoded L2 IVF indexes in Parquet and Iceberg | Experimental |
-| StarRocks | OLAP | Query source-encoded L2 IVF indexes in Iceberg over Arrow Flight SQL | Experimental |
+| Embedded DataFusion | Parquet | Build and query IVF, IVF-LVQ4, and IVF-LVQ8 indexes | Supported |
+| Embedded DataFusion | Iceberg | Query exact table snapshots through PyIceberg | Experimental |
+| Client/server | Parquet and Iceberg | Shared portable session API | In development |
 
-DataFusion is the default backend. Spark and StarRocks live under
-`relify.experimental` and require caller-managed engines and catalog
-configuration. All three use the same query model and open index metadata.
+The first supported product surface is the embedded DataFusion runtime. The
+index specification remains independent of that runtime; distributed engine
+adapters are no longer bundled into the Python package.
 
-See the [local](https://github.com/petrizhang/relify/blob/main/docs/guides/local.md),
-[Spark](https://github.com/petrizhang/relify/blob/main/docs/guides/spark.md), and
-[StarRocks](https://github.com/petrizhang/relify/blob/main/docs/guides/starrocks.md)
-guides for installation and configuration.
+See the [local guide](https://github.com/petrizhang/relify/blob/main/docs/guides/local.md)
+for installation and configuration.
 
 ## Documentation
 

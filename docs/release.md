@@ -71,21 +71,14 @@ directly from `main` without creating `release/X.Y`.
    make develop
    make check
    make test-remote-storage
-   make test-spark-iceberg
-   make test-starrocks
    make audit
    make verify-datafusion-vendor
    make benchmark-smoke
    ```
 
 The remote-storage gate requires Docker for the MinIO S3 test and Java plus
-Maven for the MiniDFS HDFS test. The experimental Spark gate starts a local
-Spark session with the configured Iceberg runtime and verifies that published
-Iceberg index tables are queryable through both Spark and DataFusion. The
-experimental StarRocks gate requires a maintained StarRocks 3.5.1 or later
-deployment and shared Iceberg catalog configured as described in
-[`CONTRIBUTING.md`](../CONTRIBUTING.md). Missing prerequisites fail the release
-gate; the tests are never silently skipped.
+Maven for the MiniDFS HDFS test. Missing prerequisites fail the release gate;
+the tests are never silently skipped.
 
 Any changed portable behavior must already be represented in `spec/` and
 `spec/fixtures/v1/`.

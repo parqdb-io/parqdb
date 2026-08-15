@@ -20,6 +20,12 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The public Python API now uses portable session and table facades instead of
+  inheriting DataFusion objects. DataFusion remains available through an
+  explicit embedded-only escape hatch.
+- Relify now has one supported DataFusion execution path. The public backend,
+  builder, Spark, and StarRocks extension surfaces have been removed while the
+  open index specification remains available to other engines.
 - IVF postings no longer copy full source vectors. The public `IVF`
   configuration selects `source`, `lvq4`, or `lvq8` encoding and
   `l2_squared` or `cosine` distance.
@@ -30,6 +36,11 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - LVQ distance evaluation now honors non-zero Arrow array offsets when cached
   postings batches are sliced.
+
+### Removed
+
+- The versioned backend and builder SDKs, capability registry, experimental
+  Spark and StarRocks modules, and their public configuration objects.
 
 ## [0.1.0rc2] - 2026-08-04
 

@@ -1,6 +1,7 @@
 # Backend Extension API
 
-- Status: Accepted
+- Status: Superseded by
+  [`20260815-unified-embedded-client-server-api.md`](../rfcs/20260815-unified-embedded-client-server-api.md)
 - Date: 2026-07-30
 
 ## Context

@@ -1,29 +1,18 @@
 # Python Examples
 
-Examples are grouped by execution backend. Shared dataset and setup helpers
-remain in [`_common.py`](_common.py).
-
-For installation and explanatory workflows, use the
-[documentation index](../../docs/README.md). These files are maintained,
-executable companions to the [local](../../docs/guides/local.md),
-[Spark](../../docs/guides/spark.md), and
-[StarRocks](../../docs/guides/starrocks.md) guides.
-
-## Local DataFusion
-
-The local examples are self-contained. They reuse Relify's packaged Parquet
-datasets inside temporary workspaces that are removed after each run.
+The examples use the embedded runtime and packaged Parquet datasets. Shared
+setup helpers live in [`_common.py`](_common.py).
 
 | Example | Demonstrates |
 | --- | --- |
-| [`quickstart.py`](local/quickstart.py) | Asynchronous IVF construction, automatic index selection, filtering, projection, and collection |
-| [`parquet_roundtrip.py`](local/parquet_roundtrip.py) | DataFrame writes, persistent table registration, indexing, and recovery in a new session |
+| [`quickstart.py`](local/quickstart.py) | IVF construction, automatic index selection, filtering, projection, and collection |
+| [`parquet_roundtrip.py`](local/parquet_roundtrip.py) | Parquet writes, persistent registration, indexing, and recovery |
 | [`exact_search.py`](local/exact_search.py) | Exact vector search without a published index |
-| [`datafusion_analysis.py`](local/datafusion_analysis.py) | SQL analysis over lazy vector-search results in the native DataFusion context |
-| [`query_plans.py`](local/query_plans.py) | Query planning and runtime operator metrics |
-| [`index_lifecycle.py`](local/index_lifecycle.py) | Snapshot refresh, catalog inspection, removal, and metadata recovery |
+| [`datafusion_analysis.py`](local/datafusion_analysis.py) | Analysis over vector-search results through the explicit DataFusion context |
+| [`query_plans.py`](local/query_plans.py) | Query planning and runtime metrics |
+| [`index_lifecycle.py`](local/index_lifecycle.py) | Snapshot refresh and removal |
 
-Run any local example after `make develop`:
+Run examples after `make develop`:
 
 ```bash
 uv run python -m examples.python.local.quickstart
@@ -34,38 +23,5 @@ uv run python -m examples.python.local.query_plans
 uv run python -m examples.python.local.index_lifecycle
 ```
 
-## Spark
-
-[`spark/query.py`](spark/query.py) binds a caller-configured Spark Classic
-session and matching PyIceberg catalog, then queries an already published IVF
-index with a native PySpark DataFrame plan.
-
-The Spark process must already be configured with the named Iceberg catalog.
-PyIceberg must resolve the same catalog name from its configuration:
-
-```bash
-uv run --extra spark python -m examples.python.spark.query \
-  --index-catalog sqlite:///data/relify/catalog.sqlite \
-  --iceberg-catalog lakehouse \
-  --table analytics.documents \
-  --vector 0.2,0.0 \
-  --where "tenant_id = 42"
-```
-
-## StarRocks
-
-[`starrocks/query.py`](starrocks/query.py) connects to an existing Arrow Flight
-SQL endpoint and queries a published Iceberg index. StarRocks and PyIceberg
-must expose the same logical Iceberg catalog. The Flight SQL password is read
-from `STARROCKS_PASSWORD` by default:
-
-```bash
-uv run --extra starrocks python -m examples.python.starrocks.query \
-  --flight-uri grpc://starrocks.example.com:9408 \
-  --index-catalog sqlite:///data/relify/catalog.sqlite \
-  --iceberg-catalog lakehouse \
-  --host-catalog lakehouse \
-  --table analytics.documents \
-  --vector 0.2,0.0 \
-  --where "tenant_id = 42"
-```
+See the [documentation index](../../docs/README.md) and
+[embedded guide](../../docs/guides/local.md) for the corresponding workflows.

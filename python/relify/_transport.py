@@ -9,9 +9,8 @@ import pyarrow
 
 from ._service import AsyncBatchStream, SessionService, TableDescriptor
 from .build import IndexStatus
-from .builders.v1 import IndexBuilder
 from .catalog import IndexInfo
-from .config import IVF, Local, WriteOptions
+from .config import IVF, WriteOptions
 from .datafusion import RuntimeEnvBuilder
 from .datafusion import SessionConfig as DataFusionSessionConfig
 from .datafusion.expr import SortKey
@@ -59,7 +58,6 @@ class SessionTransport(Protocol):
         column: str,
         key: list[str],
         config: IVF,
-        builder: IndexBuilder | None,
         writer_options: WriteOptions | None,
         wait_timeout: timedelta | None,
     ) -> None: ...
@@ -70,7 +68,6 @@ class SessionTransport(Protocol):
         index: str,
         *,
         config: IVF | None,
-        builder: Local | None,
         writer_options: WriteOptions | None,
         wait_timeout: timedelta | None,
     ) -> None: ...
@@ -184,7 +181,6 @@ class InProcessTransport:
         column: str,
         key: list[str],
         config: IVF,
-        builder: IndexBuilder | None,
         writer_options: WriteOptions | None,
         wait_timeout: timedelta | None,
     ) -> None:
@@ -194,7 +190,6 @@ class InProcessTransport:
             column=column,
             key=key,
             config=config,
-            builder=builder,
             writer_options=writer_options,
             wait_timeout=wait_timeout,
         )
@@ -205,7 +200,6 @@ class InProcessTransport:
         index: str,
         *,
         config: IVF | None,
-        builder: Local | None,
         writer_options: WriteOptions | None,
         wait_timeout: timedelta | None,
     ) -> None:
@@ -213,7 +207,6 @@ class InProcessTransport:
             identifier,
             index,
             config=config,
-            builder=builder,
             writer_options=writer_options,
             wait_timeout=wait_timeout,
         )

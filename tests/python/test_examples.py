@@ -30,16 +30,6 @@ ROOT = Path(__file__).parents[2]
             (),
             "index lifecycle:",
         ),
-        (
-            "examples.python.spark.query",
-            ("--help",),
-            "Query a published Relify index",
-        ),
-        (
-            "examples.python.starrocks.query",
-            ("--help",),
-            "Query a Relify Iceberg index",
-        ),
     ],
 )
 def test_python_example_runs(

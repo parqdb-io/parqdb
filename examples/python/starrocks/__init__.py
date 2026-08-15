@@ -1,1 +1,0 @@
-"""Experimental StarRocks integration examples."""
