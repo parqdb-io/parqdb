@@ -16,6 +16,9 @@ use crate::{
 const SCHEMA_VERSION: i64 = 4;
 const APPLICATION_ID: i64 = 0x524c_4659; // ASCII "RLFY"
 const ROOT_NAMESPACE_KEY: &str = "[]";
+const SHARED_IVF_STATE_BUILDING: &str = "building";
+const SHARED_IVF_STATE_READY: &str = "ready";
+const SHARED_IVF_STATE_FAILED: &str = "failed";
 
 /// A namespace-aware Relify catalog stored in `SQLite`.
 #[derive(Debug, Clone)]
@@ -356,8 +359,8 @@ impl IndexCatalog for SqliteCatalog {
             .query_row(
                 "SELECT artifact_uuid, metadata_location
                  FROM shared_ivf_artifacts
-                 WHERE fingerprint = ?1 AND state = 'ready'",
-                [fingerprint],
+                 WHERE fingerprint = ?1 AND state = ?2",
+                params![fingerprint, SHARED_IVF_STATE_READY],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
             )
             .optional()?
@@ -407,7 +410,7 @@ impl IndexCatalog for SqliteCatalog {
                     "shared IVF fingerprint collision".into(),
                 ));
             }
-            if state == "ready" {
+            if state == SHARED_IVF_STATE_READY {
                 let entry = shared_ivf_entry(
                     &fingerprint,
                     artifact_uuid.as_deref().ok_or_else(|| {
@@ -420,7 +423,7 @@ impl IndexCatalog for SqliteCatalog {
                 transaction.commit()?;
                 return Ok(SharedIvfClaimResult::Ready(entry));
             }
-            if state == "building"
+            if state == SHARED_IVF_STATE_BUILDING
                 && current_owner.as_deref() != Some(owner_string.as_str())
                 && let Some(lease_expires_ms) = current_lease
                 && lease_expires_ms > now
@@ -430,17 +433,29 @@ impl IndexCatalog for SqliteCatalog {
             }
             transaction.execute(
                 "UPDATE shared_ivf_artifacts
-                 SET descriptor = ?1, state = 'building', owner = ?2, lease_expires_ms = ?3,
+                 SET descriptor = ?1, state = ?2, owner = ?3, lease_expires_ms = ?4,
                      artifact_uuid = NULL, metadata_location = NULL, error = NULL
-                 WHERE fingerprint = ?4",
-                params![descriptor_json, owner_string, lease_expires_ms, fingerprint],
+                 WHERE fingerprint = ?5",
+                params![
+                    descriptor_json,
+                    SHARED_IVF_STATE_BUILDING,
+                    owner_string,
+                    lease_expires_ms,
+                    fingerprint
+                ],
             )?;
         } else {
             transaction.execute(
                 "INSERT INTO shared_ivf_artifacts(
                     fingerprint, descriptor, state, owner, lease_expires_ms
-                 ) VALUES (?1, ?2, 'building', ?3, ?4)",
-                params![fingerprint, descriptor_json, owner_string, lease_expires_ms],
+                 ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    fingerprint,
+                    descriptor_json,
+                    SHARED_IVF_STATE_BUILDING,
+                    owner_string,
+                    lease_expires_ms
+                ],
             )?;
         }
         transaction.commit()?;
@@ -456,11 +471,12 @@ impl IndexCatalog for SqliteCatalog {
         let lease_expires_ms = now.saturating_add(lease_duration_ms);
         let updated = self.connection()?.execute(
             "UPDATE shared_ivf_artifacts SET lease_expires_ms = ?1
-             WHERE fingerprint = ?2 AND state = 'building' AND owner = ?3
-               AND lease_expires_ms > ?4",
+             WHERE fingerprint = ?2 AND state = ?3 AND owner = ?4
+               AND lease_expires_ms > ?5",
             params![
                 lease_expires_ms,
                 claim.fingerprint,
+                SHARED_IVF_STATE_BUILDING,
                 claim.owner.to_string(),
                 now
             ],
@@ -495,15 +511,17 @@ impl IndexCatalog for SqliteCatalog {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let updated = transaction.execute(
             "UPDATE shared_ivf_artifacts
-             SET state = 'ready', owner = NULL, lease_expires_ms = NULL,
-                 artifact_uuid = ?1, metadata_location = ?2, error = NULL
-             WHERE fingerprint = ?3 AND descriptor = ?4
-               AND state = 'building' AND owner = ?5 AND lease_expires_ms > ?6",
+             SET state = ?1, owner = NULL, lease_expires_ms = NULL,
+                 artifact_uuid = ?2, metadata_location = ?3, error = NULL
+             WHERE fingerprint = ?4 AND descriptor = ?5
+               AND state = ?6 AND owner = ?7 AND lease_expires_ms > ?8",
             params![
+                SHARED_IVF_STATE_READY,
                 metadata.artifact_uuid.to_string(),
                 metadata_location,
                 claim.fingerprint,
                 descriptor_json,
+                SHARED_IVF_STATE_BUILDING,
                 claim.owner.to_string(),
                 now,
             ],
@@ -526,9 +544,15 @@ impl IndexCatalog for SqliteCatalog {
     fn abandon_shared_ivf(&self, claim: &SharedIvfClaim, error: &str) -> Result<()> {
         let updated = self.connection()?.execute(
             "UPDATE shared_ivf_artifacts
-             SET state = 'failed', owner = NULL, lease_expires_ms = NULL, error = ?1
-             WHERE fingerprint = ?2 AND state = 'building' AND owner = ?3",
-            params![error, claim.fingerprint, claim.owner.to_string()],
+             SET state = ?1, owner = NULL, lease_expires_ms = NULL, error = ?2
+             WHERE fingerprint = ?3 AND state = ?4 AND owner = ?5",
+            params![
+                SHARED_IVF_STATE_FAILED,
+                error,
+                claim.fingerprint,
+                SHARED_IVF_STATE_BUILDING,
+                claim.owner.to_string()
+            ],
         )?;
         if updated == 1 {
             Ok(())
@@ -541,9 +565,9 @@ impl IndexCatalog for SqliteCatalog {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
             "SELECT fingerprint, artifact_uuid, metadata_location
-             FROM shared_ivf_artifacts WHERE state = 'ready' ORDER BY fingerprint",
+             FROM shared_ivf_artifacts WHERE state = ?1 ORDER BY fingerprint",
         )?;
-        let rows = statement.query_map([], |row| {
+        let rows = statement.query_map([SHARED_IVF_STATE_READY], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -684,10 +708,10 @@ fn create_schema(connection: &mut Connection) -> Result<()> {
              artifact_uuid TEXT UNIQUE,
              metadata_location TEXT UNIQUE,
              error TEXT
-         );
-         PRAGMA application_id=1380730457;
-         PRAGMA user_version=4;",
+         );",
     )?;
+    transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
+    transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     transaction.execute(
         "INSERT INTO namespaces(namespace) VALUES (?1)",
         [ROOT_NAMESPACE_KEY],
@@ -731,6 +755,7 @@ fn table_exists(connection: &Connection, name: &str) -> Result<bool> {
 }
 
 fn database_is_empty(connection: &Connection) -> Result<bool> {
+    // Relify only claims a truly empty database and never adopts existing user objects.
     Ok(!connection.query_row(
         "SELECT EXISTS(
              SELECT 1 FROM sqlite_schema

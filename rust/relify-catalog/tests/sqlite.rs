@@ -72,6 +72,66 @@ fn shared_ivf_claim_publish_and_lookup_are_atomic() {
 }
 
 #[test]
+fn shared_ivf_listing_returns_multiple_ready_entries_in_fingerprint_order() {
+    let temporary = TempDir::new().unwrap();
+    let catalog = SqliteCatalog::open(temporary.path().join("catalog.sqlite")).unwrap();
+    let mut descriptors = [
+        shared_ivf_descriptor(temporary.path()),
+        shared_ivf_descriptor(temporary.path()),
+    ];
+    descriptors[1].vector_field = "other_embedding".into();
+    let mut published = Vec::new();
+
+    for (position, descriptor) in descriptors.iter().enumerate() {
+        let claim = match catalog
+            .claim_shared_ivf(descriptor, Uuid::new_v4(), 60_000)
+            .unwrap()
+        {
+            SharedIvfClaimResult::Claimed(claim) => claim,
+            other => panic!("distinct descriptor must create a claim, received {other:?}"),
+        };
+        let metadata = shared_ivf_metadata(temporary.path(), descriptor);
+        let metadata_location = file_uri(
+            &temporary
+                .path()
+                .join(format!("shared-{position}.metadata.json")),
+        );
+        published.push(
+            catalog
+                .publish_shared_ivf(&claim, &metadata_location, &metadata)
+                .unwrap(),
+        );
+    }
+
+    published.sort_by(|left, right| left.fingerprint.cmp(&right.fingerprint));
+    assert_eq!(catalog.list_shared_ivf().unwrap(), published);
+}
+
+#[test]
+fn publishing_shared_ivf_with_a_mismatched_fingerprint_is_rejected() {
+    let temporary = TempDir::new().unwrap();
+    let catalog = SqliteCatalog::open(temporary.path().join("catalog.sqlite")).unwrap();
+    let descriptor = shared_ivf_descriptor(temporary.path());
+    let claim = match catalog
+        .claim_shared_ivf(&descriptor, Uuid::new_v4(), 60_000)
+        .unwrap()
+    {
+        SharedIvfClaimResult::Claimed(claim) => claim,
+        other => panic!("first caller must own the claim, received {other:?}"),
+    };
+    let mut other_descriptor = descriptor;
+    other_descriptor.vector_field = "other_embedding".into();
+    let metadata = shared_ivf_metadata(temporary.path(), &other_descriptor);
+    let metadata_location = file_uri(&temporary.path().join("shared-v1.metadata.json"));
+
+    assert!(matches!(
+        catalog.publish_shared_ivf(&claim, &metadata_location, &metadata),
+        Err(Error::InvalidMetadata(message))
+            if message.contains("published shared IVF fingerprint does not match claim")
+    ));
+}
+
+#[test]
 fn expired_shared_ivf_claim_cannot_be_renewed_or_published() {
     let temporary = TempDir::new().unwrap();
     let database = temporary.path().join("catalog.sqlite");
