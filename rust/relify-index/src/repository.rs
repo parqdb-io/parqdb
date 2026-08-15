@@ -88,13 +88,7 @@ impl IndexRepository {
             .metadata
             .load_shared_ivf(&reference.metadata_location)
             .await?;
-        if metadata.fingerprint != reference.fingerprint
-            || metadata.artifact_uuid != reference.artifact_uuid
-        {
-            return Err(Error::InvalidMetadata(
-                "logical index shared-IVF reference does not match its metadata".into(),
-            ));
-        }
+        validate_shared_ivf_identity(&reference.fingerprint, reference.artifact_uuid, &metadata)?;
         Ok(LoadedSharedIvf {
             entry: SharedIvfCatalogEntry {
                 fingerprint: reference.fingerprint.clone(),
@@ -184,13 +178,20 @@ impl IndexRepository {
             .metadata
             .load_shared_ivf(&entry.metadata_location)
             .await?;
-        if metadata.fingerprint != entry.fingerprint
-            || metadata.artifact_uuid != entry.artifact_uuid
-        {
-            return Err(Error::InvalidMetadata(
-                "shared-IVF catalog entry does not match its metadata".into(),
-            ));
-        }
+        validate_shared_ivf_identity(&entry.fingerprint, entry.artifact_uuid, &metadata)?;
         Ok(LoadedSharedIvf { entry, metadata })
     }
+}
+
+fn validate_shared_ivf_identity(
+    fingerprint: &str,
+    artifact_uuid: uuid::Uuid,
+    metadata: &SharedIvfMetadata,
+) -> Result<()> {
+    if metadata.fingerprint != fingerprint || metadata.artifact_uuid != artifact_uuid {
+        return Err(Error::InvalidMetadata(
+            "shared IVF identity does not match its metadata".into(),
+        ));
+    }
+    Ok(())
 }

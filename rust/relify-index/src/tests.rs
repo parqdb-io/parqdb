@@ -13,7 +13,7 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 use crate::{
-    IndexRepository, InitialIndex, MetadataCacheConfig, MetadataStore, RefreshedIndex,
+    Error, IndexRepository, InitialIndex, MetadataCacheConfig, MetadataStore, RefreshedIndex,
     new_snapshot_id, publish_initial, publish_refresh,
 };
 
@@ -252,6 +252,13 @@ async fn metadata_store_rejects_foreign_locations() {
     metadata.location = "file:///tmp/other/metadata/".into();
 
     assert!(store.write_initial(&metadata).await.is_err());
+
+    let mut shared = shared_ivf_document(store);
+    shared.location = "file:///tmp/other/shared/".into();
+    assert!(matches!(
+        store.write_shared_ivf(&shared).await,
+        Err(Error::InvalidMetadata(_))
+    ));
 }
 
 #[tokio::test]
