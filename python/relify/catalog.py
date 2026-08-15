@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Protocol
@@ -12,19 +12,33 @@ class _CatalogNative(Protocol):
 
     def load_index_entry(self, name: str) -> tuple[str, str]: ...
 
+    def list_indexes_in(self, namespace: list[str]) -> list[str]: ...
+
+    def load_index_entry_in(
+        self, namespace: list[str], name: str
+    ) -> tuple[str, str]: ...
+
     def register_index(self, name: str, metadata_location: str) -> None: ...
 
+    def register_index_in(
+        self, namespace: list[str], name: str, metadata_location: str
+    ) -> None: ...
+
     def drop_index(self, name: str) -> None: ...
+
+    def drop_index_in(self, namespace: list[str], name: str) -> None: ...
 
     def list_source_indexes(
         self,
         source: str,
+        namespace: list[str],
         /,
     ) -> list[tuple[str, str, str, str, Mapping[str, str], int]]: ...
 
     def select_index(
         self,
         source: str,
+        namespace: list[str],
         /,
         index: str | None = ...,
         column: str | None = ...,
@@ -52,25 +66,55 @@ class IndexCatalog:
     def __init__(self, native: _CatalogNative) -> None:
         self._native = native
 
-    def list(self) -> list[str]:
-        return self._native.list_indexes()
+    def list(self, *, namespace: Sequence[str] = ()) -> list[str]:
+        resolved = _namespace(namespace)
+        return (
+            self._native.list_indexes()
+            if not resolved
+            else self._native.list_indexes_in(resolved)
+        )
 
-    def load(self, index: str) -> CatalogEntry:
-        metadata_location, metadata = self._native.load_index_entry(index)
+    def load(self, index: str, *, namespace: Sequence[str] = ()) -> CatalogEntry:
+        resolved = _namespace(namespace)
+        metadata_location, metadata = (
+            self._native.load_index_entry(index)
+            if not resolved
+            else self._native.load_index_entry_in(resolved, index)
+        )
         return CatalogEntry(
             identifier=index,
             metadata_location=metadata_location,
             metadata=freeze_json(json.loads(metadata)),
         )
 
-    def register(self, index: str, metadata_location: str) -> None:
-        self._native.register_index(index, metadata_location)
+    def register(
+        self,
+        index: str,
+        metadata_location: str,
+        *,
+        namespace: Sequence[str] = (),
+    ) -> None:
+        resolved = _namespace(namespace)
+        if not resolved:
+            self._native.register_index(index, metadata_location)
+        else:
+            self._native.register_index_in(resolved, index, metadata_location)
 
-    def drop(self, index: str) -> None:
-        self._native.drop_index(index)
+    def drop(self, index: str, *, namespace: Sequence[str] = ()) -> None:
+        resolved = _namespace(namespace)
+        if not resolved:
+            self._native.drop_index(index)
+        else:
+            self._native.drop_index_in(resolved, index)
 
-    def list_for(self, source: Mapping[str, Any]) -> list[IndexInfo]:
+    def list_for(
+        self,
+        source: Mapping[str, Any],
+        *,
+        namespace: Sequence[str] = (),
+    ) -> list[IndexInfo]:
         """List indexes bound to one exact portable source relation."""
+        resolved = _namespace(namespace)
         return [
             IndexInfo(
                 name=name,
@@ -87,7 +131,7 @@ class IndexCatalog:
                 metric,
                 parameters,
                 current_snapshot_id,
-            ) in self._native.list_source_indexes(_relation_json(source))
+            ) in self._native.list_source_indexes(_relation_json(source), resolved)
         ]
 
     def select(
@@ -96,10 +140,13 @@ class IndexCatalog:
         *,
         index: str | None = None,
         column: str | None = None,
+        namespace: Sequence[str] = (),
     ) -> CatalogEntry:
         """Select and load one index for an exact source relation."""
+        resolved = _namespace(namespace)
         identifier, metadata_location, metadata = self._native.select_index(
             _relation_json(source),
+            resolved,
             index,
             column,
         )
@@ -146,6 +193,14 @@ def _relation_json(source: Mapping[str, Any]) -> str:
         separators=(",", ":"),
         sort_keys=True,
     )
+
+
+def _namespace(value: Sequence[str]) -> list[str]:
+    if isinstance(value, (str, bytes)) or any(
+        not isinstance(segment, str) or not segment for segment in value
+    ):
+        raise ValueError("index namespace must contain non-empty string segments")
+    return list(value)
 
 
 def _mutable_json(value: Any) -> Any:

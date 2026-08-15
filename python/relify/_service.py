@@ -22,6 +22,7 @@ from .session import (
     _connect_embedded,
     _EmbeddedSession,
     _EmbeddedSourceTable,
+    _index_namespace,
     _wrap_datafusion_context,
 )
 
@@ -196,6 +197,7 @@ class SessionService:
         source = await self._source_reference(identifier)
         await self._host._native.submit_create_index(
             source,
+            _index_namespace(identifier),
             index,
             column,
             key,
@@ -206,7 +208,7 @@ class SessionService:
             options.partitions,
         )
         if wait_timeout is not None:
-            await self._wait_for_index(source, index, wait_timeout)
+            await self._wait_for_index(source, identifier, index, wait_timeout)
 
     async def refresh_index(
         self,
@@ -228,6 +230,7 @@ class SessionService:
         source = await self._source_reference(identifier)
         await self._host._native.submit_refresh_index(
             source,
+            _index_namespace(identifier),
             index,
             config.nlist if config is not None else None,
             config.encoding if config is not None else None,
@@ -236,14 +239,18 @@ class SessionService:
             options.partitions,
         )
         if wait_timeout is not None:
-            await self._wait_for_index(source, index, wait_timeout)
+            await self._wait_for_index(source, identifier, index, wait_timeout)
 
     async def index_status(
         self, identifier: TableIdentifier, index: str
     ) -> IndexStatus:
         self._ensure_open()
         source = await self._source_reference(identifier)
-        values = await self._host._native.index_build_status(source, index)
+        values = await self._host._native.index_build_status(
+            source,
+            _index_namespace(identifier),
+            index,
+        )
         state = values[0]
         if state not in {"pending", "building", "ready", "failed"}:
             raise RuntimeError(
@@ -263,7 +270,7 @@ class SessionService:
         self._ensure_open()
         _validate_timeout(timeout, "timeout")
         source = await self._source_reference(identifier)
-        await self._wait_for_index(source, index, timeout)
+        await self._wait_for_index(source, identifier, index, timeout)
 
     async def list_indexes(self, identifier: TableIdentifier) -> list[IndexInfo]:
         self._ensure_open()
@@ -289,6 +296,7 @@ class SessionService:
         source = await asyncio.to_thread(self._prepare_vector_query, query)
         return {
             "source": source,
+            "index_namespace": _index_namespace(query.source),
             "query": list(query.query),
             "index": query.index,
             "column": query.column,
@@ -307,12 +315,17 @@ class SessionService:
     async def _wait_for_index(
         self,
         source: str,
+        identifier: TableIdentifier,
         index: str,
         timeout: timedelta,
     ) -> None:
         try:
             await asyncio.wait_for(
-                self._host._native.wait_for_index_build(source, index),
+                self._host._native.wait_for_index_build(
+                    source,
+                    _index_namespace(identifier),
+                    index,
+                ),
                 timeout=timeout.total_seconds(),
             )
         except TimeoutError as error:

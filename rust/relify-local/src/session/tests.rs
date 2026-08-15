@@ -334,6 +334,10 @@ impl IndexCatalog for MemoryCatalog {
             .collect())
     }
 
+    fn list_all(&self) -> relify_catalog::Result<Vec<IndexIdentifier>> {
+        Ok(self.entries.lock().unwrap().keys().cloned().collect())
+    }
+
     fn find_by_source(
         &self,
         namespace: &[String],
@@ -707,6 +711,7 @@ async fn source_bindings_are_session_scoped_and_reused_by_queries() {
             .unwrap()
     );
     let request = SearchRequest {
+        index_namespace: vec![],
         source: RelationReference::Parquet {
             uri: first.uri.clone(),
         },
@@ -831,6 +836,7 @@ async fn searches_an_index_by_its_persisted_source_key() {
     let (_temporary, session, source_path) = direct_pid_fixture().await;
     let (batches, schema) = session
         .search(&SearchRequest {
+            index_namespace: vec![],
             source: RelationReference::Parquet {
                 uri: directory_to_file_uri(&source_path).unwrap(),
             },
@@ -907,6 +913,7 @@ async fn large_nprobe_pushes_a_static_filter_into_parquet_postings() {
         .await
         .unwrap();
     let request = SearchRequest {
+        index_namespace: vec![],
         source: RelationReference::Parquet {
             uri: directory_to_file_uri(&source_path).unwrap(),
         },
@@ -1043,6 +1050,7 @@ async fn assert_lvq_index(
     assert_lvq_postings_schema(postings.schema().inner());
 
     let request = SearchRequest {
+        index_namespace: vec![],
         source: RelationReference::Parquet {
             uri: directory_to_file_uri(source_path).unwrap(),
         },
@@ -1103,6 +1111,7 @@ async fn filters_source_rows_before_top_k() {
     let (_temporary, session, source_path) = direct_pid_fixture().await;
     let (batches, _) = session
         .search(&SearchRequest {
+            index_namespace: vec![],
             source: RelationReference::Parquet {
                 uri: directory_to_file_uri(&source_path).unwrap(),
             },
@@ -1134,6 +1143,7 @@ async fn exact_search_does_not_require_a_published_index() {
 
     let (batches, _) = session
         .search(&SearchRequest {
+            index_namespace: vec![],
             source: RelationReference::Parquet {
                 uri: directory_to_file_uri(&source_path).unwrap(),
             },

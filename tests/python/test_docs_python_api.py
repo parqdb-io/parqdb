@@ -4,7 +4,14 @@ from pathlib import Path
 
 import pyarrow
 import relify
-from _support import WAIT, register_source, write_vectors
+from _support import (
+    WAIT,
+    drop_table_index_entry,
+    load_table_index,
+    register_source,
+    register_table_index,
+    write_vectors,
+)
 
 
 def test_python_api_build_search_and_compose_example(tmp_path: Path) -> None:
@@ -101,8 +108,15 @@ def test_python_api_catalog_recovery_example(tmp_path: Path) -> None:
         wait_timeout=WAIT,
     )
 
-    entry = session.indexes.load("documents_embedding")
-    session.indexes.drop("documents_embedding")
-    session.indexes.register("recovered_index", entry.metadata_location)
+    entry = load_table_index(session, documents, "documents_embedding")
+    drop_table_index_entry(session, documents, "documents_embedding")
+    register_table_index(
+        session,
+        documents,
+        "recovered_index",
+        entry.metadata_location,
+    )
 
-    assert session.indexes.list() == ["recovered_index"]
+    assert session.indexes.list(namespace=documents.identifier.index_namespace) == [
+        "recovered_index"
+    ]

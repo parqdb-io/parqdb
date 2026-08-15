@@ -201,7 +201,7 @@ def test_multiple_indexes_require_disambiguation(tmp_path: Path) -> None:
     build_index(vectors, "index_a", column="embedding_a")
     build_index(vectors, "index_b", column="embedding_b")
 
-    assert session.indexes.list() == ["index_a", "index_b"]
+    assert [index.name for index in vectors.list_indexes()] == ["index_a", "index_b"]
     with pytest.raises(relify.AmbiguousIndexError, match="index_a, index_b"):
         session.to_arrow(vectors.search([0.0, 0.0]))
 

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use pyo3::prelude::*;
-use relify_catalog::{IndexIdentifier, SqliteCatalog};
+use relify_catalog::{Error as CatalogError, IndexIdentifier, SqliteCatalog};
 use relify_core::{IndexArtifacts, IndexFormat};
 use relify_index::{
     IndexRepository, InitialIndex, MetadataStore, new_snapshot_id, publish_initial,
@@ -70,19 +70,32 @@ impl PyNativeIndexRepository {
     }
 
     fn list_indexes(&self) -> PyResult<Vec<String>> {
-        self.repository
-            .list(&[])
-            .map(|identifiers| {
-                identifiers
-                    .into_iter()
-                    .map(|identifier| identifier.name().to_owned())
-                    .collect()
-            })
-            .map_err(|error| index_error(&error))
+        self.list_indexes_in(Vec::new())
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    fn list_indexes_in(&self, namespace: Vec<String>) -> PyResult<Vec<String>> {
+        match self.repository.list(&namespace) {
+            Ok(identifiers) => Ok(identifiers
+                .into_iter()
+                .map(|identifier| identifier.name().to_owned())
+                .collect()),
+            Err(relify_index::Error::Catalog(CatalogError::NamespaceNotFound(_))) => Ok(Vec::new()),
+            Err(error) => Err(index_error(&error)),
+        }
     }
 
     fn load_index_entry(&self, py: Python<'_>, name: &str) -> PyResult<(String, String)> {
-        let identifier = root_identifier(name)?;
+        self.load_index_entry_in(py, Vec::new(), name)
+    }
+
+    fn load_index_entry_in(
+        &self,
+        py: Python<'_>,
+        namespace: Vec<String>,
+        name: &str,
+    ) -> PyResult<(String, String)> {
+        let identifier = IndexIdentifier::new(namespace, name).map_err(runtime_error)?;
         let repository = Arc::clone(&self.repository);
         let runtime = Arc::clone(&self.runtime);
         let loaded = py
@@ -92,7 +105,17 @@ impl PyNativeIndexRepository {
     }
 
     fn register_index(&self, py: Python<'_>, name: &str, metadata_location: &str) -> PyResult<()> {
-        let identifier = root_identifier(name)?;
+        self.register_index_in(py, Vec::new(), name, metadata_location)
+    }
+
+    fn register_index_in(
+        &self,
+        py: Python<'_>,
+        namespace: Vec<String>,
+        name: &str,
+        metadata_location: &str,
+    ) -> PyResult<()> {
+        let identifier = IndexIdentifier::new(namespace, name).map_err(runtime_error)?;
         let metadata_location = metadata_location.to_owned();
         let repository = Arc::clone(&self.repository);
         let runtime = Arc::clone(&self.runtime);
@@ -101,16 +124,25 @@ impl PyNativeIndexRepository {
     }
 
     fn drop_index(&self, name: &str) -> PyResult<()> {
-        let identifier = root_identifier(name)?;
+        self.drop_index_in(Vec::new(), name)
+    }
+
+    fn drop_index_in(&self, namespace: Vec<String>, name: &str) -> PyResult<()> {
+        let identifier = IndexIdentifier::new(namespace, name).map_err(runtime_error)?;
         IndexRepository::drop(self.repository.as_ref(), &identifier)
             .map_err(|error| index_error(&error))
     }
 
-    fn list_source_indexes(&self, py: Python<'_>, source_json: &str) -> PyResult<Vec<PyIndexInfo>> {
+    fn list_source_indexes(
+        &self,
+        py: Python<'_>,
+        source_json: &str,
+        namespace: Vec<String>,
+    ) -> PyResult<Vec<PyIndexInfo>> {
         let source = relation(source_json)?;
         let repository = Arc::clone(&self.repository);
         let runtime = Arc::clone(&self.runtime);
-        py.detach(move || runtime.block_on(repository.find_by_source(&[], &source)))
+        py.detach(move || runtime.block_on(repository.find_by_source(&namespace, &source)))
             .map_err(|error| index_error(&error))?
             .into_iter()
             .map(|loaded| {
@@ -127,23 +159,27 @@ impl PyNativeIndexRepository {
             .collect()
     }
 
-    #[pyo3(signature = (source_json, index=None, column=None))]
+    #[pyo3(signature = (source_json, namespace, index=None, column=None))]
     fn select_index(
         &self,
         py: Python<'_>,
         source_json: &str,
+        namespace: Vec<String>,
         index: Option<&str>,
         column: Option<String>,
     ) -> PyResult<(String, String, String)> {
         let source = relation(source_json)?;
-        let identifier = index.map(root_identifier).transpose()?;
+        let identifier = index
+            .map(|name| IndexIdentifier::new(namespace.clone(), name))
+            .transpose()
+            .map_err(runtime_error)?;
         let repository = Arc::clone(&self.repository);
         let runtime = Arc::clone(&self.runtime);
         let loaded = py
             .detach(move || {
                 runtime.block_on(async move {
                     let loaded = repository
-                        .select(&[], &source, identifier.as_ref(), column.as_deref())
+                        .select(&namespace, &source, identifier.as_ref(), column.as_deref())
                         .await?;
                     let snapshot = loaded.metadata.current_snapshot()?;
                     repository.load_snapshot_ivf_centroids(snapshot).await?;

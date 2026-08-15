@@ -11,7 +11,7 @@ import pyarrow.fs as fs
 import pyarrow.parquet as pq
 import pytest
 import relify
-from _support import WAIT, register_source, vector_type
+from _support import WAIT, drop_table_index_entry, register_source, vector_type
 from support.config import S3Config
 
 pytestmark = pytest.mark.requires("s3")
@@ -100,7 +100,7 @@ def test_s3_build_search_refresh_and_gc(
     assert refreshed["id"].to_pylist() == [4]
     assert refreshed["_distance"].to_pylist() == [0.0]
 
-    session.indexes.drop("documents_embedding")
+    drop_table_index_entry(session, documents, "documents_embedding")
     cutoff = datetime.now(UTC) - timedelta(days=7)
     assert session.maintenance.remove_orphans(older_than=cutoff) == ()
     with sqlite3.connect(session.root / "catalog.sqlite") as connection:

@@ -195,6 +195,7 @@ class _EmbeddedSession(SessionContext):
         self._prepare_index_relations(query, source)
         internal = self._native.plan_search(
             source,
+            _index_namespace(query.source),
             list(query.query),
             query.index,
             query.column,
@@ -224,6 +225,7 @@ class _EmbeddedSession(SessionContext):
         self._prepare_index_relations(query, source)
         return self._native.search_sql(
             source,
+            _index_namespace(query.source),
             list(query.query),
             query.index,
             query.column,
@@ -306,7 +308,10 @@ class _EmbeddedSession(SessionContext):
                 metric,
                 parameters,
                 current_snapshot_id,
-            ) in self._native.list_source_indexes(reference)
+            ) in self._native.list_source_indexes(
+                reference,
+                _index_namespace(identifier),
+            )
         ]
 
     def _drop_table_index(
@@ -316,6 +321,7 @@ class _EmbeddedSession(SessionContext):
     ) -> None:
         self._native.drop_source_index(
             self._relation_reference(identifier),
+            _index_namespace(identifier),
             index,
         )
 
@@ -323,7 +329,12 @@ class _EmbeddedSession(SessionContext):
         if query.bypass_index:
             return
         metadata = json.loads(
-            self._native.select_index_metadata(source, query.index, query.column)
+            self._native.select_index_metadata(
+                source,
+                _index_namespace(query.source),
+                query.index,
+                query.column,
+            )
         )
         self._prepare_metadata_relations(metadata)
 
@@ -507,6 +518,10 @@ def _persistent_sort_order(
 
 def _parquet_relation_json(uri: str) -> str:
     return json.dumps({"profile": "parquet", "uri": uri}, separators=(",", ":"))
+
+
+def _index_namespace(identifier: TableIdentifier) -> list[str]:
+    return list(identifier.index_namespace)
 
 
 def _iceberg_catalog_name(catalog: object) -> str:

@@ -183,7 +183,8 @@ impl LocalSession {
         projection: Vec<String>,
     ) -> Result<ResolvedSearch> {
         let loaded = self
-            .select_index(
+            .select_index_in(
+                &request.index_namespace,
                 &source.reference,
                 request.index.as_deref(),
                 request.column.as_deref(),

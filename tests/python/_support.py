@@ -76,6 +76,41 @@ def register_source(
     return table
 
 
+def load_table_index(
+    session: relify.Session,
+    table: relify.SourceTable,
+    index: str,
+) -> relify.CatalogEntry:
+    return session.indexes.load(
+        index,
+        namespace=table.identifier.index_namespace,
+    )
+
+
+def register_table_index(
+    session: relify.Session,
+    table: relify.SourceTable,
+    index: str,
+    metadata_location: str,
+) -> None:
+    session.indexes.register(
+        index,
+        metadata_location,
+        namespace=table.identifier.index_namespace,
+    )
+
+
+def drop_table_index_entry(
+    session: relify.Session,
+    table: relify.SourceTable,
+    index: str,
+) -> None:
+    session.indexes.drop(
+        index,
+        namespace=table.identifier.index_namespace,
+    )
+
+
 def relation_root(reference: Mapping[str, Any]) -> Path:
     parsed = urlparse(reference["uri"])
     assert reference["profile"] == "parquet"

@@ -12,6 +12,7 @@ import relify
 from _support import (
     WAIT,
     load_metadata_file,
+    load_table_index,
     register_source,
     relation_files,
     relation_path,
@@ -123,7 +124,7 @@ def test_local_build_publish_and_search(tmp_path: Path) -> None:
     assert set(tied["document_id"].to_pylist()) == {"a", "b"}
     assert tied["_distance"].to_pylist() == [0.25, 0.25]
 
-    entry = session.indexes.load("documents_embedding")
+    entry = load_table_index(session, documents, "documents_embedding")
     assert entry.metadata["format-version"] == 1
     snapshot = entry.metadata["snapshots"][0]
     assert snapshot["index-family"] == "ivf"
@@ -191,7 +192,7 @@ def test_local_lvq_build_and_search(tmp_path: Path) -> None:
             config=relify.IVF(nlist=2, encoding=encoding),
             wait_timeout=WAIT,
         )
-        snapshot = session.indexes.load(name).metadata["snapshots"][0]
+        snapshot = load_table_index(session, documents, name).metadata["snapshots"][0]
         assert snapshot["index-schema-version"] == 1
         assert snapshot["parameters"]["posting_encoding"] == encoding
         assert snapshot["parameters"]["dimension"] == str(dimension)
@@ -278,7 +279,7 @@ def test_ivf_centroids_float64_and_cosine_end_to_end(tmp_path: Path) -> None:
             config=relify.IVF(nlist=1, encoding=encoding, metric="cosine"),
             wait_timeout=WAIT,
         )
-        snapshot = session.indexes.load(name).metadata["snapshots"][0]
+        snapshot = load_table_index(session, documents, name).metadata["snapshots"][0]
         cosine_snapshots.append(snapshot)
         hits = session.to_arrow(
             documents.search([10.0, 0.0], index=name).nprobes(1).limit(3)
@@ -318,7 +319,9 @@ def test_ivf_centroids_float64_and_cosine_end_to_end(tmp_path: Path) -> None:
         config=relify.IVF(nlist=1, metric="l2_squared"),
         wait_timeout=WAIT,
     )
-    l2_snapshot = session.indexes.load("l2_source").metadata["snapshots"][0]
+    l2_snapshot = load_table_index(session, documents, "l2_source").metadata[
+        "snapshots"
+    ][0]
     assert (
         l2_snapshot["parameters"]["ivf_centroids_fingerprint"]
         != cosine_snapshots[0]["parameters"]["ivf_centroids_fingerprint"]
@@ -400,7 +403,10 @@ query = (
     .select(["document_id", "title"])
 )
 hits = session.to_arrow(query)
-metadata = session.indexes.load("documents_embedding").metadata
+metadata = session.indexes.load(
+    "documents_embedding",
+    namespace=documents.identifier.index_namespace,
+).metadata
 print(json.dumps({
     "hits": hits.to_pydict(),
     "source": metadata["snapshots"][0]["source"]["uri"],
@@ -471,7 +477,9 @@ def test_composite_keys_are_stored_directly_in_postings(tmp_path: Path) -> None:
         ("b", 2),
     }
     assert hits["_distance"].to_pylist() == [0.25, 0.25, 0.25, 0.25]
-    snapshot = session.indexes.load("composite_index").metadata["snapshots"][0]
+    snapshot = load_table_index(session, documents, "composite_index").metadata[
+        "snapshots"
+    ][0]
     assert set(snapshot["index-relations"]) == {"ivf_centroids", "ivf_postings"}
     assert pq.read_schema(
         relation_path(snapshot["index-relations"]["ivf_postings"])
@@ -496,7 +504,9 @@ def test_vectors_can_be_omitted_from_postings(tmp_path: Path) -> None:
         wait_timeout=WAIT,
     )
 
-    snapshot = session.indexes.load("compact_index").metadata["snapshots"][0]
+    snapshot = load_table_index(session, documents, "compact_index").metadata[
+        "snapshots"
+    ][0]
     assert snapshot["parameters"]["posting_encoding"] == "source"
     assert pq.read_schema(
         relation_path(snapshot["index-relations"]["ivf_postings"])

@@ -7,7 +7,14 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 import relify
-from _support import WAIT, build_index, register_source, relation_files, vector_type
+from _support import (
+    WAIT,
+    build_index,
+    load_table_index,
+    register_source,
+    relation_files,
+    vector_type,
+)
 
 
 def invalid_source(case: str) -> tuple[pa.Table, str, list[str], int]:
@@ -271,7 +278,7 @@ def test_invalid_sources_fail_without_publication(
     assert status.state == "failed"
     assert status.current_snapshot_id is None
     assert status.error is not None
-    assert session.indexes.list() == []
+    assert session.indexes.list(namespace=vectors.identifier.index_namespace) == []
 
 
 def test_nullable_source_schema_accepts_non_null_values(tmp_path: Path) -> None:
@@ -299,7 +306,9 @@ def test_nullable_source_schema_accepts_non_null_values(tmp_path: Path) -> None:
 
     hits = session.to_arrow(vectors.search([0.0, 0.0]).nprobes(1).limit(2))
     assert hits["id"].to_pylist() == [0, 1]
-    snapshot = session.indexes.load("vectors_embedding").metadata["snapshots"][0]
+    snapshot = load_table_index(session, vectors, "vectors_embedding").metadata[
+        "snapshots"
+    ][0]
     postings = pq.read_schema(
         relation_files(snapshot["index-relations"]["ivf_postings"])[0]
     )
@@ -341,7 +350,9 @@ def test_duplicate_source_key_is_a_caller_contract(tmp_path: Path) -> None:
 
     status = documents.index_status("duplicate_key_index")
     assert status.state == "ready"
-    snapshot = session.indexes.load("duplicate_key_index").metadata["snapshots"][0]
+    snapshot = load_table_index(session, documents, "duplicate_key_index").metadata[
+        "snapshots"
+    ][0]
     assert snapshot["parameters"]["ntotal"] == "2"
     postings = pq.read_table(
         relation_files(snapshot["index-relations"]["ivf_postings"])
@@ -390,7 +401,9 @@ def test_supported_source_key_types_round_trip_through_postings(
     hits = session.to_arrow(vectors.search([0.5, 0.0]).nprobes(2).limit(2))
     assert set(hits["flag"].to_pylist()) == {False, True}
     assert hits["_distance"].to_pylist() == [0.25, 0.25]
-    snapshot = session.indexes.load("vectors_embedding").metadata["snapshots"][0]
+    snapshot = load_table_index(session, vectors, "vectors_embedding").metadata[
+        "snapshots"
+    ][0]
     posting_schema = pq.read_schema(
         relation_files(snapshot["index-relations"]["ivf_postings"])[0]
     )
