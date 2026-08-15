@@ -26,6 +26,7 @@ datafusion.workspace = true
 datafusion-datasource-parquet.workspace = true
 futures.workspace = true
 hashlink.workspace = true
+humantime.workspace = true
 object_store.workspace = true
 parquet.workspace = true
 parallite = { version = "0.1.0-rc.2", path = "../parallite" }
@@ -40,6 +41,7 @@ relify-storage = { version = "0.1.0-rc.2", path = "../relify-storage" }
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 url.workspace = true
 uuid.workspace = true
 

@@ -1,5 +1,7 @@
 //! Process-scoped execution resources shared by local sessions.
 
+mod admission;
+
 use std::sync::Arc;
 
 use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
@@ -11,11 +13,16 @@ use crate::parquet::{
     automatic_page_cache_capacity,
 };
 
+use admission::QueryAdmission;
+pub(crate) use admission::QueryPermit;
+pub use admission::{QueryAdmissionOptions, QueryAdmissionStats};
+
 /// `DataFusion` and cache resources that may be shared by independent sessions.
 pub struct RelifyRuntime {
     datafusion: Arc<RuntimeEnv>,
     parquet_page_cache: Arc<DecompressedParquetPageCache>,
     parquet_page_cache_factory: Arc<dyn ParquetPageCacheFactory>,
+    query_admission: QueryAdmission,
 }
 
 impl RelifyRuntime {
@@ -28,6 +35,19 @@ impl RelifyRuntime {
         builder: RuntimeEnvBuilder,
         parquet_page_cache_capacity: Option<usize>,
     ) -> Result<Self> {
+        Self::with_query_admission(
+            builder,
+            parquet_page_cache_capacity,
+            QueryAdmissionOptions::default(),
+        )
+    }
+
+    /// Creates a runtime with explicit query-admission bounds.
+    pub fn with_query_admission(
+        builder: RuntimeEnvBuilder,
+        parquet_page_cache_capacity: Option<usize>,
+        query_admission: QueryAdmissionOptions,
+    ) -> Result<Self> {
         let datafusion = Arc::new(builder.build()?);
         let automatic_capacity = automatic_page_cache_capacity(datafusion.memory_pool.as_ref());
         let capacity = parquet_page_cache_capacity.unwrap_or(automatic_capacity);
@@ -39,6 +59,7 @@ impl RelifyRuntime {
             datafusion,
             parquet_page_cache,
             parquet_page_cache_factory,
+            query_admission: QueryAdmission::new(query_admission)?,
         })
     }
 
@@ -60,6 +81,16 @@ impl RelifyRuntime {
     /// release their Arrow buffers.
     pub fn clear_parquet_page_cache(&self) {
         self.parquet_page_cache.clear();
+    }
+
+    /// Returns current active and queued query counts.
+    #[must_use]
+    pub fn query_admission_stats(&self) -> QueryAdmissionStats {
+        self.query_admission.stats()
+    }
+
+    pub(crate) async fn admit_query(&self) -> Result<QueryPermit> {
+        self.query_admission.acquire().await
     }
 
     pub(crate) fn parquet_page_cache_factory(&self) -> Arc<dyn ParquetPageCacheFactory> {

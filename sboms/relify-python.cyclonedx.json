@@ -18708,6 +18708,7 @@
         "pkg:cargo/datafusion@54.0.0",
         "pkg:cargo/futures@0.3.33",
         "pkg:cargo/hashlink@0.11.1",
+        "pkg:cargo/humantime@2.4.0",
         "pkg:cargo/object_store@0.13.2",
         "pkg:cargo/parallite@0.1.0-rc.2",
         "pkg:cargo/parquet@58.4.0",
@@ -18723,6 +18724,7 @@
         "pkg:cargo/serde_json@1.0.151",
         "pkg:cargo/tempfile@3.27.0",
         "pkg:cargo/thiserror@2.0.19",
+        "pkg:cargo/tokio-util@0.7.19",
         "pkg:cargo/tokio@1.53.1",
         "pkg:cargo/url@2.5.8",
         "pkg:cargo/uuid@1.24.0"
@@ -18742,6 +18744,8 @@
       "dependsOn": [
         "pkg:cargo/arrow@58.4.0",
         "pkg:cargo/datafusion-python@54.0.0",
+        "pkg:cargo/futures@0.3.33",
+        "pkg:cargo/pyo3-async-runtimes@0.28.0",
         "pkg:cargo/pyo3@0.28.3",
         "pkg:cargo/relify-catalog@0.1.0-rc.2",
         "pkg:cargo/relify-core@0.1.0-rc.2",
@@ -18750,6 +18754,7 @@
         "pkg:cargo/relify-meta@0.1.0-rc.2",
         "pkg:cargo/relify-storage@0.1.0-rc.2",
         "pkg:cargo/serde_json@1.0.151",
+        "pkg:cargo/tokio-util@0.7.19",
         "pkg:cargo/tokio@1.53.1",
         "pkg:cargo/uuid@1.24.0"
       ],
@@ -19549,6 +19554,7 @@
         "pkg:cargo/bytes@1.12.1",
         "pkg:cargo/futures-core@0.3.33",
         "pkg:cargo/futures-sink@0.3.33",
+        "pkg:cargo/futures-util@0.3.33",
         "pkg:cargo/libc@0.2.189",
         "pkg:cargo/pin-project-lite@0.2.17",
         "pkg:cargo/tokio@1.53.1"
@@ -20202,7 +20208,7 @@
     "properties": [
       {
         "name": "relify:cargo-lock-sha256",
-        "value": "2a6b297d93e007d2b6b349ff1129c24227c7e70690fe4248f7cc1019259bba5e"
+        "value": "ac67cba3c28b8a67a8655b922e3beb61c9819e74e12afacf4b6de6059f9745a3"
       }
     ]
   },

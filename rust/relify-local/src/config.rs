@@ -13,12 +13,32 @@ use relify_index::{
 };
 
 use crate::Result;
-use crate::runtime::RelifyRuntime;
+use crate::runtime::{QueryAdmissionOptions, RelifyRuntime};
 
 const DEFAULT_MANIFEST_CACHE_ENTRIES: usize = 128;
 const DEFAULT_MANIFEST_CACHE_BYTES: usize = 64 * 1024 * 1024;
 const DEFAULT_CENTROID_CACHE_ENTRIES: usize = 128;
 const DEFAULT_CENTROID_CACHE_BYTES: usize = 256 * 1024 * 1024;
+const DEFAULT_QUERY_CONCURRENCY: usize = 1;
+const DEFAULT_QUERY_QUEUE_CAPACITY: usize = 64;
+
+config_namespace! {
+    /// Options for runtime query admission.
+    #[allow(clippy::struct_field_names)]
+    pub struct ExecutionOptions {
+        /// Target DataFusion execution parallelism for one query.
+        pub query_dop: Option<usize>, default = None
+
+        /// Maximum number of admitted queries.
+        pub query_concurrency: usize, default = DEFAULT_QUERY_CONCURRENCY
+
+        /// Maximum number of queries waiting for admission.
+        pub query_queue_capacity: usize, default = DEFAULT_QUERY_QUEUE_CAPACITY
+
+        /// Maximum admission wait in a human-readable duration such as `500ms` or `30s`.
+        pub query_queue_timeout: String, default = "30s".into()
+    }
+}
 
 config_namespace! {
     /// Options for index metadata caching.
@@ -107,6 +127,8 @@ config_namespace! {
 /// Relify options carried by `DataFusion`'s session configuration.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RelifyConfig {
+    /// Runtime execution options.
+    pub execution: ExecutionOptions,
     /// Index metadata options.
     pub metadata: MetadataOptions,
     /// Parquet reader options.
@@ -165,6 +187,11 @@ impl ExtensionOptions for RelifyConfig {
 
 impl ConfigField for RelifyConfig {
     fn visit<V: Visit>(&self, visitor: &mut V, key_prefix: &str, _description: &'static str) {
+        self.execution.visit(
+            visitor,
+            &format!("{key_prefix}.execution"),
+            "Runtime execution options.",
+        );
         self.metadata.visit(
             visitor,
             &format!("{key_prefix}.metadata"),
@@ -185,6 +212,7 @@ impl ConfigField for RelifyConfig {
     fn set(&mut self, key: &str, value: &str) -> DataFusionResult<()> {
         let (section, remainder) = key.split_once('.').unwrap_or((key, ""));
         match section {
+            "execution" => self.execution.set(remainder, value),
             "metadata" => self.metadata.set(remainder, value),
             "parquet" => self.parquet.set(remainder, value),
             "query" => self.query.set(remainder, value),
@@ -228,11 +256,15 @@ impl LocalSessionOptions {
     }
 
     pub(crate) fn into_parts(self) -> Result<(SessionConfig, Arc<RelifyRuntime>)> {
-        let config = ensure_relify_config(self.config);
+        let mut config = ensure_relify_config(self.config);
+        if let Some(query_dop) = query_dop(&config)? {
+            config = config.with_target_partitions(query_dop);
+        }
         let runtime = match self.runtime {
-            LocalRuntimeOptions::Builder(builder) => Arc::new(RelifyRuntime::new(
+            LocalRuntimeOptions::Builder(builder) => Arc::new(RelifyRuntime::with_query_admission(
                 builder,
                 parquet_page_cache_capacity(&config),
+                query_admission_options(&config)?,
             )?),
             LocalRuntimeOptions::Shared(runtime) => runtime,
         };
@@ -284,6 +316,42 @@ pub(crate) fn parquet_page_cache_capacity(config: &SessionConfig) -> Option<usiz
         .capacity
 }
 
+pub(crate) fn query_admission_options(config: &SessionConfig) -> Result<QueryAdmissionOptions> {
+    let execution = &config
+        .options()
+        .extensions
+        .get::<RelifyConfig>()
+        .expect("Relify config extension must be installed")
+        .execution;
+    let queue_timeout =
+        humantime::parse_duration(&execution.query_queue_timeout).map_err(|error| {
+            crate::Error::InvalidArgument(format!(
+                "invalid relify.execution.query_queue_timeout: {error}"
+            ))
+        })?;
+    Ok(QueryAdmissionOptions {
+        max_active: execution.query_concurrency,
+        max_queued: execution.query_queue_capacity,
+        queue_timeout,
+    })
+}
+
+fn query_dop(config: &SessionConfig) -> Result<Option<usize>> {
+    let query_dop = config
+        .options()
+        .extensions
+        .get::<RelifyConfig>()
+        .expect("Relify config extension must be installed")
+        .execution
+        .query_dop;
+    if query_dop == Some(0) {
+        return Err(crate::Error::InvalidArgument(
+            "relify.execution.query_dop must be positive".into(),
+        ));
+    }
+    Ok(query_dop)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct IndexRelationCacheConfig {
     pub(crate) manifest_max_entries: usize,
@@ -325,6 +393,10 @@ mod tests {
     #[test]
     fn relify_config_uses_hierarchical_datafusion_keys() {
         let config = relify_session_config()
+            .set_str("relify.execution.query_dop", "2")
+            .set_str("relify.execution.query_concurrency", "3")
+            .set_str("relify.execution.query_queue_capacity", "5")
+            .set_str("relify.execution.query_queue_timeout", "750ms")
             .set_str("relify.metadata.cache.max_entries", "7")
             .set_str("relify.metadata.cache.max_bytes", "4096")
             .set_str("relify.parquet.page_cache.capacity", "8192")
@@ -336,6 +408,15 @@ mod tests {
             .into_parts()
             .unwrap();
 
+        assert_eq!(
+            query_admission_options(&config).unwrap(),
+            QueryAdmissionOptions {
+                max_active: 3,
+                max_queued: 5,
+                queue_timeout: std::time::Duration::from_millis(750),
+            }
+        );
+        assert_eq!(config.target_partitions(), 2);
         assert_eq!(
             metadata_cache_config(&config),
             MetadataCacheConfig::new(7, 4096)
@@ -361,5 +442,30 @@ mod tests {
             .unwrap();
 
         assert_eq!(metadata_cache_config(&config).max_entries, 7);
+    }
+
+    #[test]
+    fn invalid_query_admission_config_fails_session_initialization() {
+        let zero_concurrency =
+            relify_session_config().set_str("relify.execution.query_concurrency", "0");
+        assert!(matches!(
+            LocalSessionOptions::new(zero_concurrency, RuntimeEnvBuilder::default()).into_parts(),
+            Err(crate::Error::InvalidArgument(message))
+                if message.contains("at least one active slot")
+        ));
+
+        let zero_dop = relify_session_config().set_str("relify.execution.query_dop", "0");
+        assert!(matches!(
+            LocalSessionOptions::new(zero_dop, RuntimeEnvBuilder::default()).into_parts(),
+            Err(crate::Error::InvalidArgument(message)) if message.contains("query_dop")
+        ));
+
+        let invalid_timeout =
+            relify_session_config().set_str("relify.execution.query_queue_timeout", "soon");
+        assert!(matches!(
+            LocalSessionOptions::new(invalid_timeout, RuntimeEnvBuilder::default()).into_parts(),
+            Err(crate::Error::InvalidArgument(message))
+                if message.contains("query_queue_timeout")
+        ));
     }
 }

@@ -4578,6 +4578,7 @@ dependencies = [
  "datafusion-datasource-parquet",
  "futures",
  "hashlink 0.11.1",
+ "humantime",
  "object_store",
  "parallite",
  "parquet",
@@ -4594,6 +4595,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "tokio-util",
  "url",
  "uuid",
 ]
@@ -4614,7 +4616,9 @@ version = "0.1.0-rc.2"
 dependencies = [
  "arrow",
  "datafusion-python",
+ "futures",
  "pyo3",
+ "pyo3-async-runtimes",
  "relify-catalog",
  "relify-core",
  "relify-index",
@@ -4623,6 +4627,7 @@ dependencies = [
  "relify-storage",
  "serde_json",
  "tokio",
+ "tokio-util",
  "uuid",
 ]
 
@@ -5697,6 +5702,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "libc",
  "pin-project-lite",
  "tokio",

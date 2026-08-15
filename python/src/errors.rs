@@ -71,6 +71,18 @@ create_exception!(
     RelifyError,
     "A query backend operation failed."
 );
+create_exception!(
+    _native,
+    QueryQueueFullError,
+    RelifyError,
+    "The bounded query queue has no free entry."
+);
+create_exception!(
+    _native,
+    QueryQueueTimeoutError,
+    RelifyError,
+    "A query timed out while waiting for runtime admission."
+);
 
 pub(crate) fn add_exceptions(module: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = module.py();
@@ -94,6 +106,11 @@ pub(crate) fn add_exceptions(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("CatalogError", py.get_type::<CatalogError>())?;
     module.add("StorageError", py.get_type::<StorageError>())?;
     module.add("BackendError", py.get_type::<BackendError>())?;
+    module.add("QueryQueueFullError", py.get_type::<QueryQueueFullError>())?;
+    module.add(
+        "QueryQueueTimeoutError",
+        py.get_type::<QueryQueueTimeoutError>(),
+    )?;
     Ok(())
 }
 
@@ -105,6 +122,8 @@ pub(crate) fn core_error(error: &LocalError) -> PyErr {
         LocalError::IndexNotFound(_) => IndexNotFoundError::new_err(message),
         LocalError::AlreadyExists(_) => AlreadyExistsError::new_err(message),
         LocalError::BuildAlreadyRunning(_) => BuildAlreadyRunningError::new_err(message),
+        LocalError::QueryQueueFull(_) => QueryQueueFullError::new_err(message),
+        LocalError::QueryQueueTimeout(_) => QueryQueueTimeoutError::new_err(message),
         LocalError::AmbiguousIndex(_) => AmbiguousIndexError::new_err(message),
         LocalError::InvalidMetadata(_) => InvalidMetadataError::new_err(message),
         LocalError::Catalog(error) => catalog_error(error, message),

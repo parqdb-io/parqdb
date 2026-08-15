@@ -1,4 +1,5 @@
 use relify_catalog::IndexIdentifier;
+use std::time::Duration;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -23,6 +24,12 @@ pub enum Error {
     /// Another process is already building the requested index.
     #[error("an index build is already running: {0}")]
     BuildAlreadyRunning(IndexIdentifier),
+    /// The runtime's bounded query queue has no free entry.
+    #[error("query queue is full (capacity {0})")]
+    QueryQueueFull(usize),
+    /// A query waited longer than the configured admission timeout.
+    #[error("query admission timed out after {0:?}")]
+    QueryQueueTimeout(Duration),
     /// More than one index matched an implicit selection.
     #[error("ambiguous index for source: {0}")]
     AmbiguousIndex(String),
