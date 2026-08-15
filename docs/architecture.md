@@ -1,297 +1,111 @@
 # Architecture
 
-Relify separates portable index state, catalog publication, managed storage,
-construction, and query integration.
+Relify separates the public API, transport boundary, execution service,
+catalog, immutable storage, and vector kernels.
 
 ```text
-Python API
-    -> relify-local (DataFusion + Parquet/Iceberg reads)
-    -> relify.experimental.spark (Spark + Parquet/Iceberg reads)
-    -> relify.experimental.starrocks (StarRocks + Iceberg reads)
-    -> third-party BackendPlugin sessions
-    -> Local / third-party IndexBuilder implementations
-
-relify-local -------------------------\
-relify.experimental.spark -------------+--> relify-index
-relify.experimental.starrocks --------/         |-> relify-core
-                                                 |-> relify-catalog
-                                                 |-> relify-meta
-                                                 `-> relify-storage
-
-relify-core -> relify-catalog
-            -> relify-meta
-
-relify-local -> relify-kmeans -> relify-kernels
-             -> parallite
-             -> relify-iceberg
-             -> DataFusion
+Session / AsyncSession
+        |
+        v
+SessionTransport
+        |
+        v
+SessionService
+        |
+        v
+private embedded host
+        |
+        +--> LocalSession --> DataFusion
+        |        |
+        |        +--> RelifyRuntime
+        |        +--> Parquet page cache
+        |        +--> query admission
+        |
+        +--> SQLite catalog
+        +--> Parquet / Iceberg storage
 ```
 
-## Component Boundaries
+The asynchronous service path is authoritative. The blocking facade uses one
+long-lived event-loop bridge and does not implement a second query path.
 
-`relify-meta` defines and validates the portable metadata types described by
-the specification. It does not perform catalog, storage, or query operations.
+## Python Boundaries
 
-`relify-catalog` defines one top-level registry for runtime tables and Relify
-indexes. Its index side maps a structured identifier to the URI of the current
-immutable metadata document and owns atomic register, compare-and-swap commit,
-drop, and discovery. A separate internal registry coordinates IVF centroid
-claims, leases, and publication by descriptor fingerprint. Its table side
-stores provider-defined definitions needed to reconstruct local external
-tables. It does not read metadata files, source data, or index tables.
+`Session` and `SourceTable` expose portable table, index, and query operations.
+They do not inherit DataFusion objects. `VectorQuery`, `IVF`, and
+`WriteOptions` are immutable request values that can cross a future transport.
 
-`relify-storage` resolves absolute `file`, `s3`, and `hdfs` URIs through the
-Arrow object-store interface. A `Warehouse` restricts Relify-managed metadata
-and index data to one configured URI prefix.
+`SessionTransport` is private. `InProcessTransport` delegates directly to
+`SessionService` without serialization. Network transports must implement the
+same operation contract and return the same public values and errors.
 
-`relify-kernels` owns the runtime-selected SIMD squared-L2 kernels, dense row
-norms, and the platform GEMM boundary shared by index construction and local
-query execution. It has no dependency on Arrow, DataFusion, index metadata,
-catalogs, or storage.
+`SessionService` is the only Python layer that coordinates portable operations
+with the private embedded host. DataFusion-specific registration and planning
+stay below this boundary. Applications that deliberately need bundled
+DataFusion can call `session.datafusion_context()`; that context is outside
+embedded/remote parity guarantees.
 
-`relify-kmeans` owns deterministic sampling, Lloyd training, centroid
-assignment, and empty-cluster recovery over dense `f32` matrices. It depends
-only on `relify-kernels` and the `parallite` execution context, not on Arrow,
-DataFusion, index metadata, catalogs, or storage.
+## Rust Components
 
-`relify-core` defines backend-neutral construction options, query intent,
-portable build artifacts, and publication results. It depends only on
-`relify-meta` and `relify-catalog`; it does not depend on Arrow, DataFusion,
-Parquet, object stores, numerical kernels, or a concrete runtime.
+- `relify-local` owns the embedded DataFusion session, query planning, Parquet
+  access, caches, query admission, index construction runtime, and maintenance.
+- `relify-index` loads, validates, discovers, and publishes immutable index
+  metadata.
+- `relify-catalog` owns structured table/index identifiers and atomic SQLite
+  publication operations.
+- `relify-meta` defines the portable metadata model.
+- `relify-storage` resolves canonical `file`, S3, and HDFS locations under a
+  managed warehouse root.
+- `relify-kmeans` owns sampling, training, assignment, and cluster recovery.
+- `relify-kernels` owns runtime-selected SIMD and GEMM kernels.
+- `relify-iceberg` binds exact Iceberg snapshots to DataFusion providers.
+- `parallite` provides partitioned local execution for index construction.
 
-`relify-index` owns immutable metadata I/O, catalog loading and discovery,
-implicit index selection, and the publication transaction shared by backends.
-It also loads IVF centroid metadata and validates the artifact identity and
-descriptor against each logical index snapshot. It accepts portable
-`RelationReference` values and backend-produced `IndexArtifacts`; it does not
-depend on Arrow, DataFusion, Spark, Parquet, Iceberg, numerical kernels, or a
-concrete runtime.
+Lower-level crates do not depend on Python API types. Metadata and catalog
+crates do not depend on DataFusion or numerical kernels.
 
-`relify-iceberg` resolves one portable Iceberg reference into a DataFusion
-provider. It verifies the table UUID and binds the exact snapshot ID from
-Relify metadata. It is compiled into the same native extension as DataFusion;
-no provider crosses a Python or dynamic-library FFI boundary.
+## Query Runtime
 
-`relify-local` is the embedded DataFusion implementation. It composes the
-catalog, warehouse, query, cache, coordination, and maintenance capabilities
-behind `LocalSession`, and supplies the native runtime used by `Local`. The
-name describes embedded execution, not a filesystem restriction. The local
-builder writes Parquet, while the query resolver reads both Parquet and exact
-Iceberg snapshots.
+Each process owns one `RelifyRuntime`, shared by embedded sessions. It contains
+the Tokio runtime, DataFusion runtime environment, memory budget, Parquet page
+cache, and query admission controller. Query concurrency and queue limits are
+process resources rather than per-request state.
 
-`relify.experimental.spark` is the query-only Spark Classic implementation. It
-reads Parquet relations through Spark and optionally binds one PyIceberg
-catalog under the same logical catalog name used by Spark. Spark owns the
-native DataFrame query plan, including centroid routing, postings pruning,
-source joins, filtering, distance evaluation, and Top-K. PyIceberg supplies
-exact table UUID and snapshot references. The session never creates a
-DataFusion context and does not use private PySpark JVM objects.
+Native SQL and vector queries return `ManagedQueryStream`. The stream owns the
+DataFusion stream, cancellation token, and admission permit. Exhaustion,
+explicit close, cancellation, or Arrow reader destruction releases the permit.
 
-`relify.experimental.starrocks` is the StarRocks query implementation. It
-binds a caller-owned Arrow Flight SQL ADBC connection and one PyIceberg catalog
-under the same logical name already registered in StarRocks. PyIceberg
-verifies table UUIDs and schemas at exact snapshots; the compiler emits fully
-qualified StarRocks SQL with `VERSION AS OF` for every source and index table.
-StarRocks owns centroid routing, postings pruning, source joins, filtering,
-distance evaluation, Top-K, and distributed execution. The session neither
-creates a DataFusion context nor transfers candidates through Python.
+Centroid routing uses a bounded native matrix path for ordinary indexes and a
+relational path for larger matrices. Selected cluster IDs become static
+postings predicates. Hive-style `cid=<value>` partitions allow file pruning
+before Parquet decoding.
 
-`parallite` provides the local partitioned execution context used by local IVF
-construction.
+The physical optimizer can replace distance projection plus distance Top-K
+with `IvfTopKExec`. The fused operator reads Arrow buffers directly, computes
+distance with native kernels, and materializes payload columns only for retained
+rows. Unsupported plans remain on the general DataFusion path.
 
-The Python package exposes a stable local session and independent experimental
-Spark and StarRocks sessions. Its modules separate configuration, catalog
-access, asynchronous build state, maintenance, query intent, dialect
-compilation, and session composition. All concrete tables reuse the same
-table-centered lifecycle. Each session owns one `BuildCoordinator`;
-independent sessions do not share a global build queue.
-The coordinator pins the source relation at submission, validates builder
-capabilities, owns status and publication, and retains only active operations
-and operation failures.
-Once publication succeeds, status is always loaded from the catalog. Python
-sessions share one process-wide Tokio runtime; this is an execution resource,
-not query or catalog state.
+## Storage and Caches
 
-`relify.backends.v1` is the versioned public extension surface. Third-party
-distributions register one lazy `BackendPlugin` through the
-`relify.backends` package entry-point group. The plugin publishes typed static
-capabilities and creates one concrete caller-owned session. A bound session
-reports the currently available subset and reasons for declared capabilities
-blocked by engine version or runtime configuration. Direct integration imports
-remain the user API; the registry serves discovery and configuration-driven
-applications. Index catalog implementations are not backend plugins.
-`relify.open_index_catalog` exposes engine-independent index loading,
-source-centered discovery, and selection without exposing native bindings;
-concrete sessions use the same facade.
+Index metadata and relations are immutable. Their URI is therefore a complete
+cache-consistency boundary. Metadata, centroid matrices, postings manifests,
+and decompressed Parquet pages use bounded caches; publishing a new snapshot
+creates new immutable locations instead of mutating cached objects.
 
-`relify.builders.v1` is the independent construction extension surface.
-Builders advertise source/index profiles and accept an immutable
-`BuildRequest` containing the pinned source reference, logical index
-configuration, keys, and writer options. A builder returns portable
-`BuildOutput`; the coordinator publishes it through `relify-index` and invokes
-the supplied discard action if publication fails. `Local` builds
-Parquet-to-Parquet through Rust. Spark and StarRocks are currently query-only;
-query backend capabilities contain no implicit build matrix.
-
-`VectorQuery` is an immutable backend-independent value containing a structured
-table identifier and logical search options. It neither holds a session nor
-imports DataFusion or Arrow. A concrete session resolves that identifier and
-owns terminal compilation and execution. The local session exposes DataFusion,
-Arrow, SQL, explain, and analyze terminals; the Spark session currently
-exposes native PySpark DataFrame and explain terminals; and the StarRocks
-session exposes StarRocks SQL and explain terminals. Every session collects a
-portable `pyarrow.Table`, preserving the required result schema even when no
-rows match.
-
-For indexed queries, shared Python planning validates backend-independent
-inputs and interprets the selected metadata snapshot into one immutable
-`ResolvedSearch`. It contains exact portable source and index relation
-references, query and index parameters, projection, predicate, and the derived
-source-resolution requirement. Spark and StarRocks retain their own schema
-mapping, relation resolution, native plan compilation, and execution. This
-shares observable Relify semantics without introducing a universal physical
-plan.
-
-For queries, `relify-local` resolves catalog state into one immutable
-`ResolvedSearch` and compiles the DataFusion plan. Each native `LocalSession`
-owns one DataFusion `SessionContext`; Parquet I/O, build ETL, and query planning
-share it. Python requests that native plan and wraps the returned DataFrame; it
-does not register index relations or compile a second copy of the query.
-The Python `Session` is the same mutable context instead of containing or
-accepting another one. The complete DataFusion Python API is built into the same
-extension and published under `relify.datafusion`; it does not depend on or
-replace the separately distributed `datafusion` package.
-
-`Session.register_parquet` uses DataFusion's normal named-table registration
-and stores the versioned table definition in the session catalog. Reopening the
-same catalog reconstructs the provider before lookup, so
-`Session.table("documents")` resolves without another registration call.
-Definitions are keyed by the fully qualified DataFusion table identifier and
-cannot be silently rebound. The native execution binding retains the exact
-registered `TableProvider`, so explicit schemas, partition columns, sort
-information, builds, and queries all see the same table definition. A source
-binding does not materialize or cache table data; scan behavior remains the
-provider's responsibility. The Parquet definition codec and provider
-reconstruction live in `relify-local`; Python passes typed registration options
-and resolves table capabilities through the canonical identifier.
-
-The local catalog registry is unified; the metadata authorities beneath it are
-not. SQLite owns local Parquet definitions and Relify index mappings. In a
-Spark session, the configured Iceberg catalog remains authoritative for source
-and index tables, while the Relify index catalog stores only the current
-metadata pointer. Relify metadata references exact Iceberg table snapshots
-without copying their schemas, manifests, or file lists.
-
-Relify registers a stateless Rust distance UDF as the logical expression and
-generic execution fallback. A physical optimizer rule recognizes a supported
-distance projection followed by distance-only Top-K and replaces both with one
-`IvfTopKExec`. The fused operator consumes Arrow batches, reads vector buffers
-directly, calls the runtime-selected SIMD squared-L2 kernel, and materializes
-the remaining projection expressions only for retained rows. Its Top-K
-threshold is shared across input partitions and accepted as a DataFusion
-dynamic filter, so later batches can reject candidates without rebuilding
-sort-key rows. Query and index validation occur before physical execution; the
-per-vector hot loop does not repeat null, type, dimension, or finite-value
-checks. Unsupported plan shapes retain the ordinary UDF, projection, and
-Top-K operators. Runtime metrics separate distance computation, candidate
-selection, final candidate sorting, and result projection, with counters for
-candidate decisions and retained-batch memory.
-
-Relify routes centroid matrices up to a bounded in-process size with its native
-SIMD kernel; larger matrices remain in the relational plan as a centroid
-distance projection, Top-K, and postings semi-join. Native routing attaches the
-selected CIDs as a static predicate on the Parquet scan. A session caches
-validated native centroid matrices by immutable metadata location, with both
-entry and byte limits.
-The local writer stores postings in Hive-style `cid=<value>` partitions with
-one Parquet file per non-empty cluster. It hash-partitions construction work by
-`cid` first, so one cluster reaches exactly one Hive writer. The local reader
-lists each immutable postings relation once to build a `cid`-to-files manifest
-and reads the uniform schema from the first listed file. Selected CIDs map
-directly to DataFusion file groups, avoiding per-query object listing and
-whole-relation partition pruning while retaining the standard Parquet reader
-and page cache.
-The session retains manifests in a configurable entry- and byte-bounded
-planning cache;
-oversized manifests are used for the current plan but not admitted. Stable
-internal table names keep only a lightweight deferred provider and therefore do
-not pin an evicted manifest. Decoded postings are not cached. A full probe needs
-neither centroid routing nor a cluster predicate. Source-encoded indexes
-resolve vectors from source rows; LVQ indexes can rank from their code postings
-when neither filtering nor projection requires source payload. Callers can
-continue from the resulting lazy DataFrame directly or compile complete SQL
-over the session's registered source and index relations. Observable index
-metadata and query semantics remain in Rust.
-
-The local session uses one storage-backed query path for cold and warm data.
-File, row-group, and column pruning select Parquet input before the reader checks
-the bounded decompressed Page cache. A hit avoids storage I/O and decompression
-while retaining the normal Parquet decoder and query plan. Cache entries are
-identified by immutable file state, so catalog publication and snapshot changes
-require no separate index-cache invalidation path.
-
-## Current Scope
-
-The local path uses SQLite, persistent Parquet table definitions, a Rust
-builder, one Rust-owned DataFusion context, and optional exact Iceberg
-resolution. `Local()` is its default builder. The experimental Spark and
-StarRocks paths are query-only adapters over caller-owned engines and matching
-PyIceberg catalogs. All sessions expose the root Relify index namespace, share
-`relify-index`, and can query compatible physical index-table profiles
-independent of which conforming builder produced them.
-
-Spark construction and refresh, remote Relify index catalogs, and Spark
-Connect are not current capabilities. Additional engines add
-concrete session types around the shared metadata, `ResolvedSearch`, and
-`VectorQuery` semantics. Independently distributed integrations register a
-`BackendPlugin`; they do not inject a replaceable backend object into another
-session. See [`python-api.md`](python-api.md) for implemented behavior and
-[`backends.md`](backends.md) for the extension contract.
+The Parquet page cache sits inside the reader path. File, row-group, and column
+pruning happen before cache lookup. A hit avoids storage I/O and decompression
+while preserving normal decoder semantics.
 
 ## Publication
 
-Before writing postings, a local build resolves the IVF-centroids descriptor. One
-catalog claim owner trains and publishes immutable centroids; concurrent and
-later builds reuse that artifact. Source, LVQ4, and LVQ8 logical indexes then
-write separate postings against the same centroids.
-
-Each artifact and logical-index snapshot uses a newly allocated immutable
-warehouse prefix:
+A build writes to a new warehouse prefix and validates every relation before
+publication:
 
 ```text
 <warehouse>/indexes/<index-uuid>/<snapshot-id>/
+<warehouse>/metadata/<index-uuid>/v<sequence>.metadata.json
 ```
 
-After the index tables are complete, the local path creates an immutable Relify
-metadata object under the metadata warehouse. The catalog register or
-compare-and-swap commit is the publication point. A failure before that point
-never exposes a partial index; unpublished objects become retention-protected
-orphan-removal candidates.
-
-Catalog transactions and storage guarantees are independent. The warehouse
-does not require atomic directory rename, so the same publication flow works
-for local files, S3, and HDFS.
-
-## Build, Query, and Maintenance Lifetimes
-
-Resolving an indexed query is read-only. The plan selects one exact immutable
-index snapshot and does not create a lease, acquire a maintenance reference, or
-write session state.
-
-Before construction, a native builder takes an exclusive cross-process
-reservation for the complete structured index identifier. Coordination is
-scoped to the exact catalog database, so distinct SQLite catalogs in one
-directory cannot block each other. Once a build allocates an immutable snapshot
-root, the reservation records that root until publication succeeds or the build
-fails.
-
-SQLite catalog commits and drops atomically record when their previous metadata
-document lost catalog reachability. Orphan removal uses that timestamp rather
-than file creation time and enforces a seven-day minimum retention period. It
-rechecks catalog reachability before deletion. Recent uncommitted objects are
-also retained for at least seven days, while active build reservations provide
-additional protection for cooperating local builders.
-
-This keeps query planning free of coordination writes. Retention is the
-cross-process and remote-storage reader-safety boundary; a query that outlives
-it is not guaranteed to survive collection of its selected snapshot.
+The SQLite register or compare-and-swap commit is the publication point. A
+failed build cannot expose partial data. Orphan removal retains unreachable
+objects for a minimum safety period and rechecks catalog reachability before
+deletion.

@@ -18,8 +18,6 @@ from _support import (
     thaw_json,
     vector_type,
 )
-from relify.backends.v1 import QueryProfile
-from relify.testing import BackendQueryCase, check_query_backend
 
 
 def document_table(dimension: int = 2) -> pa.Table:
@@ -72,11 +70,9 @@ def test_local_build_publish_and_search(tmp_path: Path) -> None:
         column="embedding",
         key=["document_id"],
         config=relify.IVF(nlist=2),
-        builder=relify.Local(
+        writer_options=relify.WriteOptions(
             max_row_group_rows=2,
             write_batch_rows=1,
-        ),
-        writer_options=relify.WriteOptions(
             partitions=2,
             compression="uncompressed",
             target_file_size=64,
@@ -97,32 +93,6 @@ def test_local_build_publish_and_search(tmp_path: Path) -> None:
     assert hits.column_names == ["document_id", "title", "_distance"]
     assert hits["document_id"].to_pylist() == ["a", "b"]
     assert hits["_distance"].to_pylist() == [0.0, 1.0]
-    contract_query = (
-        documents.search([0.0, 0.0]).nprobes(1).limit(2).select(["document_id"])
-    )
-    contract_schema = pa.schema(
-        [
-            pa.field("document_id", pa.string(), nullable=False),
-            pa.field("_distance", pa.float32(), nullable=False),
-        ]
-    )
-    check_query_backend(
-        session,
-        [
-            BackendQueryCase(
-                "local parquet IVF",
-                QueryProfile("ivf", "parquet", "parquet"),
-                contract_query,
-                pa.Table.from_arrays(
-                    [
-                        pa.array(["a", "b"], type=pa.string()),
-                        pa.array([0.0, 1.0], type=pa.float32()),
-                    ],
-                    schema=contract_schema,
-                ),
-            )
-        ],
-    )
     index_only_plan = session.explain(
         documents.search([0.0, 0.0]).nprobes(1).select(["document_id"])
     )

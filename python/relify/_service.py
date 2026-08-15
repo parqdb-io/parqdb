@@ -11,9 +11,8 @@ from typing import Any, Protocol
 import pyarrow
 
 from .build import IndexStatus
-from .builders.v1 import IndexBuilder
 from .catalog import IndexInfo
-from .config import IVF, Local, WriteOptions
+from .config import IVF, WriteOptions
 from .datafusion import RuntimeEnvBuilder
 from .datafusion import SessionConfig as DataFusionSessionConfig
 from .datafusion.expr import SortKey
@@ -183,7 +182,6 @@ class SessionService:
         column: str,
         key: list[str],
         config: IVF,
-        builder: IndexBuilder | None,
         writer_options: WriteOptions | None,
         wait_timeout: timedelta | None,
     ) -> None:
@@ -196,7 +194,6 @@ class SessionService:
                 column=column,
                 key=key,
                 config=config,
-                builder=builder,
                 writer_options=writer_options,
                 wait_timeout=wait_timeout,
             )
@@ -208,7 +205,6 @@ class SessionService:
         index: str,
         *,
         config: IVF | None,
-        builder: Local | None,
         writer_options: WriteOptions | None,
         wait_timeout: timedelta | None,
     ) -> None:
@@ -219,7 +215,6 @@ class SessionService:
                 identifier,
                 index=index,
                 config=config,
-                builder=builder,
                 writer_options=writer_options,
                 wait_timeout=wait_timeout,
             )

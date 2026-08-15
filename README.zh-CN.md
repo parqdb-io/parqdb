@@ -17,17 +17,16 @@
   <p>
     <a href="#快速开始">快速开始</a> |
     <a href="#为什么选择-relify">为什么选择 Relify</a> |
-    <a href="#计算引擎">计算引擎</a> |
+    <a href="#当前状态">当前状态</a> |
     <a href="#文档">文档</a>
   </p>
 </div>
 
 ---
 
-Relify 是一个用 Python 和 Rust 编写的开源向量索引库。它直接为湖仓数据
-构建向量索引，并以 Parquet 数据集或 Iceberg 表保存。DataFusion、Spark 和
-StarRocks 可以用 SQL 访问同一份索引。源数据留在湖仓中，不必导入独立的
-向量数据库，也不必按引擎重复建索引。
+Relify 是一个用 Python 和 Rust 编写的开源向量索引库，用 SQL 索引和检索
+湖仓数据。向量索引以开放的 Parquet 或 Iceberg 表保存，而不是引擎私有的
+二进制文件。当前运行时内嵌 DataFusion，源数据无需搬离原有位置。
 
 如果 Relify 对你有帮助，欢迎点一个 Star，让更多人发现这个项目。
 
@@ -39,8 +38,6 @@ PyPI 提供 Linux x86_64 和 macOS arm64 的预编译 Wheel，支持 CPython
 ```bash
 python -m pip install relify
 ```
-
-Spark 和 StarRocks 需要单独部署和配置，详见[计算引擎](#计算引擎)。
 
 下面的示例使用包内置数据集构建不复制源向量的 IVF 索引，并执行带标量
 过滤的向量检索：
@@ -71,23 +68,22 @@ query = (
 print(session.collect(query).to_pylist())
 ```
 
-在 Relify 中，向量检索本身就是关系计划的一部分。检索结果可以直接参与
-后续过滤、Join 和聚合，全程留在同一个 SQL 执行环境中：
+在 Relify 中，向量检索本身是关系查询的一部分。将它编译为 SQL 子查询后，
+可以继续参与 Join 和聚合：
 
 ```python
 session.register_parquet(
     "document_stats",
     relify.datasets.uri("document_stats"),
 )
-session.register_view("vector_hits", session.to_dataframe(query))
-
-summary = session.sql("""
+search_sql = session.to_sql(query)
+summary = session.sql(f"""
     SELECT
         h.category,
         COUNT(*) AS matches,
         AVG(h._distance) AS avg_distance,
         MAX(s.popularity) AS max_popularity
-    FROM vector_hits AS h
+    FROM ({search_sql}) AS h
     JOIN document_stats AS s USING (document_id)
     GROUP BY h.category
     ORDER BY h.category
@@ -104,27 +100,22 @@ print(summary.to_pydict())
   独立的向量数据库；系统中只会新增索引数据和元数据。
 - **开放索引格式。** IVF 中心点和倒排列表以普通关系数据保存，并以 Parquet
   数据集或 Iceberg 表发布，而非引擎私有的二进制文件。
-- **一份索引，跨引擎使用。** 不同后端遵循同一套索引模型和查询契约，无需
-  为每个计算引擎复制索引。
+- **存储与引擎解耦。** 索引遵循公开的表结构，不绑定单个进程或专有运行时。
 - **SQL 原生执行。** 聚类裁剪、源表过滤、Join、距离计算和 Top-K 都在
   宿主引擎的关系执行计划中完成。
 
-## 计算引擎
+## 当前状态
 
-| 引擎 | 运行模式 | 当前能力 | 状态 |
+| 运行时 | 存储 | 当前能力 | 状态 |
 | --- | --- | --- | --- |
-| DataFusion | 嵌入式 | 在同一 Python 进程中构建和查询 Parquet 索引 | 已支持 |
-| Spark Classic | 批处理 | 查询采用 source 编码和 L2 距离的 Parquet 与 Iceberg IVF 索引 | 实验性 |
-| StarRocks | OLAP | 通过 Arrow Flight SQL 查询采用 source 编码和 L2 距离的 Iceberg IVF 索引 | 实验性 |
+| 内嵌 DataFusion | Parquet | 构建和查询 IVF、IVF-LVQ4 与 IVF-LVQ8 索引 | 已支持 |
+| 内嵌 DataFusion | Iceberg | 通过 PyIceberg 查询精确表快照 | 实验性 |
+| 客户端/服务端 | Parquet 与 Iceberg | 共享统一 Session API | 开发中 |
 
-DataFusion 是默认后端。Spark 和 StarRocks 位于 `relify.experimental`，由
-调用方负责引擎和 Catalog 配置。三个后端采用相同的查询模型和开放索引
-元数据。
+首个正式支持的产品形态是内嵌 DataFusion 运行时。索引规范仍独立于该运行
+时；Python 包不再内置分布式计算引擎适配器。
 
-具体配置参见[本地 DataFusion](https://github.com/petrizhang/relify/blob/main/docs/guides/local.md)、
-[Spark](https://github.com/petrizhang/relify/blob/main/docs/guides/spark.md) 和
-[StarRocks](https://github.com/petrizhang/relify/blob/main/docs/guides/starrocks.md)
-指南。
+安装和配置参见[本地 DataFusion 指南](https://github.com/petrizhang/relify/blob/main/docs/guides/local.md)。
 
 ## 文档
 

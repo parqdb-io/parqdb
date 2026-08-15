@@ -43,10 +43,8 @@ def test_write_options_are_explicit_and_validated() -> None:
     assert options.partitions is None
     assert options.compression == "uncompressed"
     assert options.target_file_size == 512 * 1024 * 1024
-    assert relify.Local().threads is None
-    assert relify.Local(threads=4).threads == 4
-    assert relify.Local().max_row_group_rows is None
-    assert relify.Local().write_batch_rows == 8_192
+    assert options.max_row_group_rows is None
+    assert options.write_batch_rows == 8_192
     assert relify.WriteOptions(partitions=4).partitions == 4
     assert relify.WriteOptions(compression="zstd(3)").compression == "zstd(3)"
 
@@ -61,19 +59,7 @@ def test_write_options_are_explicit_and_validated() -> None:
             relify.WriteOptions(**{field: 0})
     for field in ("max_row_group_rows", "write_batch_rows"):
         with pytest.raises(ValueError, match=field):
-            relify.Local(**{field: 0})
-
-
-@pytest.mark.parametrize("threads", [True, 1.5, "1"])
-def test_local_builder_requires_an_integer_thread_count(threads: object) -> None:
-    with pytest.raises(TypeError, match="threads must be an integer"):
-        relify.Local(threads=cast(Any, threads))
-
-
-@pytest.mark.parametrize("threads", [0, -1])
-def test_local_builder_requires_a_positive_thread_count(threads: int) -> None:
-    with pytest.raises(ValueError, match="threads must be positive"):
-        relify.Local(threads=threads)
+            relify.WriteOptions(**{field: 0})
 
 
 @pytest.mark.parametrize(

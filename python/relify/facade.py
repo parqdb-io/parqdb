@@ -15,9 +15,8 @@ import pyarrow
 from ._service import AsyncBatchStream, TableDescriptor
 from ._transport import InProcessTransport, SessionTransport
 from .build import IndexStatus
-from .builders.v1 import IndexBuilder
 from .catalog import IndexInfo
-from .config import IVF, Local, WriteOptions
+from .config import IVF, WriteOptions
 from .datafusion import RuntimeEnvBuilder
 from .datafusion import SessionConfig as DataFusionSessionConfig
 from .datafusion.expr import SortKey
@@ -140,7 +139,6 @@ class AsyncSession:
         column: str,
         key: list[str],
         config: IVF,
-        builder: IndexBuilder | None = None,
         writer_options: WriteOptions | None = None,
         wait_timeout: timedelta | None = None,
     ) -> None:
@@ -150,7 +148,6 @@ class AsyncSession:
             column=column,
             key=key,
             config=config,
-            builder=builder,
             writer_options=writer_options,
             wait_timeout=wait_timeout,
         )
@@ -161,7 +158,6 @@ class AsyncSession:
         index: str,
         *,
         config: IVF | None = None,
-        builder: Local | None = None,
         writer_options: WriteOptions | None = None,
         wait_timeout: timedelta | None = None,
     ) -> None:
@@ -169,7 +165,6 @@ class AsyncSession:
             identifier,
             index,
             config=config,
-            builder=builder,
             writer_options=writer_options,
             wait_timeout=wait_timeout,
         )
@@ -231,7 +226,6 @@ class AsyncSourceTable:
         column: str,
         key: list[str],
         config: IVF,
-        builder: IndexBuilder | None = None,
         writer_options: WriteOptions | None = None,
         wait_timeout: timedelta | None = None,
     ) -> None:
@@ -241,7 +235,6 @@ class AsyncSourceTable:
             column=column,
             key=key,
             config=config,
-            builder=builder,
             writer_options=writer_options,
             wait_timeout=wait_timeout,
         )
@@ -251,7 +244,6 @@ class AsyncSourceTable:
         index: str,
         *,
         config: IVF | None = None,
-        builder: Local | None = None,
         writer_options: WriteOptions | None = None,
         wait_timeout: timedelta | None = None,
     ) -> None:
@@ -259,7 +251,6 @@ class AsyncSourceTable:
             self.identifier,
             index,
             config=config,
-            builder=builder,
             writer_options=writer_options,
             wait_timeout=wait_timeout,
         )
@@ -382,24 +373,12 @@ class Session:
         return self._embedded_host().root
 
     @property
-    def backend(self) -> Any:
-        return self._embedded_host().backend
-
-    @property
-    def capabilities(self) -> Any:
-        return self._embedded_host().capabilities
-
-    @property
     def index_root(self) -> str:
         return self._embedded_host().index_root
 
     @property
     def indexes(self) -> Any:
         return self._embedded_host().indexes
-
-    @property
-    def default_builder(self) -> IndexBuilder:
-        return self._embedded_host().default_builder
 
     @property
     def maintenance(self) -> Any:
@@ -494,7 +473,6 @@ class SourceTable:
         column: str,
         key: list[str],
         config: IVF,
-        builder: IndexBuilder | None = None,
         writer_options: WriteOptions | None = None,
         wait_timeout: timedelta | None = None,
     ) -> None:
@@ -505,7 +483,6 @@ class SourceTable:
                 column=column,
                 key=key,
                 config=config,
-                builder=builder,
                 writer_options=writer_options,
                 wait_timeout=wait_timeout,
             )
@@ -516,7 +493,6 @@ class SourceTable:
         index: str,
         *,
         config: IVF | None = None,
-        builder: Local | None = None,
         writer_options: WriteOptions | None = None,
         wait_timeout: timedelta | None = None,
     ) -> None:
@@ -525,7 +501,6 @@ class SourceTable:
                 self.identifier,
                 index,
                 config=config,
-                builder=builder,
                 writer_options=writer_options,
                 wait_timeout=wait_timeout,
             )

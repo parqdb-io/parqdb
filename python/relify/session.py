@@ -14,12 +14,9 @@ from urllib.parse import unquote, urlsplit
 import pyarrow
 
 from ._native import _NativeBuildProgress, _NativeIndexRepository, _NativeSession
-from .backends._builtin import LOCAL_INFO, local_report
-from .backends.v1 import BackendInfo, CapabilityReport
 from .build import BuildCoordinator, _LocalBuildContext, _LocalBuildProgress
-from .builders.v1 import BuildContext, IndexBuilder
 from .catalog import IndexCatalog, IndexInfo
-from .config import IVF, Local, WriteOptions
+from .config import IVF, WriteOptions
 from .datafusion import (
     DataFrame,
     RuntimeEnvBuilder,
@@ -91,7 +88,7 @@ class _EmbeddedSession(SessionContext):
         self._index_root = self._native.warehouse_root()
         self._repository = self._native.index_repository()
         self._indexes = IndexCatalog(self._repository)
-        self._builds = BuildCoordinator(self, default_builder=Local())
+        self._builds = BuildCoordinator(self)
         self.ctx = self._native.context()
         self._query_names = count()
         self._maintenance = Maintenance(self)
@@ -106,26 +103,12 @@ class _EmbeddedSession(SessionContext):
         return self._root
 
     @property
-    def backend(self) -> BackendInfo:
-        return LOCAL_INFO
-
-    @property
-    def capabilities(self) -> CapabilityReport:
-        return local_report(iceberg=self._iceberg_catalog is not None)
-
-    @property
     def index_root(self) -> str:
         return self._index_root
 
     @property
     def indexes(self) -> IndexCatalog:
         return self._indexes
-
-    @property
-    def default_builder(self) -> IndexBuilder:
-        builder = self._builds.default_builder
-        assert builder is not None
-        return builder
 
     @classmethod
     def global_ctx(cls) -> SessionContext:
@@ -313,10 +296,8 @@ class _EmbeddedSession(SessionContext):
     ) -> dict[str, object]:
         return json.loads(self._relation_reference(identifier))
 
-    def _build_context(self) -> BuildContext:
+    def _build_context(self) -> _LocalBuildContext:
         return _LocalBuildContext(
-            iceberg_catalog=self._iceberg_catalog,
-            catalog_name=self._iceberg_catalog_name,
             runtime=self._native,
             progress=_LocalBuildProgress(_NativeBuildProgress()),
         )
@@ -440,7 +421,6 @@ class _EmbeddedSourceTable(TableOperations, DataFrame):
         index: str,
         *,
         config: IVF | None = None,
-        builder: Local | None = None,
         writer_options: WriteOptions | None = None,
         wait_timeout: timedelta | None = None,
     ) -> None:
@@ -448,7 +428,6 @@ class _EmbeddedSourceTable(TableOperations, DataFrame):
             self._identifier,
             index=index,
             config=config,
-            builder=builder,
             writer_options=writer_options,
             wait_timeout=wait_timeout,
         )

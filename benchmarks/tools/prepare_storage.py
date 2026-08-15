@@ -45,7 +45,7 @@ def prepare_relify(
         raise FileExistsError(f"Relify destination already exists: {destination}")
     try:
         session = relify.connect(destination)
-        session.sql(
+        session.datafusion_context().sql(
             f"SET datafusion.execution.target_partitions = '{threads}'"
         ).collect()
         session.register_parquet("benchmark", source.path)
@@ -57,7 +57,6 @@ def prepare_relify(
             column="embedding",
             key=["id"],
             config=relify.IVF(nlist=nlist, encoding=encoding),
-            builder=relify.Local(threads=threads),
             wait_timeout=timedelta(hours=24),
         )
         sync_tree(destination)

@@ -3,7 +3,7 @@
 from ._native import BuildAlreadyRunningError
 from .build import IndexStatus
 from .catalog import CatalogEntry, IndexCatalog, IndexInfo, open_index_catalog
-from .config import IVF, Local, SessionConfig, WriteOptions
+from .config import IVF, SessionConfig, WriteOptions
 from .facade import (
     AsyncSession,
     AsyncSourceTable,
@@ -27,7 +27,6 @@ __all__ = [
     "IndexCatalog",
     "IndexInfo",
     "IndexStatus",
-    "Local",
     "Maintenance",
     "MaintenanceObject",
     "ParquetPageCacheStats",

@@ -222,7 +222,6 @@ def create_relify_index_with_progress(
         column=vector_column,
         key=[id_column],
         config=relify.IVF(nlist=nlist, encoding=encoding),
-        builder=relify.Local(threads=threads),
     )
     deadline = time.monotonic() + timedelta(hours=24).total_seconds()
     try:

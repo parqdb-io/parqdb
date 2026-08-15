@@ -1,11 +1,8 @@
 from importlib.metadata import version as _package_version
 
 from . import _native as _native
-from . import backends as backends
-from . import builders as builders
 from . import datafusion as datafusion
 from . import datasets as datasets
-from . import experimental as experimental
 from ._native import (
     AlreadyExistsError,
     AmbiguousIndexError,
@@ -27,7 +24,6 @@ from .api import (
     IndexCatalog,
     IndexInfo,
     IndexStatus,
-    Local,
     Maintenance,
     MaintenanceObject,
     ParquetPageCacheStats,
@@ -62,7 +58,6 @@ __all__ = [
     "InvalidArgumentError",
     "InvalidMetadataError",
     "InvalidSchemaError",
-    "Local",
     "Maintenance",
     "MaintenanceObject",
     "ParquetPageCacheStats",
@@ -76,12 +71,9 @@ __all__ = [
     "VectorQuery",
     "WriteOptions",
     "__version__",
-    "backends",
-    "builders",
     "connect",
     "connect_async",
     "datafusion",
     "datasets",
-    "experimental",
     "open_index_catalog",
 ]

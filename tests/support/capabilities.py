@@ -9,8 +9,8 @@ from urllib.parse import urlsplit
 
 from support.config import TestEnvironment
 
-CAPABILITY_NAMES = ("file", "s3", "hdfs", "iceberg", "spark", "starrocks")
-_DEPENDENCIES = {"starrocks": ("iceberg",)}
+CAPABILITY_NAMES = ("file", "s3", "hdfs", "iceberg")
+_DEPENDENCIES: dict[str, tuple[str, ...]] = {}
 
 
 class CapabilityProbeError(RuntimeError):
@@ -150,41 +150,9 @@ def _probe_iceberg(environment: TestEnvironment) -> None:
     catalog.list_namespaces()
 
 
-def _probe_spark(environment: TestEnvironment) -> None:
-    del environment
-    if shutil.which("java") is None:
-        raise RuntimeError("Spark requires Java on PATH")
-    import pyspark
-
-    if not pyspark.__version__:
-        raise RuntimeError("PySpark did not report a version")
-
-
-def _probe_starrocks(environment: TestEnvironment) -> None:
-    from adbc_driver_flightsql import dbapi
-
-    config = environment.starrocks
-    assert config is not None
-    connection = dbapi.connect(
-        uri=config.flight_uri,
-        db_kwargs=config.db_kwargs,
-    )
-    try:
-        cursor = connection.cursor()
-        try:
-            cursor.execute("SELECT 1")
-            cursor.fetchone()
-        finally:
-            cursor.close()
-    finally:
-        connection.close()
-
-
 _PROBES: dict[str, Callable[[TestEnvironment], None]] = {
     "file": _probe_file,
     "s3": _probe_s3,
     "hdfs": _probe_hdfs,
     "iceberg": _probe_iceberg,
-    "spark": _probe_spark,
-    "starrocks": _probe_starrocks,
 }

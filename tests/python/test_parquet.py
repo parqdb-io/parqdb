@@ -65,11 +65,9 @@ def test_zstd_writer_options_reach_every_index_relation(tmp_path: Path) -> None:
     vectors = register_source(session, source)
     build_index(
         vectors,
-        builder=relify.Local(
+        writer_options=relify.WriteOptions(
             max_row_group_rows=1,
             write_batch_rows=1,
-        ),
-        writer_options=relify.WriteOptions(
             partitions=2,
             compression="zstd(3)",
             target_file_size=64,
@@ -134,10 +132,11 @@ def test_postings_use_one_hive_partitioned_file_per_cluster(tmp_path: Path) -> N
     build_index(
         vectors,
         nlist=16,
-        builder=relify.Local(max_row_group_rows=64, write_batch_rows=32),
         writer_options=relify.WriteOptions(
             partitions=4,
             target_file_size=1024 * 1024,
+            max_row_group_rows=64,
+            write_batch_rows=32,
         ),
     )
 

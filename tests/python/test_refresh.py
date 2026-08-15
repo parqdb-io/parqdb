@@ -229,20 +229,6 @@ def test_refresh_requires_an_index_for_the_bound_source(tmp_path: Path) -> None:
         first.refresh_index("missing")
 
 
-@pytest.mark.parametrize("value", [object(), "local", 1])
-def test_refresh_rejects_unsupported_builders(
-    tmp_path: Path,
-    value: object,
-) -> None:
-    source = tmp_path / "vectors.parquet"
-    write_vectors(source, [0], [[0.0, 0.0]])
-    session = relify.connect(tmp_path / "relify-data")
-    vectors = register_source(session, source)
-
-    with pytest.raises(TypeError, match=r"relify\.builders\.IndexBuilder"):
-        vectors.refresh_index("missing", builder=cast(Any, value))
-
-
 def test_refresh_validates_config_and_timeout(tmp_path: Path) -> None:
     source = tmp_path / "vectors.parquet"
     write_vectors(source, [0], [[0.0, 0.0]])

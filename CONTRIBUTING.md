@@ -33,7 +33,7 @@ The repository sources of truth are, in order:
 3. `docs/python-api.md` and `docs/roadmap.md` for the supported API and scope.
 
 Schema and query changes must update the affected specification and shared
-fixtures. Architectural changes that add a backend, storage format, metric, or
+fixtures. Architectural changes that add a runtime, storage format, metric, or
 distributed component must update the roadmap and document the architectural
 decision before implementation.
 
@@ -54,11 +54,6 @@ Tests are organized by component under `rust/*/src/tests/` and
 `tests/python/`. Add tests at the narrowest layer that observes the behavior,
 then add an end-to-end test when the behavior crosses crate or language
 boundaries.
-
-Third-party execution integrations use the public extension contract in
-[`docs/backends.md`](docs/backends.md). Backend packages must declare typed
-capabilities and run `relify.testing.check_query_backend` over prepared cases
-for every query profile available in the test session.
 
 Shared format fixtures live in `spec/fixtures/v1/`. Regenerate them with:
 
@@ -83,7 +78,7 @@ Tests declare their requirements with `@pytest.mark.requires(...)`:
 uv run pytest --test-env tests/test-env.toml
 uv run pytest --test-env tests/test-env.toml --capabilities
 uv run pytest --test-env tests/test-env.toml \
-  --require s3,iceberg,starrocks
+  --require s3,iceberg
 ```
 
 An omitted capability is skipped. A configured capability is probed before its
@@ -95,21 +90,10 @@ Convenience targets use the same capability framework. `make test-s3` starts a
 pinned MinIO container and removes it afterward. `make test-hdfs` runs the
 storage contract against Hadoop's `MiniDFSCluster`; it requires Java 8 through
 17, Maven, and Kerberos client tools including `kdestroy`.
-`make test-spark-iceberg` and `make test-starrocks` use `TEST_ENV`, which
-defaults to `tests/test-env.toml`:
-
 ```bash
 make test-s3
 make test-hdfs
-make test-spark-iceberg
-make test-starrocks
 ```
-
-The StarRocks conformance test requires a running StarRocks 3.5.1 or later
-deployment and a shared Iceberg catalog. `[iceberg].name` and
-`[starrocks].catalog_name` must identify the same catalog. The test loads both
-portable IVF fixtures into a temporary namespace, queries them through
-StarRocks, compares every result, and removes the namespace.
 
 ## Benchmarks
 

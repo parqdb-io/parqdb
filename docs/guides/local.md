@@ -1,6 +1,6 @@
 # Local DataFusion and Parquet
 
-The local backend runs in the Python process and is the stable Relify 0.1
+The embedded runtime runs in the Python process and is the stable Relify 0.1
 path. It uses DataFusion for relational execution, native Rust code for index
 construction and distance kernels, SQLite for catalog state, and Parquet for
 the index relations.
@@ -88,7 +88,7 @@ status = documents.index_status("documents_embedding")
 print(status.state, status.phase, status.completed, status.total)
 ```
 
-Tune CPU and physical Parquet output independently:
+Tune physical Parquet output independently:
 
 ```python
 documents.create_index(
@@ -96,7 +96,6 @@ documents.create_index(
     column="embedding",
     key=["document_id"],
     config=relify.IVF(nlist=4096, encoding="lvq8"),
-    builder=relify.Local(threads=8),
     writer_options=relify.WriteOptions(
         compression="zstd(3)",
         target_file_size=512 * 1024 * 1024,
@@ -128,27 +127,19 @@ query = (
 hits = session.to_arrow(query)
 ```
 
-Keep the search lazy when additional relational work follows:
+Compile the vector query as a SQL subquery when relational work follows:
 
 ```python
-from relify.datafusion import col, functions
-
-hits = session.to_dataframe(query)
-result = (
-    hits.aggregate(
-        "category",
-        [
-            functions.count(col("document_id")).alias("matches"),
-            functions.avg(col("_distance")).alias("avg_distance"),
-        ],
-    )
-    .sort("category")
-    .collect()
-)
+search_sql = session.to_sql(query)
+result = session.sql(f"""
+    SELECT category, COUNT(*) AS matches, AVG(_distance) AS avg_distance
+    FROM ({search_sql}) AS hits
+    GROUP BY category
+    ORDER BY category
+""")
 ```
 
-The vector search and aggregation remain in one DataFusion plan. Use
-`session.to_sql(query)` when SQL composition is more convenient; the returned
+The vector search and aggregation remain in one DataFusion plan. The generated
 SQL is executable in the originating session because it refers to registered
 source and index relations.
 
@@ -181,8 +172,8 @@ objects for retention-safe cleanup:
 documents.drop_index("documents_embedding")
 ```
 
-Use the maintenance API only after reading the retention contract in the
-[Python API](../python-api.md#maintenance).
+Retention and orphan cleanup behavior is summarized in
+[current limitations](../limitations.md).
 
 ## Diagnose a Query
 

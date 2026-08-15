@@ -1,6 +1,7 @@
 # Independent Index Builders
 
-- Status: Accepted
+- Status: Superseded by
+  [`20260815-unified-embedded-client-server-api.md`](../rfcs/20260815-unified-embedded-client-server-api.md)
 - Date: 2026-07-31
 
 ## Context

@@ -14,12 +14,3 @@ uri = "hdfs://127.0.0.1:9000/relify-test"
 [iceberg]
 name = "lakehouse"
 properties_json = "${RELIFY_ICEBERG_PROPERTIES}"
-
-[spark]
-iceberg_version = "1.11.0"
-
-[starrocks]
-flight_uri = "grpc://127.0.0.1:9408"
-catalog_name = "lakehouse"
-# Delete this optional line when no ADBC database options are required.
-db_kwargs_json = "${RELIFY_STARROCKS_DB_KWARGS}"

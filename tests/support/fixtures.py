@@ -9,8 +9,6 @@ from support.config import (
     HdfsConfig,
     IcebergConfig,
     S3Config,
-    SparkConfig,
-    StarRocksConfig,
     TestEnvironment,
     load_test_environment,
 )
@@ -63,15 +61,3 @@ def hdfs(test_env: TestEnvironment) -> HdfsConfig:
 def iceberg(test_env: TestEnvironment) -> IcebergConfig:
     assert test_env.iceberg is not None
     return test_env.iceberg
-
-
-@pytest.fixture(scope="session")
-def spark(test_env: TestEnvironment) -> SparkConfig:
-    assert test_env.spark is not None
-    return test_env.spark
-
-
-@pytest.fixture(scope="session")
-def starrocks(test_env: TestEnvironment) -> StarRocksConfig:
-    assert test_env.starrocks is not None
-    return test_env.starrocks

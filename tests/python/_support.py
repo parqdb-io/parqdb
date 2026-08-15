@@ -53,7 +53,6 @@ def build_index(
     key: list[str] | None = None,
     nlist: int = 2,
     encoding: str = "source",
-    builder: relify.Local | None = None,
     writer_options: relify.WriteOptions | None = None,
 ) -> None:
     table.create_index(
@@ -61,7 +60,6 @@ def build_index(
         column=column,
         key=key if key is not None else ["id"],
         config=relify.IVF(nlist=nlist, encoding=encoding),
-        builder=builder,
         writer_options=writer_options,
         wait_timeout=WAIT,
     )

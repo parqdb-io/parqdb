@@ -105,14 +105,6 @@ def test_create_index_rejects_unsupported_python_objects(tmp_path: Path) -> None
     session = relify.connect(tmp_path / "relify-data")
     vectors = register_source(session, source)
 
-    with pytest.raises(TypeError, match=r"relify\.builders\.IndexBuilder"):
-        vectors.create_index(
-            "vectors_embedding",
-            column="embedding",
-            key=["id"],
-            config=relify.IVF(nlist=1),
-            builder=object(),  # type: ignore[arg-type]
-        )
     with pytest.raises(TypeError, match=r"relify\.IVF"):
         vectors.create_index(
             "vectors_embedding",

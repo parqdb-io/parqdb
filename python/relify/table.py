@@ -5,7 +5,6 @@ from datetime import timedelta
 from typing import Any, Protocol, SupportsFloat, runtime_checkable
 
 from .build import IndexStatus
-from .builders.v1 import IndexBuilder
 from .catalog import IndexInfo
 from .config import IVF, WriteOptions
 from .identifier import TableIdentifier
@@ -14,7 +13,7 @@ from .query import VectorQuery
 
 @runtime_checkable
 class Table(Protocol):
-    """Portable source-table surface shared by every Relify backend."""
+    """Portable source-table surface."""
 
     @property
     def identifier(self) -> TableIdentifier: ...
@@ -26,7 +25,6 @@ class Table(Protocol):
         column: str,
         key: list[str],
         config: IVF,
-        builder: IndexBuilder | None = None,
         writer_options: WriteOptions | None = None,
         wait_timeout: timedelta | None = None,
     ) -> None: ...
@@ -70,7 +68,6 @@ class TableOperations:
         column: str,
         key: list[str],
         config: IVF,
-        builder: IndexBuilder | None = None,
         writer_options: WriteOptions | None = None,
         wait_timeout: timedelta | None = None,
     ) -> None:
@@ -80,7 +77,6 @@ class TableOperations:
             column=column,
             key=key,
             config=config,
-            builder=builder,
             writer_options=writer_options,
             wait_timeout=wait_timeout,
         )

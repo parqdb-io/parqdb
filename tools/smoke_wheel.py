@@ -15,13 +15,7 @@ def main() -> None:
             "wheel smoke must not rely on an external datafusion package"
         )
 
-    for module in (
-        "adbc_driver_flightsql",
-        "pyiceberg",
-        "pyspark",
-        "relify.experimental.spark",
-        "relify.experimental.starrocks",
-    ):
+    for module in ("pyiceberg",):
         import_module(module)
 
     with TemporaryDirectory(prefix="relify-wheel-smoke-") as directory:
