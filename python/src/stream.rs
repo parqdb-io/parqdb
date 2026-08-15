@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use arrow::datatypes::SchemaRef;
 use arrow::pyarrow::ToPyArrow;
 use pyo3::exceptions::PyStopAsyncIteration;
 use pyo3::prelude::*;
@@ -14,15 +15,18 @@ use crate::errors::{core_error, runtime_error};
 #[pyclass(name = "_NativeQueryStream", frozen)]
 pub(crate) struct PyNativeQueryStream {
     stream: Arc<Mutex<Option<ManagedQueryStream>>>,
+    schema: SchemaRef,
     cancellation: CancellationToken,
     runtime: Arc<Runtime>,
 }
 
 impl PyNativeQueryStream {
     pub(crate) fn new(stream: ManagedQueryStream, runtime: Arc<Runtime>) -> Self {
+        let schema = stream.schema_ref();
         let cancellation = stream.cancellation_token();
         Self {
             stream: Arc::new(Mutex::new(Some(stream))),
+            schema,
             cancellation,
             runtime,
         }
@@ -31,6 +35,10 @@ impl PyNativeQueryStream {
 
 #[pymethods]
 impl PyNativeQueryStream {
+    fn schema<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.schema.as_ref().to_pyarrow(py)
+    }
+
     fn __aiter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
     }

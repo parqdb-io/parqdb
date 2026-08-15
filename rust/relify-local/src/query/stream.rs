@@ -46,6 +46,12 @@ impl ManagedQueryStream {
         self.cancellation.clone()
     }
 
+    /// Returns the result schema before the first batch is consumed.
+    #[must_use]
+    pub fn schema_ref(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
     fn finish(&mut self) {
         self.stream.take();
         self.permit.take();

@@ -41,6 +41,7 @@ def test_native_sql_stream_is_an_async_arrow_iterator(tmp_path: Path) -> None:
         stream = await session._native.stream_sql(
             "SELECT value FROM UNNEST([1, 2, 3]) AS values(value)"
         )
+        assert stream.schema() == pyarrow.schema([("value", pyarrow.int64())])
         values: list[int] = []
         async for batch in stream:
             assert isinstance(batch, pyarrow.RecordBatch)
