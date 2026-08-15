@@ -48,6 +48,13 @@ stay below this boundary. Applications that deliberately need bundled
 DataFusion can call `session.datafusion_context()`; that context is outside
 embedded/remote parity guarantees.
 
+The ASGI adapter owns deployment policy rather than execution semantics. It
+canonicalizes each requested Parquet source and checks it against the server's
+file-root and object-store-prefix allowlist before invoking `SessionService`.
+The service never accepts client-supplied storage credentials. Index builds use
+the same process-scoped coordinator as embedded sessions; HTTP create and
+refresh calls acknowledge submission, while clients poll portable index status.
+
 ## Rust Components
 
 - `relify-local` owns the embedded DataFusion session, query planning, Parquet

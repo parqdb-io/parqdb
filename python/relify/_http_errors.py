@@ -36,6 +36,7 @@ _SERVER_ERRORS: tuple[tuple[type[BaseException], int, str], ...] = (
     (_native.InvalidSchemaError, 400, "invalid_schema"),
     (_native.InvalidMetadataError, 400, "invalid_metadata"),
     (_native.InvalidArgumentError, 400, "invalid_argument"),
+    (PermissionError, 403, "permission_denied"),
     (UnsupportedOperationError, 501, "unsupported_operation"),
     (TypeError, 400, "invalid_argument"),
     (ValueError, 400, "invalid_argument"),
@@ -54,6 +55,7 @@ _CLIENT_ERRORS: dict[str, type[BaseException]] = {
     "invalid_schema": _native.InvalidSchemaError,
     "invalid_metadata": _native.InvalidMetadataError,
     "invalid_argument": _native.InvalidArgumentError,
+    "permission_denied": PermissionError,
     "unsupported_operation": UnsupportedOperationError,
     "catalog_error": _native.CatalogError,
     "storage_error": _native.StorageError,
@@ -84,6 +86,11 @@ def raise_remote_error(response: httpx.Response, body: object) -> None:
     if request_id:
         message = f"{message} (request_id={request_id})"
     error_type = _CLIENT_ERRORS.get(code, _native.BackendError)
+    raise error_type(message)
+
+
+def raise_remote_build_error(code: str | None, message: str) -> None:
+    error_type = _CLIENT_ERRORS.get(code or "", _native.RelifyError)
     raise error_type(message)
 
 

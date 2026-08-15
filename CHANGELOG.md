@@ -21,9 +21,10 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bounded parallelism, failure retention, and retry.
 - Bounded incremental Arrow IPC encoding and decoding with transport-level
   backpressure and no full-result buffering.
-- A query-only HTTP transport and Python ASGI server using the same session
-  facades, service contract, error hierarchy, and managed query streams as
-  embedded execution.
+- An HTTP transport and Python ASGI server using the same session facades,
+  source and index lifecycle, error hierarchy, and managed query streams as
+  embedded execution. Server-side source registration uses an explicit URI
+  prefix allowlist.
 
 ### Changed
 
@@ -38,6 +39,8 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `l2_squared` or `cosine` distance.
 - Portable SQL terminals now reject DDL, DML, `COPY`, and session-mutating
   statements before execution.
+- Index names are scoped by their owning table identifier. Build status and
+  transport errors expose stable failure codes for embedded/HTTP parity.
 
 ### Fixed
 

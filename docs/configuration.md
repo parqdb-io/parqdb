@@ -44,6 +44,25 @@ Storage locations must be absolute canonical `file`, `s3`, or `hdfs` URIs.
 Credentials are process configuration and are never written into index
 metadata.
 
+## Server Source Policy
+
+An HTTP server rejects source registration unless the canonical source is below
+an explicitly allowed server-visible prefix:
+
+```python
+from relify.server import create_app
+
+app = create_app(
+    "/srv/relify",
+    allowed_source_prefixes=["/srv/lakehouse", "s3://bucket/documents"],
+)
+```
+
+The default allowlist is empty. File paths are resolved by the server and must
+remain below an allowed file root. Object-store URIs must match the configured
+scheme, authority, and path-segment boundary. Registration requests cannot
+override the server's storage credentials or endpoint configuration.
+
 ## Session Configuration
 
 Use `relify.SessionConfig`; it extends the bundled DataFusion configuration:

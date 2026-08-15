@@ -380,6 +380,8 @@ Portable request models contain no Python, PyArrow, or DataFusion objects:
 
 - `VectorQuery`, index configuration, and writer options use JSON scalars,
   arrays, and tagged objects;
+- index status carries a stable failure code with its message so polling can
+  reconstruct the same public exception type as embedded waiting;
 - an optional Arrow schema is encoded as an Arrow IPC schema message in an
   OpenAPI `string` with `byte` format;
 - partition-column types use the same IPC schema representation; and
@@ -806,11 +808,10 @@ This is a deliberate pre-1.0 API correction. Compatibility aliases may be
 kept for `collect` and `to_arrow`, but DataFusion object inheritance must not be
 preserved because it would make the shared contract false.
 
-The initial client/server milestone may open an existing catalog and execute
-queries before remote index construction is enabled. It is conformant only for
-the methods it implements and remains explicitly unstable; client/server mode
-is not declared stable until the complete portable surface passes the same
-conformance suite.
+The query-only milestone preceded remote lifecycle support. The current
+experimental surface also registers authorized Parquet sources and manages
+indexes through the same session facade. Client/server mode remains unstable
+until the complete portable surface passes the same conformance suite.
 
 ## Alternatives
 
