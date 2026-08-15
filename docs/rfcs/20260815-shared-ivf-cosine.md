@@ -102,6 +102,23 @@ files unchanged. Replacing files or changing the files matched by a URI pattern
 requires registering the changed data under a new URI before building another
 index. Relify does not compute a Parquet file-manifest fingerprint in this RFC.
 
+The Parquet rule is deliberately literal:
+
+- rebuilding another representation from the same URI is safe only while the
+  resolved file set and every file's bytes remain unchanged;
+- appending, deleting, or overwriting a file behind the URI, including changing
+  the expansion of a wildcard URI, makes reuse unsafe;
+- changed data must be published at a different canonical URI, which produces a
+  different IVF fingerprint even when its schema and row count are unchanged;
+  and
+- changing only the URI also produces a different source state. This RFC does
+  not infer byte equivalence between two Parquet locations.
+
+The catalog therefore treats equal Parquet URIs as equal source states and
+different Parquet URIs as different source states. It cannot reject an unsafe
+same-URI overwrite because that mutation is not represented in metadata; such
+an overwrite is a source-contract violation by the caller.
+
 The canonical descriptor is hashed to produce an IVF fingerprint. The hash is
 a lookup key, not sufficient proof of compatibility: a catalog entry retains
 the complete descriptor and readers verify it after lookup.
@@ -286,6 +303,21 @@ Relify reuses squared-L2 execution over normalized vectors:
 cosine_distance(q, x) = squared_l2(normalize(q), normalize(x)) / 2
 ```
 
+For non-zero vectors, this is the usual cosine distance:
+
+```text
+squared_l2(normalize(q), normalize(x)) / 2
+    = (2 - 2 * dot(normalize(q), normalize(x))) / 2
+    = 1 - cosine_similarity(q, x)
+```
+
+The result is in `[0, 2]` up to floating-point error. Orthogonal vectors have
+distance `1`; a negative similarity produces a distance greater than `1`.
+Norms are accumulated with at least binary64 precision over canonical float
+elements. Zero norm means that every canonical element is zero; there is no
+configurable epsilon threshold. Normalization must produce finite canonical
+float elements or the build or query fails.
+
 The division is applied to retained results rather than every candidate because
 it does not change ordering. Metadata records `metric = cosine`; normalization
 and result scaling are metric semantics, not independently configurable
@@ -389,6 +421,10 @@ It does not mutate the previous IVF artifact.
 For Parquet, Relify cannot detect replacement at the same URI. The user must
 publish changed source data under a new URI before rebuilding. Reusing an IVF
 after changing the files behind its Parquet URI violates the source contract.
+For example, refreshing `s3://bucket/documents/v1/` without modifying that
+prefix may reuse its IVF; overwriting a file under `v1/` and refreshing may not.
+The changed files must instead be published under a location such as
+`s3://bucket/documents/v2/`, which forces a new source state and fingerprint.
 
 Dropping a logical index removes only its catalog visibility. It does not
 synchronously delete its shared IVF artifact or encoding files. Garbage
