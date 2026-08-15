@@ -1,9 +1,13 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use relify_catalog::{IndexIdentifier, SqliteCatalog};
+use relify_catalog::{IndexIdentifier, SharedIvfClaimResult, SqliteCatalog};
 use relify_core::{IndexArtifacts, IndexFormat};
-use relify_meta::{IndexMetadata, IndexSnapshot, RelationReference, SnapshotLogEntry};
+use relify_meta::{
+    DistanceMetric, IVF_CLUSTERING_PROFILE_VERSION, IndexMetadata, IndexSnapshot,
+    RelationReference, SharedIvfDescriptor, SharedIvfMetadata, SharedIvfReference,
+    SnapshotLogEntry,
+};
 use relify_storage::{StorageRegistry, Warehouse};
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -98,6 +102,27 @@ fn metadata_document(store: &MetadataStore) -> IndexMetadata {
     }
 }
 
+fn shared_ivf_document(store: &MetadataStore) -> SharedIvfMetadata {
+    let descriptor = SharedIvfDescriptor {
+        source: source("file:///data/documents.parquet"),
+        vector_field: "embedding".into(),
+        dimension: 2,
+        metric: DistanceMetric::L2Squared,
+        nlist: 2,
+        clustering_profile_version: IVF_CLUSTERING_PROFILE_VERSION,
+    };
+    let artifact_uuid = Uuid::new_v4();
+    SharedIvfMetadata {
+        format_version: 1,
+        artifact_uuid,
+        fingerprint: descriptor.fingerprint().unwrap(),
+        location: store.shared_ivf_location(artifact_uuid).unwrap(),
+        created_at_ms: 1_750_000_000_000,
+        descriptor,
+        centroids: source("file:///indexes/shared/centroids"),
+    }
+}
+
 #[tokio::test]
 async fn metadata_store_writes_immutable_validated_documents() {
     let temporary = TempDir::new().unwrap();
@@ -127,6 +152,95 @@ async fn metadata_store_writes_immutable_validated_documents() {
     assert!(next_location.ends_with("/v2-702.metadata.json"));
     assert_eq!(store.load(&next_location).await.unwrap(), next);
     assert!(store.write_update(&base, &next).await.is_err());
+}
+
+#[tokio::test]
+async fn metadata_store_bounds_index_and_shared_documents_in_one_cache() {
+    let temporary = TempDir::new().unwrap();
+    let store = metadata_store(&temporary, 1);
+    let index = metadata_document(&store);
+    let index_location = store.write_initial(&index).await.unwrap();
+    let shared = shared_ivf_document(&store);
+    let shared_location = store.write_shared_ivf(&shared).await.unwrap();
+
+    for location in [&index_location, &shared_location] {
+        std::fs::remove_file(url::Url::parse(location).unwrap().to_file_path().unwrap()).unwrap();
+    }
+
+    assert!(store.load(&index_location).await.is_err());
+    assert_eq!(
+        store.load_shared_ivf(&shared_location).await.unwrap(),
+        shared
+    );
+}
+
+#[tokio::test]
+async fn repository_validates_shared_ivf_catalog_and_reference_identity() {
+    let temporary = TempDir::new().unwrap();
+    let repository = repository(&temporary);
+    let shared = shared_ivf_document(repository.metadata_store());
+    let location = repository
+        .metadata_store()
+        .write_shared_ivf(&shared)
+        .await
+        .unwrap();
+    let claim = match repository
+        .catalog()
+        .claim_shared_ivf(&shared.descriptor, Uuid::new_v4(), 60_000)
+        .unwrap()
+    {
+        SharedIvfClaimResult::Claimed(claim) => claim,
+        other => panic!("first caller must own the claim, received {other:?}"),
+    };
+    repository
+        .catalog()
+        .publish_shared_ivf(&claim, &location, &shared)
+        .unwrap();
+
+    let loaded = repository
+        .load_shared_ivf(&shared.fingerprint)
+        .await
+        .unwrap();
+    assert_eq!(loaded.metadata, shared);
+    let reference = SharedIvfReference::new(
+        &loaded.entry.fingerprint,
+        loaded.entry.artifact_uuid,
+        &loaded.entry.metadata_location,
+    )
+    .unwrap();
+    assert_eq!(
+        repository
+            .load_shared_ivf_reference(&reference)
+            .await
+            .unwrap()
+            .metadata,
+        loaded.metadata
+    );
+
+    let mismatched = SharedIvfReference::new(
+        reference.fingerprint,
+        Uuid::new_v4(),
+        reference.metadata_location,
+    )
+    .unwrap();
+    assert!(
+        repository
+            .load_shared_ivf_reference(&mismatched)
+            .await
+            .is_err()
+    );
+
+    let malformed = SharedIvfReference {
+        fingerprint: loaded.entry.fingerprint.to_uppercase(),
+        artifact_uuid: loaded.entry.artifact_uuid,
+        metadata_location: loaded.entry.metadata_location,
+    };
+    assert!(
+        repository
+            .load_shared_ivf_reference(&malformed)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]

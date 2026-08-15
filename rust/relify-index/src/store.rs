@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
-use relify_meta::IndexMetadata;
+use relify_meta::{IndexMetadata, SharedIvfMetadata};
 use relify_storage::Warehouse;
 use uuid::Uuid;
 
@@ -74,8 +74,14 @@ struct MetadataCache {
 
 #[derive(Debug)]
 struct CachedMetadata {
-    metadata: Arc<IndexMetadata>,
+    document: CachedDocument,
     serialized_bytes: usize,
+}
+
+#[derive(Debug)]
+enum CachedDocument {
+    Index(Arc<IndexMetadata>),
+    SharedIvf(Arc<SharedIvfMetadata>),
 }
 
 impl MetadataStore {
@@ -123,6 +129,11 @@ impl MetadataStore {
             .location(&format!("metadata/{index_uuid}"), true)?)
     }
 
+    /// Returns the stable root recorded in shared-IVF metadata.
+    pub fn shared_ivf_location(&self, artifact_uuid: Uuid) -> Result<String> {
+        self.index_location(artifact_uuid)
+    }
+
     /// Validates and writes the first immutable metadata document.
     pub async fn write_initial(&self, metadata: &IndexMetadata) -> Result<String> {
         metadata.validate()?;
@@ -146,9 +157,52 @@ impl MetadataStore {
         .await
     }
 
+    /// Validates and writes one immutable shared-IVF metadata document.
+    pub async fn write_shared_ivf(&self, metadata: &SharedIvfMetadata) -> Result<String> {
+        metadata.validate()?;
+        let expected_location = self.shared_ivf_location(metadata.artifact_uuid)?;
+        if metadata.location != expected_location {
+            return Err(Error::InvalidMetadata(
+                "shared IVF metadata location does not match the configured warehouse".into(),
+            ));
+        }
+        let destination = self.warehouse.location(
+            &format!("metadata/{}/v1.metadata.json", metadata.artifact_uuid),
+            false,
+        )?;
+        let mut bytes = serde_json::to_vec_pretty(metadata)?;
+        bytes.push(b'\n');
+        let serialized_bytes = bytes.len();
+        self.warehouse
+            .put_new(&destination, Bytes::from(bytes))
+            .await?;
+        self.cache().insert(
+            &destination,
+            CachedDocument::SharedIvf(Arc::new(metadata.clone())),
+            serialized_bytes,
+        );
+        Ok(destination)
+    }
+
+    /// Loads and validates one immutable shared-IVF metadata document.
+    pub async fn load_shared_ivf(&self, location: &str) -> Result<SharedIvfMetadata> {
+        if let Some(metadata) = self.cache().get_shared_ivf(location) {
+            return Ok(metadata.as_ref().clone());
+        }
+        let bytes = self.warehouse.read(location).await?;
+        let serialized_bytes = bytes.len();
+        let metadata = Arc::new(SharedIvfMetadata::from_json_slice(&bytes)?);
+        self.cache().insert(
+            location,
+            CachedDocument::SharedIvf(Arc::clone(&metadata)),
+            serialized_bytes,
+        );
+        Ok(metadata.as_ref().clone())
+    }
+
     /// Loads and decodes one immutable metadata document.
     pub async fn load(&self, location: &str) -> Result<IndexMetadata> {
-        if let Some(metadata) = self.cache().get(location) {
+        if let Some(metadata) = self.cache().get_index(location) {
             return Ok(metadata.as_ref().clone());
         }
         self.load_from_storage(location).await
@@ -163,8 +217,11 @@ impl MetadataStore {
         let bytes = self.warehouse.read(location).await?;
         let serialized_bytes = bytes.len();
         let metadata = Arc::new(IndexMetadata::from_json_slice(&bytes)?);
-        self.cache()
-            .insert(location, Arc::clone(&metadata), serialized_bytes);
+        self.cache().insert(
+            location,
+            CachedDocument::Index(Arc::clone(&metadata)),
+            serialized_bytes,
+        );
         Ok(metadata.as_ref().clone())
     }
 
@@ -185,8 +242,11 @@ impl MetadataStore {
         self.warehouse
             .put_new(&destination, Bytes::from(bytes))
             .await?;
-        self.cache()
-            .insert(&destination, Arc::new(metadata.clone()), serialized_bytes);
+        self.cache().insert(
+            &destination,
+            CachedDocument::Index(Arc::new(metadata.clone())),
+            serialized_bytes,
+        );
         Ok(destination)
     }
 
@@ -213,13 +273,25 @@ impl MetadataCache {
         }
     }
 
-    fn get(&mut self, location: &str) -> Option<Arc<IndexMetadata>> {
-        let metadata = Arc::clone(&self.entries.get(location)?.metadata);
+    fn get_index(&mut self, location: &str) -> Option<Arc<IndexMetadata>> {
+        let metadata = match &self.entries.get(location)?.document {
+            CachedDocument::Index(metadata) => Arc::clone(metadata),
+            CachedDocument::SharedIvf(_) => return None,
+        };
         self.touch(location);
         Some(metadata)
     }
 
-    fn insert(&mut self, location: &str, metadata: Arc<IndexMetadata>, serialized_bytes: usize) {
+    fn get_shared_ivf(&mut self, location: &str) -> Option<Arc<SharedIvfMetadata>> {
+        let metadata = match &self.entries.get(location)?.document {
+            CachedDocument::SharedIvf(metadata) => Arc::clone(metadata),
+            CachedDocument::Index(_) => return None,
+        };
+        self.touch(location);
+        Some(metadata)
+    }
+
+    fn insert(&mut self, location: &str, document: CachedDocument, serialized_bytes: usize) {
         self.remove(location);
         if self.config.max_entries == 0
             || self.config.max_bytes == 0
@@ -230,7 +302,7 @@ impl MetadataCache {
         self.entries.insert(
             location.to_owned(),
             CachedMetadata {
-                metadata,
+                document,
                 serialized_bytes,
             },
         );
