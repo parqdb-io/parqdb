@@ -17,16 +17,19 @@ matrix.
 
 ## Index and Query Semantics
 
-- IVF is the only implemented index family. The local backend supports exact
-  vectors and LVQ4/LVQ8 encodings; experimental backends support a narrower
-  subset.
-- Squared L2 is the only distance metric.
+- IVF is the only implemented index family. The local backend supports
+  source-encoded, LVQ4, and LVQ8 postings; experimental backends support only
+  source-encoded L2 IVF indexes.
+- Squared L2 and cosine are supported by the local backend.
 - Query vectors are one-dimensional; batch queries are not implemented.
 - Results order by distance; the relative order of equal-distance rows is
   unspecified.
-- Vector columns must have one fixed dimension and finite `float32` elements.
+- Vector columns must have one fixed dimension and finite `float32` or
+  `float64` elements. Computation canonicalizes them to `float32`.
 - The current API accepts SQL-string source filters; it does not expose a
   backend-neutral expression object for filters.
+- Ready shared-IVF centroid artifacts are retained conservatively; automatic
+  reclamation after the last logical index is dropped is not implemented.
 
 ## Catalog and Coordination
 
@@ -47,14 +50,14 @@ matrix.
 
 The stable local backend supports Parquet source registration, local IVF
 construction, exact fallback, filtering, projection, DataFusion SQL and
-DataFrame composition, index caching, refresh, catalog recovery, and orphan
-removal. The local builder does not write Iceberg indexes.
+DataFrame composition, decompressed Parquet page caching, refresh, catalog
+recovery, and orphan removal. The local builder does not write Iceberg indexes.
 
 ## Spark
 
 The experimental backend supports Spark Classic 4.0 and 4.1 and native
-PySpark DataFrame queries over compatible Parquet and Iceberg indexes. It does
-not support:
+PySpark DataFrame queries over compatible source-encoded L2 IVF indexes in
+Parquet and Iceberg. It does not support:
 
 - Spark Connect;
 - index construction or refresh;
@@ -65,8 +68,8 @@ not support:
 ## StarRocks
 
 The experimental backend requires StarRocks 3.5.1 or later and supports
-query-only access to Iceberg source and index tables through Arrow Flight SQL.
-It does not:
+query-only access to source-encoded L2 IVF indexes and their Iceberg source
+tables through Arrow Flight SQL. It does not:
 
 - build indexes with StarRocks compute;
 - use StarRocks native vector indexes;

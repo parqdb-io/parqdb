@@ -35,9 +35,10 @@ the specification. It does not perform catalog, storage, or query operations.
 `relify-catalog` defines one top-level registry for runtime tables and Relify
 indexes. Its index side maps a structured identifier to the URI of the current
 immutable metadata document and owns atomic register, compare-and-swap commit,
-drop, and discovery. Its table side stores provider-defined definitions needed
-to reconstruct local external tables. It does not read metadata files, source
-data, or index tables.
+drop, and discovery. A separate internal registry coordinates shared-IVF
+claims, leases, and publication by descriptor fingerprint. Its table side
+stores provider-defined definitions needed to reconstruct local external
+tables. It does not read metadata files, source data, or index tables.
 
 `relify-storage` resolves absolute `file`, `s3`, and `hdfs` URIs through the
 Arrow object-store interface. A `Warehouse` restricts Relify-managed metadata
@@ -60,9 +61,11 @@ Parquet, object stores, numerical kernels, or a concrete runtime.
 
 `relify-index` owns immutable metadata I/O, catalog loading and discovery,
 implicit index selection, and the publication transaction shared by backends.
-It accepts portable `RelationReference` values and backend-produced
-`IndexArtifacts`; it does not depend on Arrow, DataFusion, Spark, Parquet,
-Iceberg, numerical kernels, or a concrete runtime.
+It also loads shared-IVF metadata and validates the artifact identity and
+descriptor against each logical index snapshot. It accepts portable
+`RelationReference` values and backend-produced `IndexArtifacts`; it does not
+depend on Arrow, DataFusion, Spark, Parquet, Iceberg, numerical kernels, or a
+concrete runtime.
 
 `relify-iceberg` resolves one portable Iceberg reference into a DataFusion
 provider. It verifies the table UUID and binds the exact snapshot ID from
@@ -213,13 +216,12 @@ planning cache;
 oversized manifests are used for the current plan but not admitted. Stable
 internal table names keep only a lightweight deferred provider and therefore do
 not pin an evicted manifest. Decoded postings are not cached. A full probe needs
-neither centroid routing nor a cluster predicate. IVF postings store exact
-vectors by default,
-so key/vector-only projections without a source filter can compute and rank
-results from index tables alone. Other projections and filters resolve source
-rows by key. Callers can continue from the resulting lazy DataFrame directly or
-compile complete SQL over the session's registered source and index relations.
-Observable index metadata and query semantics remain in Rust.
+neither centroid routing nor a cluster predicate. Source-encoded indexes
+resolve vectors from source rows; LVQ indexes can rank from their code postings
+when neither filtering nor projection requires source payload. Callers can
+continue from the resulting lazy DataFrame directly or compile complete SQL
+over the session's registered source and index relations. Observable index
+metadata and query semantics remain in Rust.
 
 The local session uses one storage-backed query path for cold and warm data.
 File, row-group, and column pruning select Parquet input before the reader checks
@@ -248,8 +250,13 @@ session. See [`python-api.md`](python-api.md) for implemented behavior and
 
 ## Publication
 
-Each local build writes Parquet index tables directly to a newly allocated
-immutable warehouse prefix:
+Before writing postings, a local build resolves the shared-IVF descriptor. One
+catalog claim owner trains and publishes immutable centroids; concurrent and
+later builds reuse that artifact. Source, LVQ4, and LVQ8 logical indexes then
+write separate postings against the same centroids.
+
+Each artifact and logical-index snapshot uses a newly allocated immutable
+warehouse prefix:
 
 ```text
 <warehouse>/indexes/<index-uuid>/<snapshot-id>/

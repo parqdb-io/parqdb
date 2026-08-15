@@ -123,9 +123,9 @@ session.register_parquet(
 )
 ```
 
-Every vector value must be a non-null, fixed-dimension Parquet `LIST<FLOAT>`
-whose elements are non-null and finite. Each key field must identify source
-rows using an exact supported scalar type. See the
+Every vector value must be a non-null, fixed-dimension Parquet list whose
+elements are non-null, finite `float32` or `float64` values. Each key field must
+identify source rows using an exact supported scalar type. See the
 [IVF index schema](../spec/ivf/index-schema.md) for the normative source
 requirements.
 

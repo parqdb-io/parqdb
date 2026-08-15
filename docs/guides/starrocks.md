@@ -4,6 +4,9 @@ The experimental StarRocks backend compiles a Relify query into one StarRocks
 SQL statement over exact Iceberg snapshots. It is query-only and accepts a
 caller-owned Arrow Flight SQL ADBC connection.
 
+The current planner accepts source-encoded L2 IVF indexes. Cosine and LVQ
+postings are currently local-backend capabilities.
+
 ## Requirements
 
 - StarRocks 3.5.1 or later with Arrow Flight SQL enabled;

@@ -279,7 +279,7 @@ check_query_backend(
     session,
     [
         BackendQueryCase(
-            name="stored vectors",
+            name="source-encoded IVF",
             profile=profile,
             query=query,
             expected=expected_arrow_table,

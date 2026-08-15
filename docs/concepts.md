@@ -24,8 +24,10 @@ A Relify index consists of portable JSON metadata and ordinary relations. The
 current IVF family stores:
 
 - centroids used to choose candidate clusters; and
-- postings that map clusters to source keys and either source references,
-  exact vectors, or LVQ codes.
+- postings that map clusters to source keys and optionally contain LVQ codes.
+
+Logical indexes over the same source state, vector field, metric, and cluster
+count reuse one immutable centroid artifact while owning separate postings.
 
 Parquet relations are used by the local builder. The specification also defines
 the same logical relations for Iceberg tables. The
@@ -70,9 +72,11 @@ A builder creates the physical index and publishes its metadata:
 
 - `relify.Local` builds Parquet indexes in the current process with native Rust
   training and assignment.
-Spark and StarRocks currently have no built-in builder. Builders remain
-independent from query backends, so a compatible third-party builder may
-publish an Iceberg index for DataFusion, Spark, or StarRocks to query.
+
+Spark and StarRocks construction is not implemented for the shared-IVF schema.
+Builders remain independent from query backends, so a conforming external
+builder may publish an Iceberg index for DataFusion, Spark, or StarRocks to
+query.
 
 ## Backend
 
@@ -96,7 +100,7 @@ An indexed query has four logical stages:
 
 1. select the nearest IVF centroids;
 2. scan postings for the selected cluster IDs;
-3. apply source filters and compute exact squared L2 distances; and
+3. apply source filters and compute the configured distance; and
 4. order by distance, then retain the requested limit.
 
 The relative order of candidates with equal distance is unspecified.
