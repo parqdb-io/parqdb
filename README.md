@@ -42,10 +42,9 @@ directly on Parquet, with Arrow-native execution.
 - **Hybrid serving and analytics.** For online serving, ParqDB parallelizes
   across queries to maximize QPS. For analytical workloads, it parallelizes
   within a query to minimize large-k latency.
-- **High performance with predictable memory use.** A configurable budget
-  bounds execution and caches, even when the index exceeds RAM. IVF pruning,
-  LVQ4 and LVQ8 encodings, and Arrow-native kernels reduce I/O, memory bandwidth,
-  and vector scoring cost.
+- **Billion-scale search in bounded memory.** Search indexes larger than RAM
+  under a fixed memory budget. IVF pruning, LVQ encoding, and Arrow-native
+  execution keep I/O and scoring fast.
 - **From 1 core to 1,000+ cores.** Run embedded on a single core, scale up on one
   machine, or share the same index with Spark and StarRocks clusters.
 
