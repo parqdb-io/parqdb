@@ -40,10 +40,10 @@ directly on Parquet, with Arrow-native execution.
 - **Serving and analytics on one index.** Use small-k retrieval for online
   serving and large-k search for ad hoc analytics. No separate index pipeline
   is required.
-- **Predictable memory use.** A configurable memory budget controls query
-  execution and caches, even when the index is larger than RAM.
-- **High-performance execution.** IVF pruning reduces I/O. LVQ4 and LVQ8 reduce
-  storage and memory bandwidth. Arrow-native kernels accelerate vector scoring.
+- **High performance with predictable memory use.** A configurable budget
+  bounds execution and caches, even when the index exceeds RAM. IVF pruning,
+  LVQ4 and LVQ8 encodings, and Arrow-native kernels reduce I/O, memory bandwidth,
+  and vector scoring cost.
 - **From 1 core to 1,000+ cores.** Run embedded on a single core, scale up on one
   machine, or share the same index with Spark and StarRocks clusters.
 
