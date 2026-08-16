@@ -17,6 +17,8 @@ const EMPTY_SPLIT_EPS: f32 = 1.0 / 1024.0;
 const GEMM_MIN_DIMENSION: usize = 8;
 const GEMM_MIN_CLUSTERS: usize = 16;
 const GEMM_MAX_OUTPUT_VALUES: usize = 4 * 1024 * 1024;
+const HIERARCHICAL_AUTO_MIN_CLUSTERS: usize = 8_192;
+const ROOT_TRAINING_POINTS_PER_CENTROID: usize = 256;
 
 /// Error returned by K-means training, sampling, or assignment.
 #[derive(Debug, Error)]
@@ -41,7 +43,7 @@ impl From<ParalliteError<Error>> for Error {
     }
 }
 
-/// Configuration for Lloyd K-means training.
+/// Configuration for K-means training.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct KMeansOptions {
     /// Number of centroids to train.
@@ -50,6 +52,25 @@ pub struct KMeansOptions {
     pub max_iter: usize,
     /// Deterministic initialization seed.
     pub seed: u64,
+    /// Training strategy used to produce the leaf centroids.
+    pub mode: KMeansMode,
+}
+
+/// Strategy for training a fixed number of K-means centroids.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KMeansMode {
+    /// Use hierarchical training for large centroid counts and flat Lloyd K-means otherwise.
+    ///
+    /// If a hierarchy cannot form every requested leaf centroid from its root
+    /// partitions, training falls back to flat Lloyd K-means.
+    Auto,
+    /// Always run flat Lloyd K-means over every requested centroid.
+    Flat,
+    /// Train a balanced two-level hierarchy and return its flattened leaf centroids.
+    ///
+    /// Returns an error when a root partition has too few rows to form its
+    /// assigned leaf centroids.
+    Hierarchical,
 }
 
 impl KMeansOptions {
@@ -60,6 +81,7 @@ impl KMeansOptions {
             n_clusters,
             max_iter: 20,
             seed: 42,
+            mode: KMeansMode::Auto,
         }
     }
 }
@@ -69,7 +91,7 @@ impl KMeansOptions {
 pub struct KMeansModel {
     /// Contiguous centroid values.
     pub centroids: Vec<f32>,
-    /// Number of Lloyd iterations completed.
+    /// Maximum Lloyd iterations completed by one training stage.
     pub iterations: usize,
 }
 
@@ -288,6 +310,40 @@ pub fn fit_lloyd_kmeans_with_progress(
         });
     }
 
+    match resolved_mode(options) {
+        KMeansMode::Flat => {
+            fit_flat_kmeans_with_progress(vectors, dimension, n, context, options, &report_progress)
+        }
+        KMeansMode::Hierarchical => fit_hierarchical_kmeans_with_progress(
+            vectors,
+            dimension,
+            n,
+            context,
+            options,
+            &report_progress,
+        ),
+        KMeansMode::Auto => unreachable!("resolved mode is never Auto"),
+    }
+}
+
+fn resolved_mode(options: KMeansOptions) -> KMeansMode {
+    match options.mode {
+        KMeansMode::Auto if options.n_clusters >= HIERARCHICAL_AUTO_MIN_CLUSTERS => {
+            KMeansMode::Hierarchical
+        }
+        KMeansMode::Auto => KMeansMode::Flat,
+        mode => mode,
+    }
+}
+
+fn fit_flat_kmeans_with_progress(
+    vectors: &[f32],
+    dimension: usize,
+    n: usize,
+    context: &ParalliteContext,
+    options: KMeansOptions,
+    report_progress: &(impl Fn(usize) + Sync),
+) -> Result<KMeansModel> {
     let mut rng = SmallRng::new(options.seed);
     let mut centroids = init_centroids_random(vectors, n, dimension, options.n_clusters, &mut rng);
     let row_norms = detect().row_norms(vectors, dimension);
@@ -326,6 +382,166 @@ pub fn fit_lloyd_kmeans_with_progress(
         centroids,
         iterations,
     })
+}
+
+fn fit_hierarchical_kmeans_with_progress(
+    vectors: &[f32],
+    dimension: usize,
+    n: usize,
+    context: &ParalliteContext,
+    options: KMeansOptions,
+    report_progress: &(impl Fn(usize) + Sync),
+) -> Result<KMeansModel> {
+    let (root_count, child_counts) = hierarchical_shape(options.n_clusters);
+    let root_sample_rows = n.min(
+        root_count
+            .checked_mul(ROOT_TRAINING_POINTS_PER_CENTROID)
+            .ok_or_else(|| {
+                Error::InvalidArgument("root training sample size overflows usize".into())
+            })?,
+    );
+    let root_sample = sample_training_rows(vectors, dimension, root_sample_rows, options.seed)?;
+    let root_options = KMeansOptions {
+        n_clusters: root_count,
+        mode: KMeansMode::Flat,
+        ..options
+    };
+    let root_model = fit_flat_kmeans_with_progress(
+        &root_sample,
+        dimension,
+        root_sample_rows,
+        context,
+        root_options,
+        &|_| {},
+    )?;
+    let root_labels = assign_to_centroids(vectors, dimension, &root_model.centroids, context)?;
+    let (root_offsets, root_rows) = partition_rows(&root_labels, root_count)?;
+    if !has_sufficient_root_rows(&root_offsets, &child_counts) {
+        if options.mode == KMeansMode::Auto {
+            return fit_flat_kmeans_with_progress(
+                vectors,
+                dimension,
+                n,
+                context,
+                options,
+                report_progress,
+            );
+        }
+        return Err(Error::InvalidArgument(
+            "hierarchical root partitions cannot form the requested leaf centroids".into(),
+        ));
+    }
+
+    let mut centroids = Vec::with_capacity(
+        options
+            .n_clusters
+            .checked_mul(dimension)
+            .ok_or_else(|| Error::InvalidArgument("centroid shape overflows usize".into()))?,
+    );
+    let mut child_vectors = Vec::new();
+    let mut iterations = 0;
+    for root in 0..root_count {
+        let rows = &root_rows[root_offsets[root]..root_offsets[root + 1]];
+        let child_count = child_counts[root];
+        debug_assert!(rows.len() >= child_count);
+        child_vectors.clear();
+        let child_values = rows
+            .len()
+            .checked_mul(dimension)
+            .ok_or_else(|| Error::InvalidArgument("child training shape overflows usize".into()))?;
+        child_vectors.try_reserve(child_values).map_err(|error| {
+            Error::InvalidArgument(format!(
+                "cannot reserve {child_values} values for hierarchical child training: {error}"
+            ))
+        })?;
+        for &row_id in rows {
+            child_vectors.extend_from_slice(row(vectors, dimension, row_id));
+        }
+        let child_options = KMeansOptions {
+            n_clusters: child_count,
+            seed: options.seed.wrapping_add(root as u64).wrapping_add(1),
+            mode: KMeansMode::Flat,
+            ..options
+        };
+        let model = fit_flat_kmeans_with_progress(
+            &child_vectors,
+            dimension,
+            rows.len(),
+            context,
+            child_options,
+            report_progress,
+        )?;
+        iterations = iterations.max(model.iterations);
+        centroids.extend_from_slice(&model.centroids);
+    }
+    debug_assert_eq!(centroids.len(), options.n_clusters * dimension);
+    Ok(KMeansModel {
+        centroids,
+        iterations,
+    })
+}
+
+fn has_sufficient_root_rows(offsets: &[usize], child_counts: &[usize]) -> bool {
+    child_counts
+        .iter()
+        .enumerate()
+        .all(|(root, &child_count)| offsets[root + 1] - offsets[root] >= child_count)
+}
+
+fn hierarchical_shape(n_clusters: usize) -> (usize, Vec<usize>) {
+    let root_count = rounded_sqrt(n_clusters).max(1);
+    let children_per_root = n_clusters / root_count;
+    let remainder = n_clusters % root_count;
+    let child_counts = (0..root_count)
+        .map(|root| children_per_root + usize::from(root < remainder))
+        .collect();
+    (root_count, child_counts)
+}
+
+fn rounded_sqrt(value: usize) -> usize {
+    if value <= 1 {
+        return value;
+    }
+    let mut lower = 1;
+    let mut upper = value;
+    while lower < upper {
+        let middle = lower + (upper - lower).div_ceil(2);
+        if middle <= value / middle {
+            lower = middle;
+        } else {
+            upper = middle - 1;
+        }
+    }
+    let root = lower;
+    let next = root.saturating_add(1);
+    if let Some(next_square) = next.checked_mul(next)
+        && next_square - value < value - root * root
+    {
+        return next;
+    }
+    root
+}
+
+fn partition_rows(labels: &[usize], cluster_count: usize) -> Result<(Vec<usize>, Vec<usize>)> {
+    let mut offsets = vec![0_usize; cluster_count + 1];
+    for &label in labels {
+        if label >= cluster_count {
+            return Err(Error::InvalidArgument(format!(
+                "K-means label {label} exceeds cluster count {cluster_count}"
+            )));
+        }
+        offsets[label + 1] += 1;
+    }
+    for index in 1..offsets.len() {
+        offsets[index] += offsets[index - 1];
+    }
+    let mut next = offsets[..cluster_count].to_vec();
+    let mut rows = vec![0_usize; labels.len()];
+    for (row, &label) in labels.iter().enumerate() {
+        rows[next[label]] = row;
+        next[label] += 1;
+    }
+    Ok((offsets, rows))
 }
 
 /// Assigns dense vectors to their nearest centroids using `context`.

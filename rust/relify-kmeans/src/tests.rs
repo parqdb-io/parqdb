@@ -40,6 +40,7 @@ fn serial_and_parallel_results_match() {
         n_clusters: 4,
         max_iter: 10,
         seed: 99,
+        mode: KMeansMode::Flat,
     };
     let serial = ParalliteContext::with_executor(Executor::serial());
     let parallel = ParalliteContext::builder().threads(4).unwrap().build();
@@ -58,6 +59,7 @@ fn training_progress_reports_rows_from_every_iteration() {
         n_clusters: 4,
         max_iter: 5,
         seed: 42,
+        mode: KMeansMode::Flat,
     };
     let assigned_rows = AtomicUsize::new(0);
     let model = fit_lloyd_kmeans_with_progress(
@@ -78,6 +80,118 @@ fn training_progress_reports_rows_from_every_iteration() {
 }
 
 #[test]
+fn hierarchical_shape_preserves_requested_cluster_count() {
+    let (roots, children) = hierarchical_shape(8_192);
+    assert_eq!(roots, 91);
+    assert_eq!(children.iter().sum::<usize>(), 8_192);
+    assert!(children.iter().all(|&count| count == 90 || count == 91));
+
+    let (roots, children) = hierarchical_shape(65_536);
+    assert_eq!(roots, 256);
+    assert!(children.iter().all(|&count| count == 256));
+}
+
+#[test]
+fn root_partitions_need_enough_rows_for_every_leaf_centroid() {
+    assert!(has_sufficient_root_rows(&[0, 100, 200], &[64, 64]));
+    assert!(!has_sufficient_root_rows(&[0, 127, 200], &[128, 64]));
+}
+
+#[test]
+fn partition_rows_rejects_out_of_range_labels() {
+    let error = partition_rows(&[0, 2], 2).unwrap_err();
+
+    assert!(error.to_string().contains("label 2"));
+    assert!(error.to_string().contains("cluster count 2"));
+}
+
+#[test]
+fn auto_mode_uses_hierarchical_training_only_for_large_cluster_counts() {
+    assert_eq!(resolved_mode(KMeansOptions::new(8_191)), KMeansMode::Flat);
+    assert_eq!(
+        resolved_mode(KMeansOptions::new(8_192)),
+        KMeansMode::Hierarchical
+    );
+    assert_eq!(
+        resolved_mode(KMeansOptions {
+            n_clusters: 8_192,
+            max_iter: 1,
+            seed: 42,
+            mode: KMeansMode::Flat,
+        }),
+        KMeansMode::Flat
+    );
+}
+
+#[test]
+fn hierarchical_mode_returns_flattened_leaf_centroids() {
+    let vectors = (0..8)
+        .flat_map(|root| {
+            (0..512).flat_map(move |row| {
+                [
+                    root as f32 * 1_000.0 + row as f32 * 0.001,
+                    root as f32 * -1_000.0 + (row % 17) as f32 * 0.001,
+                ]
+            })
+        })
+        .collect::<Vec<_>>();
+    let options = KMeansOptions {
+        n_clusters: 64,
+        max_iter: 4,
+        seed: 42,
+        mode: KMeansMode::Hierarchical,
+    };
+    let serial = ParalliteContext::with_executor(Executor::serial());
+    let parallel = ParalliteContext::builder().threads(4).unwrap().build();
+    let first = fit_lloyd_kmeans(&vectors, 2, &serial, options).unwrap();
+    let second = fit_lloyd_kmeans(&vectors, 2, &parallel, options).unwrap();
+
+    assert_eq!(first.centroids.len(), 64 * 2);
+    assert!(first.centroids.iter().all(|value| value.is_finite()));
+    assert_eq!(first, second);
+}
+
+#[test]
+fn hierarchical_failure_falls_back_only_in_auto_mode() {
+    let vectors = vec![1.0_f32; 128];
+    let context = ParalliteContext::with_executor(Executor::serial());
+    let mut options = KMeansOptions {
+        n_clusters: 64,
+        max_iter: 1,
+        seed: 42,
+        mode: KMeansMode::Auto,
+    };
+
+    let model = fit_hierarchical_kmeans_with_progress(
+        &vectors,
+        1,
+        vectors.len(),
+        &context,
+        options,
+        &|_| {},
+    )
+    .unwrap();
+    assert_eq!(model.centroids.len(), options.n_clusters);
+    assert!(model.centroids.iter().all(|value| value.is_finite()));
+
+    options.mode = KMeansMode::Hierarchical;
+    let error = fit_hierarchical_kmeans_with_progress(
+        &vectors,
+        1,
+        vectors.len(),
+        &context,
+        options,
+        &|_| {},
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("root partitions cannot form the requested leaf centroids")
+    );
+}
+
+#[test]
 fn rejects_invalid_fit_inputs() {
     let context = ParalliteContext::default();
     let cases = [
@@ -94,6 +208,7 @@ fn rejects_invalid_fit_inputs() {
                 n_clusters: 1,
                 max_iter: 0,
                 seed: 42,
+                mode: KMeansMode::Flat,
             },
         ),
         (vec![0.0, 1.0], 2, KMeansOptions::new(2)),
@@ -235,6 +350,7 @@ fn identical_vectors_keep_empty_cluster_recovery_finite() {
         n_clusters: 4,
         max_iter: 5,
         seed: 42,
+        mode: KMeansMode::Flat,
     };
     let model = fit_lloyd_kmeans(&vectors, 2, &ParalliteContext::default(), options).unwrap();
 
