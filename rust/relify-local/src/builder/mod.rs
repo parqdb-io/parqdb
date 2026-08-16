@@ -32,6 +32,7 @@ use relify_storage::StorageRegistry;
 #[cfg(test)]
 use url::Url;
 
+use crate::centroid_navigation::CentroidNavigator;
 use crate::ivf::borrow_source_vectors;
 #[cfg(test)]
 use crate::ivf::source_key_arrays;
@@ -39,9 +40,7 @@ use crate::parquet::{ParquetStore, ParquetWriterOptions, child_location};
 use crate::progress::BuildPhase;
 use crate::{Error, IndexArtifacts, IndexFormat, IvfConfig, LocalBuildProgress, Result};
 use relify_kernels::{LvqBits, encode_lvq_rows};
-use relify_kmeans::{
-    KMeansOptions, ReservoirSampler, assign_batch_to_centroids, fit_lloyd_kmeans_with_progress,
-};
+use relify_kmeans::{KMeansOptions, ReservoirSampler, fit_lloyd_kmeans_with_progress};
 #[cfg(test)]
 use relify_kmeans::{assign_to_centroids, fit_lloyd_kmeans, sample_training_rows};
 
@@ -90,14 +89,14 @@ pub(crate) struct TrainedIvf {
     dimension: usize,
     nlist: usize,
     ntotal: usize,
-    centroids: Vec<f32>,
+    centroids: Arc<[f32]>,
 }
 
 struct AssignIvf {
     id: u64,
     signature: Signature,
     dimension: usize,
-    centroids: Arc<Vec<f32>>,
+    navigator: Arc<CentroidNavigator>,
 }
 
 struct RequireNonNull {
@@ -122,7 +121,7 @@ impl std::fmt::Debug for AssignIvf {
             .field("id", &self.id)
             .field("signature", &self.signature)
             .field("dimension", &self.dimension)
-            .field("nlist", &(self.centroids.len() / self.dimension))
+            .field("routing", &self.navigator.name())
             .finish()
     }
 }
@@ -178,7 +177,9 @@ impl ScalarUDFImpl for AssignIvf {
                 self.dimension
             )));
         }
-        let cells = assign_batch_to_centroids(vectors, self.dimension, self.centroids.as_slice())
+        let cells = self
+            .navigator
+            .route_batch(vectors, 1)
             .map_err(|error| DataFusionError::Execution(error.to_string()))?;
         let cids = Int32Array::from_iter_values(
             cells
@@ -427,7 +428,7 @@ pub(crate) fn train_prepared_ivf(
         dimension: prepared.dimension,
         nlist: prepared.nlist,
         ntotal: prepared.ntotal,
-        centroids: model.centroids,
+        centroids: model.centroids.into(),
     })
 }
 
@@ -445,7 +446,7 @@ pub(crate) fn reused_ivf(prepared: &PreparedIvf, centroids: Vec<f32>) -> Result<
         dimension: prepared.dimension,
         nlist: prepared.nlist,
         ntotal: prepared.ntotal,
-        centroids,
+        centroids: centroids.into(),
     })
 }
 
@@ -502,7 +503,7 @@ pub(crate) async fn build_ivf_postings(
             trained,
             posting_encoding: config.posting_encoding,
             output_location: &postings_location,
-            parallelism: parallel.thread_count(),
+            parallel,
         },
         writer_options,
         partitions,
@@ -551,7 +552,7 @@ struct PostingsBuild<'a> {
     trained: &'a TrainedIvf,
     posting_encoding: PostingEncoding,
     output_location: &'a str,
-    parallelism: usize,
+    parallel: &'a ParalliteContext,
 }
 
 async fn write_postings(
@@ -568,7 +569,7 @@ async fn write_postings(
         trained,
         posting_encoding,
         output_location,
-        parallelism,
+        parallel,
     } = build;
     let writer_options =
         resolved_postings_writer_options(writer_options, trained.ntotal, trained.nlist);
@@ -583,7 +584,7 @@ async fn write_postings(
         partitions,
         trained.ntotal,
         row_width,
-        parallelism,
+        parallel.thread_count(),
     );
     let postings = project_postings(
         source,
@@ -591,7 +592,7 @@ async fn write_postings(
         source_key_fields,
         trained,
         posting_encoding,
-        parallelism,
+        parallel,
     )?;
     let (mut state, plan) = postings.into_parts();
     state.config_mut().options_mut().execution.target_partitions = writers;
@@ -608,7 +609,7 @@ fn project_postings(
     source_key_fields: &[String],
     trained: &TrainedIvf,
     posting_encoding: PostingEncoding,
-    parallelism: usize,
+    parallel: &ParalliteContext,
 ) -> Result<DataFrame> {
     let vector_type = source
         .schema()
@@ -617,7 +618,7 @@ fn project_postings(
         .map_err(|_| Error::InvalidSchema(format!("vector column not found: {vector_field}")))?
         .data_type()
         .clone();
-    let assignment = assignment_udf(vector_type.clone(), trained);
+    let assignment = assignment_udf(vector_type.clone(), trained, parallel)?;
     let mut expressions = vec![assignment.call(vec![col(vector_field)]).alias("cid")];
     for (index, key) in source_key_fields.iter().enumerate() {
         let output_name = format!("key_{}", index + 1);
@@ -659,7 +660,7 @@ fn project_postings(
         }
     }
     let postings = source
-        .repartition(Partitioning::RoundRobinBatch(parallelism))?
+        .repartition(Partitioning::RoundRobinBatch(parallel.thread_count()))?
         .select(expressions)?;
     let postings = if matches!(
         posting_encoding,
@@ -736,14 +737,24 @@ async fn prepare_training(
     })
 }
 
-fn assignment_udf(vector_type: DataType, trained: &TrainedIvf) -> ScalarUDF {
+fn assignment_udf(
+    vector_type: DataType,
+    trained: &TrainedIvf,
+    parallel: &ParalliteContext,
+) -> Result<ScalarUDF> {
     static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-    ScalarUDF::new_from_impl(AssignIvf {
+    let navigator = Arc::new(CentroidNavigator::new_parallel(
+        trained.nlist,
+        trained.dimension,
+        Arc::clone(&trained.centroids),
+        parallel,
+    )?);
+    Ok(ScalarUDF::new_from_impl(AssignIvf {
         id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
         signature: Signature::exact(vec![vector_type], Volatility::Immutable),
         dimension: trained.dimension,
-        centroids: Arc::new(trained.centroids.clone()),
-    })
+        navigator,
+    }))
 }
 
 fn require_non_null_udf(data_type: DataType, vector: bool) -> ScalarUDF {
