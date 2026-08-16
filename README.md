@@ -39,8 +39,9 @@ directly on Parquet, with Arrow-native execution.
   operations over Parquet, not executed as a black-box index call. This lets the
   SQL optimizer compose and optimize it with filters, joins, and aggregations in
   one plan.
-- **Serving and analytics on one index.** The same index supports small-k online
-  retrieval and large-k analytical queries.
+- **Hybrid serving and analytics.** For online serving, ParqDB parallelizes
+  across queries to maximize QPS. For analytical workloads, it parallelizes
+  within a query to minimize large-k latency.
 - **High performance with predictable memory use.** A configurable budget
   bounds execution and caches, even when the index exceeds RAM. IVF pruning,
   LVQ4 and LVQ8 encodings, and Arrow-native kernels reduce I/O, memory bandwidth,
