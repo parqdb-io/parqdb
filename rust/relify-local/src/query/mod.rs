@@ -24,6 +24,7 @@ use relify_meta::{DistanceMetric, IndexSnapshot, PostingEncoding};
 
 #[cfg(test)]
 use crate::ivf::read_centroids;
+#[cfg(test)]
 use crate::ivf::select_clusters;
 #[cfg(test)]
 use crate::ivf::{
@@ -852,6 +853,7 @@ pub(crate) fn selected_cluster_ids(
     selected_cluster_ids_from_values(query, &centroid_values, nlist, dimension, nprobe)
 }
 
+#[cfg(test)]
 pub(crate) fn selected_cluster_ids_from_values(
     query: &[f32],
     centroid_values: &[f32],

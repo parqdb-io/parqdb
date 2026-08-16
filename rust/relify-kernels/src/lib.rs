@@ -10,7 +10,7 @@ use thiserror::Error;
 
 mod lvq;
 
-pub use lvq::{LvqBatchView, LvqBits, LvqCodeRows, LvqEncodedBatch, encode_lvq_rows};
+pub use lvq::{LvqBatchView, LvqBits, LvqCodeRows, LvqEncodedBatch, LvqRowQuery, encode_lvq_rows};
 
 /// Error returned when matrix buffers do not match their declared shapes.
 #[derive(Debug, Error)]

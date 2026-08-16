@@ -20,8 +20,7 @@ use super::source::{
 use crate::query::{
     ManagedQueryStream, compile_datafusion_sql, compile_index_only_plan,
     datafusion_centroid_relation_required, datafusion_cluster_relation_required,
-    datafusion_source_relation_required, selected_cluster_ids_from_values,
-    use_native_cluster_routing, validated_cluster_search,
+    datafusion_source_relation_required, use_native_cluster_routing, validated_cluster_search,
 };
 use crate::{ClusterSelection, Error, ResolvedSearch, Result, SearchRequest};
 
@@ -461,16 +460,23 @@ impl LocalSession {
                 .get_or_load_centroids(cache_key, || async {
                     let centroids = self.read_index_relation(snapshot, "ivf_centroids").await?;
                     let values = crate::ivf::read_centroids(&centroids, nlist, dimension)?;
-                    super::index_relation::CentroidMatrix::new(nlist, dimension, values)
+                    super::index_relation::CentroidNavigator::new(
+                        nlist,
+                        dimension,
+                        Arc::from(values),
+                    )
                 })
                 .await?;
-            let selected = selected_cluster_ids_from_values(
-                query,
-                centroids.values(nlist, dimension)?,
-                nlist,
-                dimension,
-                nprobe,
-            )?;
+            centroids.validate_shape(nlist, dimension)?;
+            let selected = centroids
+                .route(query, nprobe)?
+                .into_iter()
+                .map(|cid| {
+                    i32::try_from(cid).map_err(|_| {
+                        Error::InvalidSchema("centroid cid exceeds the INT32 index domain".into())
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
             ClusterSelection::Native(selected)
         } else {
             ClusterSelection::Relational {

@@ -1,6 +1,7 @@
 //! Embedded `DataFusion` and Parquet implementation of Relify.
 
 mod builder;
+mod centroid_navigation;
 mod config;
 mod coordination;
 mod durability;

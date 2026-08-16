@@ -1,6 +1,8 @@
 //! Locally adaptive scalar quantization and distance kernels.
 
-use crate::{CpuBackend, DistanceKernel, KernelError, Result};
+use crate::{CpuBackend, DistanceKernel, KernelError, Result, detect};
+
+type RowScorer = fn(&LvqEncodedBatch, &[f32], usize) -> f32;
 
 /// Number of bits used by one LVQ dimension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -93,6 +95,69 @@ impl LvqEncodedBatch {
             offsets: &self.offsets,
             scales: &self.scales,
         }
+    }
+
+    /// Validates a query once for repeated random-access row scoring.
+    pub fn prepare_query<'a>(&'a self, query: &'a [f32]) -> Result<LvqRowQuery<'a>> {
+        if query.len() != self.dimension {
+            return invalid("query vector has the wrong dimension");
+        }
+        if query.iter().any(|value| !value.is_finite()) {
+            return invalid("query vector must contain only finite values");
+        }
+        let scorer = match detect().backend {
+            #[cfg(not(target_arch = "aarch64"))]
+            CpuBackend::Scalar => lvq_squared_l2_row_scalar_dispatch,
+            #[cfg(target_arch = "aarch64")]
+            CpuBackend::Neon => lvq_squared_l2_row_scalar_dispatch,
+            #[cfg(target_arch = "x86_64")]
+            CpuBackend::Avx2 => {
+                if std::is_x86_feature_detected!("avx512f")
+                    && std::is_x86_feature_detected!("avx512bw")
+                {
+                    lvq_squared_l2_row_avx512_dispatch
+                } else {
+                    lvq_squared_l2_row_avx2_dispatch
+                }
+            }
+        };
+        Ok(LvqRowQuery {
+            batch: self,
+            query,
+            scorer,
+        })
+    }
+
+    /// Returns the retained heap size of the encoded buffers.
+    #[must_use]
+    pub fn resident_size(&self) -> usize {
+        self.codes.capacity()
+            + (self.offsets.capacity() + self.scales.capacity()) * std::mem::size_of::<f32>()
+    }
+}
+
+/// A validated exact query over an owned LVQ batch.
+pub struct LvqRowQuery<'a> {
+    batch: &'a LvqEncodedBatch,
+    query: &'a [f32],
+    scorer: RowScorer,
+}
+
+impl LvqRowQuery<'_> {
+    /// Computes the squared-L2 distance to one encoded row.
+    pub fn squared_l2(&self, row: usize) -> Result<f32> {
+        if row >= self.batch.row_count() {
+            return invalid("LVQ row is out of bounds");
+        }
+        Ok((self.scorer)(self.batch, self.query, row))
+    }
+
+    /// Computes squared-L2 distances to four encoded rows.
+    pub fn squared_l2_four(&self, rows: [usize; 4]) -> Result<[f32; 4]> {
+        if rows.iter().any(|row| *row >= self.batch.row_count()) {
+            return invalid("LVQ row is out of bounds");
+        }
+        Ok(rows.map(|row| (self.scorer)(self.batch, self.query, row)))
     }
 }
 
@@ -521,10 +586,50 @@ fn lvq_squared_l2_rows_scalar(batch: &LvqBatchView<'_>, query: &[f32], output: &
     });
 }
 
+fn lvq_squared_l2_row_scalar_dispatch(batch: &LvqEncodedBatch, query: &[f32], row: usize) -> f32 {
+    let codes = encoded_row_codes(batch, row);
+    let mut sum = 0.0_f32;
+    for (dimension, query_value) in query.iter().copied().enumerate() {
+        let decoded = batch.offsets[row]
+            + batch.scales[row] * f32::from(code_at(batch.bits, codes, dimension));
+        let delta = query_value - decoded;
+        sum += delta * delta;
+    }
+    sum
+}
+
+fn encoded_row_codes(batch: &LvqEncodedBatch, row: usize) -> &[u8] {
+    let code_size = batch.bits.code_size(batch.dimension);
+    &batch.codes[row * code_size..(row + 1) * code_size]
+}
+
+#[cfg(target_arch = "x86_64")]
+#[allow(unsafe_code)]
+fn lvq_squared_l2_row_avx2_dispatch(batch: &LvqEncodedBatch, query: &[f32], row: usize) -> f32 {
+    // SAFETY: this scorer is selected only after AVX2 runtime detection.
+    unsafe {
+        lvq_squared_l2_row_avx2(
+            batch.bits,
+            batch.dimension,
+            encoded_row_codes(batch, row),
+            batch.offsets[row],
+            batch.scales[row],
+            query,
+        )
+    }
+}
+
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 #[allow(unsafe_code)]
-unsafe fn lvq_squared_l2_rows_avx2(batch: &LvqBatchView<'_>, query: &[f32], output: &mut [f32]) {
+unsafe fn lvq_squared_l2_row_avx2(
+    bits: LvqBits,
+    vector_dimension: usize,
+    row_codes: &[u8],
+    row_offset: f32,
+    row_scale: f32,
+    query: &[f32],
+) -> f32 {
     use std::arch::x86_64::{
         _mm_and_si128, _mm_loadl_epi64, _mm_set1_epi8, _mm_srli_epi16, _mm_srli_si128,
         _mm_unpacklo_epi8, _mm256_add_ps, _mm256_cvtepi32_ps, _mm256_cvtepu8_epi32,
@@ -532,63 +637,83 @@ unsafe fn lvq_squared_l2_rows_avx2(batch: &LvqBatchView<'_>, query: &[f32], outp
         _mm256_sub_ps,
     };
 
-    batch.codes.for_each_row(|row, row_codes| {
-        let row_codes = row_codes.as_ptr();
-        let offset = _mm256_set1_ps(batch.offsets[row]);
-        let scale = _mm256_set1_ps(batch.scales[row]);
-        let mut accumulated = _mm256_setzero_ps();
-        let mut dimension = 0;
-        match batch.bits {
-            LvqBits::Eight => {
-                while dimension + 8 <= batch.dimension {
-                    let bytes = unsafe { _mm_loadl_epi64(row_codes.add(dimension).cast()) };
-                    let code_values = _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(bytes));
+    let codes = row_codes.as_ptr();
+    let offset = _mm256_set1_ps(row_offset);
+    let scale = _mm256_set1_ps(row_scale);
+    let mut accumulated = _mm256_setzero_ps();
+    let mut dimension = 0;
+    match bits {
+        LvqBits::Eight => {
+            while dimension + 8 <= vector_dimension {
+                let bytes = unsafe { _mm_loadl_epi64(codes.add(dimension).cast()) };
+                let code_values = _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(bytes));
+                let decoded = _mm256_add_ps(_mm256_mul_ps(scale, code_values), offset);
+                let query_values = unsafe { _mm256_loadu_ps(query.as_ptr().add(dimension)) };
+                let delta = _mm256_sub_ps(query_values, decoded);
+                accumulated = _mm256_add_ps(accumulated, _mm256_mul_ps(delta, delta));
+                dimension += 8;
+            }
+        }
+        LvqBits::Four => {
+            while dimension + 16 <= vector_dimension {
+                let bytes = unsafe { _mm_loadl_epi64(codes.add(dimension / 2).cast()) };
+                let mask = _mm_set1_epi8(0x0f);
+                let low = _mm_and_si128(bytes, mask);
+                let high = _mm_and_si128(_mm_srli_epi16(bytes, 4), mask);
+                let interleaved = _mm_unpacklo_epi8(low, high);
+                for (offset_in_chunk, selected) in
+                    [(0, interleaved), (8, _mm_srli_si128::<8>(interleaved))]
+                {
+                    let code_values = _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(selected));
                     let decoded = _mm256_add_ps(_mm256_mul_ps(scale, code_values), offset);
-                    let query_values = unsafe { _mm256_loadu_ps(query.as_ptr().add(dimension)) };
+                    let query_values =
+                        unsafe { _mm256_loadu_ps(query.as_ptr().add(dimension + offset_in_chunk)) };
                     let delta = _mm256_sub_ps(query_values, decoded);
                     accumulated = _mm256_add_ps(accumulated, _mm256_mul_ps(delta, delta));
-                    dimension += 8;
                 }
-            }
-            LvqBits::Four => {
-                while dimension + 16 <= batch.dimension {
-                    let bytes = unsafe { _mm_loadl_epi64(row_codes.add(dimension / 2).cast()) };
-                    let mask = _mm_set1_epi8(0x0f);
-                    let low = _mm_and_si128(bytes, mask);
-                    let high = _mm_and_si128(_mm_srli_epi16(bytes, 4), mask);
-                    let interleaved = _mm_unpacklo_epi8(low, high);
-                    for (offset_in_chunk, selected) in
-                        [(0, interleaved), (8, _mm_srli_si128::<8>(interleaved))]
-                    {
-                        let code_values = _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(selected));
-                        let decoded = _mm256_add_ps(_mm256_mul_ps(scale, code_values), offset);
-                        let query_values = unsafe {
-                            _mm256_loadu_ps(query.as_ptr().add(dimension + offset_in_chunk))
-                        };
-                        let delta = _mm256_sub_ps(query_values, decoded);
-                        accumulated = _mm256_add_ps(accumulated, _mm256_mul_ps(delta, delta));
-                    }
-                    dimension += 16;
-                }
+                dimension += 16;
             }
         }
-        let mut lanes = [0.0_f32; 8];
-        unsafe { _mm256_storeu_ps(lanes.as_mut_ptr(), accumulated) };
-        let mut sum = lanes.into_iter().sum::<f32>();
-        for (index, query_value) in query.iter().copied().enumerate().skip(dimension) {
-            let code = unsafe { code_at_ptr(batch.bits, row_codes, index) };
-            let decoded = batch.offsets[row] + batch.scales[row] * f32::from(code);
-            let delta = query_value - decoded;
-            sum += delta * delta;
-        }
-        output[row] = sum;
-    });
+    }
+    let mut lanes = [0.0_f32; 8];
+    unsafe { _mm256_storeu_ps(lanes.as_mut_ptr(), accumulated) };
+    let mut sum = lanes.into_iter().sum::<f32>();
+    for (index, query_value) in query.iter().copied().enumerate().skip(dimension) {
+        let code = unsafe { code_at_ptr(bits, codes, index) };
+        let decoded = row_offset + row_scale * f32::from(code);
+        let delta = query_value - decoded;
+        sum += delta * delta;
+    }
+    sum
+}
+
+#[cfg(target_arch = "x86_64")]
+#[allow(unsafe_code)]
+fn lvq_squared_l2_row_avx512_dispatch(batch: &LvqEncodedBatch, query: &[f32], row: usize) -> f32 {
+    // SAFETY: this scorer is selected only after AVX-512F and AVX-512BW detection.
+    unsafe {
+        lvq_squared_l2_row_avx512(
+            batch.bits,
+            batch.dimension,
+            encoded_row_codes(batch, row),
+            batch.offsets[row],
+            batch.scales[row],
+            query,
+        )
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f,avx512bw")]
 #[allow(unsafe_code)]
-unsafe fn lvq_squared_l2_rows_avx512(batch: &LvqBatchView<'_>, query: &[f32], output: &mut [f32]) {
+unsafe fn lvq_squared_l2_row_avx512(
+    bits: LvqBits,
+    vector_dimension: usize,
+    row_codes: &[u8],
+    row_offset: f32,
+    row_scale: f32,
+    query: &[f32],
+) -> f32 {
     use std::arch::x86_64::{
         _mm_and_si128, _mm_loadl_epi64, _mm_loadu_si128, _mm_set1_epi8, _mm_srli_epi16,
         _mm_unpacklo_epi8, _mm512_add_ps, _mm512_cvtepi32_ps, _mm512_cvtepu8_epi32,
@@ -596,43 +721,77 @@ unsafe fn lvq_squared_l2_rows_avx512(batch: &LvqBatchView<'_>, query: &[f32], ou
         _mm512_sub_ps,
     };
 
+    let codes = row_codes.as_ptr();
+    let offset = _mm512_set1_ps(row_offset);
+    let scale = _mm512_set1_ps(row_scale);
+    let mut accumulated = _mm512_setzero_ps();
+    let mut dimension = 0;
+    while dimension + 16 <= vector_dimension {
+        let unpacked = match bits {
+            LvqBits::Eight => {
+                let bytes = unsafe { _mm_loadu_si128(codes.add(dimension).cast()) };
+                _mm512_cvtepu8_epi32(bytes)
+            }
+            LvqBits::Four => {
+                let bytes = unsafe { _mm_loadl_epi64(codes.add(dimension / 2).cast()) };
+                let mask = _mm_set1_epi8(0x0f);
+                let low = _mm_and_si128(bytes, mask);
+                let high = _mm_and_si128(_mm_srli_epi16(bytes, 4), mask);
+                _mm512_cvtepu8_epi32(_mm_unpacklo_epi8(low, high))
+            }
+        };
+        let code_values = _mm512_cvtepi32_ps(unpacked);
+        let decoded = _mm512_add_ps(_mm512_mul_ps(scale, code_values), offset);
+        let query_values = unsafe { _mm512_loadu_ps(query.as_ptr().add(dimension)) };
+        let delta = _mm512_sub_ps(query_values, decoded);
+        accumulated = _mm512_add_ps(accumulated, _mm512_mul_ps(delta, delta));
+        dimension += 16;
+    }
+    let mut lanes = [0.0_f32; 16];
+    unsafe { _mm512_storeu_ps(lanes.as_mut_ptr(), accumulated) };
+    let mut sum = lanes.into_iter().sum::<f32>();
+    for (index, query_value) in query.iter().copied().enumerate().skip(dimension) {
+        let code = unsafe { code_at_ptr(bits, codes, index) };
+        let decoded = row_offset + row_scale * f32::from(code);
+        let delta = query_value - decoded;
+        sum += delta * delta;
+    }
+    sum
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+#[allow(unsafe_code)]
+unsafe fn lvq_squared_l2_rows_avx2(batch: &LvqBatchView<'_>, query: &[f32], output: &mut [f32]) {
     batch.codes.for_each_row(|row, row_codes| {
-        let row_codes = row_codes.as_ptr();
-        let offset = _mm512_set1_ps(batch.offsets[row]);
-        let scale = _mm512_set1_ps(batch.scales[row]);
-        let mut accumulated = _mm512_setzero_ps();
-        let mut dimension = 0;
-        while dimension + 16 <= batch.dimension {
-            let unpacked = match batch.bits {
-                LvqBits::Eight => {
-                    let bytes = unsafe { _mm_loadu_si128(row_codes.add(dimension).cast()) };
-                    _mm512_cvtepu8_epi32(bytes)
-                }
-                LvqBits::Four => {
-                    let bytes = unsafe { _mm_loadl_epi64(row_codes.add(dimension / 2).cast()) };
-                    let mask = _mm_set1_epi8(0x0f);
-                    let low = _mm_and_si128(bytes, mask);
-                    let high = _mm_and_si128(_mm_srli_epi16(bytes, 4), mask);
-                    _mm512_cvtepu8_epi32(_mm_unpacklo_epi8(low, high))
-                }
-            };
-            let code_values = _mm512_cvtepi32_ps(unpacked);
-            let decoded = _mm512_add_ps(_mm512_mul_ps(scale, code_values), offset);
-            let query_values = unsafe { _mm512_loadu_ps(query.as_ptr().add(dimension)) };
-            let delta = _mm512_sub_ps(query_values, decoded);
-            accumulated = _mm512_add_ps(accumulated, _mm512_mul_ps(delta, delta));
-            dimension += 16;
-        }
-        let mut lanes = [0.0_f32; 16];
-        unsafe { _mm512_storeu_ps(lanes.as_mut_ptr(), accumulated) };
-        let mut sum = lanes.into_iter().sum::<f32>();
-        for (index, query_value) in query.iter().copied().enumerate().skip(dimension) {
-            let code = unsafe { code_at_ptr(batch.bits, row_codes, index) };
-            let decoded = batch.offsets[row] + batch.scales[row] * f32::from(code);
-            let delta = query_value - decoded;
-            sum += delta * delta;
-        }
-        output[row] = sum;
+        output[row] = unsafe {
+            lvq_squared_l2_row_avx2(
+                batch.bits,
+                batch.dimension,
+                row_codes,
+                batch.offsets[row],
+                batch.scales[row],
+                query,
+            )
+        };
+    });
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f,avx512bw")]
+#[allow(unsafe_code)]
+unsafe fn lvq_squared_l2_rows_avx512(batch: &LvqBatchView<'_>, query: &[f32], output: &mut [f32]) {
+    batch.codes.for_each_row(|row, row_codes| {
+        output[row] = unsafe {
+            lvq_squared_l2_row_avx512(
+                batch.bits,
+                batch.dimension,
+                row_codes,
+                batch.offsets[row],
+                batch.scales[row],
+                query,
+            )
+        };
     });
 }
 
@@ -679,6 +838,32 @@ mod tests {
             assert_eq!(encoded.offsets(), &[3.5, 3.5]);
             assert_eq!(encoded.scales(), &[0.0, 0.0]);
         }
+    }
+
+    #[test]
+    fn prepared_query_scores_random_rows() {
+        let values = (0..8 * 31)
+            .map(|index| (index % 97) as f32 * 0.013 - 0.4)
+            .collect::<Vec<_>>();
+        let query = (0..31)
+            .map(|index| 0.7 - (index % 29) as f32 * 0.009)
+            .collect::<Vec<_>>();
+        let encoded = encode_lvq_rows(&values, 31, LvqBits::Eight).unwrap();
+        let prepared = encoded.prepare_query(&query).unwrap();
+        let mut expected = vec![0.0; encoded.row_count()];
+        detect()
+            .lvq_squared_l2_rows(&encoded.as_view(), &query, &mut expected)
+            .unwrap();
+
+        for (row, expected) in expected.iter().copied().enumerate() {
+            assert_eq!(prepared.squared_l2(row).unwrap(), expected);
+        }
+        assert_eq!(
+            prepared.squared_l2_four([7, 1, 5, 3]).unwrap(),
+            [expected[7], expected[1], expected[5], expected[3]]
+        );
+        assert!(prepared.squared_l2(8).is_err());
+        assert!(prepared.squared_l2_four([0, 1, 2, 8]).is_err());
     }
 
     #[test]

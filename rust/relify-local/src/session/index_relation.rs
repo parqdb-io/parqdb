@@ -19,7 +19,7 @@ use relify_storage::StorageRegistry;
 
 use bounded_cache::BoundedAsyncCache;
 use centroid::CentroidCache;
-pub(super) use centroid::CentroidMatrix;
+pub(super) use centroid::CentroidNavigator;
 use hive_cid::HiveCidParquetProvider;
 
 use crate::config::IndexRelationCacheConfig;
@@ -158,10 +158,10 @@ impl IndexRelationProviderRegistry {
         &self,
         relation_key: &str,
         load: F,
-    ) -> Result<Arc<CentroidMatrix>>
+    ) -> Result<Arc<CentroidNavigator>>
     where
         F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<CentroidMatrix>>,
+        Fut: Future<Output = Result<CentroidNavigator>>,
     {
         self.centroids.get_or_load(relation_key, load).await
     }

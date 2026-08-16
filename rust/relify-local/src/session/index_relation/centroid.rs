@@ -1,59 +1,12 @@
 use std::future::Future;
-use std::mem::size_of_val;
 use std::sync::Arc;
 
 use super::bounded_cache::BoundedAsyncCache;
-use crate::{Error, Result};
-
-#[derive(Debug)]
-pub(in crate::session) struct CentroidMatrix {
-    nlist: usize,
-    dimension: usize,
-    values: Arc<[f32]>,
-}
-
-impl CentroidMatrix {
-    pub(in crate::session) fn new(
-        nlist: usize,
-        dimension: usize,
-        values: Vec<f32>,
-    ) -> Result<Self> {
-        let expected = nlist.checked_mul(dimension).ok_or_else(|| {
-            Error::InvalidSchema(format!(
-                "invalid cached centroid matrix shape: {nlist} x {dimension} overflows usize"
-            ))
-        })?;
-        if expected != values.len() {
-            return Err(Error::InvalidSchema(format!(
-                "invalid cached centroid matrix shape: {nlist} x {dimension} requires \
-                 {expected} values, found {}",
-                values.len()
-            )));
-        }
-        Ok(Self {
-            nlist,
-            dimension,
-            values: Arc::from(values),
-        })
-    }
-
-    pub(in crate::session) fn values(&self, nlist: usize, dimension: usize) -> Result<&[f32]> {
-        if self.nlist != nlist || self.dimension != dimension {
-            return Err(Error::InvalidSchema(format!(
-                "cached centroid matrix is {} x {}, requested {nlist} x {dimension}",
-                self.nlist, self.dimension
-            )));
-        }
-        Ok(self.values.as_ref())
-    }
-
-    fn charge(&self) -> usize {
-        size_of_val(self.values.as_ref())
-    }
-}
+use crate::Result;
+pub(in crate::session) use crate::centroid_navigation::CentroidNavigator;
 
 pub(super) struct CentroidCache {
-    cache: BoundedAsyncCache<String, Arc<CentroidMatrix>>,
+    cache: BoundedAsyncCache<String, Arc<CentroidNavigator>>,
 }
 
 impl CentroidCache {
@@ -67,16 +20,16 @@ impl CentroidCache {
         &self,
         relation_key: &str,
         load: F,
-    ) -> Result<Arc<CentroidMatrix>>
+    ) -> Result<Arc<CentroidNavigator>>
     where
         F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<CentroidMatrix>>,
+        Fut: Future<Output = Result<CentroidNavigator>>,
     {
         self.cache
             .get_or_try_insert(relation_key.to_owned(), || async {
-                let matrix = Arc::new(load().await?);
-                let charge = matrix.charge();
-                Ok((matrix, charge))
+                let navigator = Arc::new(load().await?);
+                let charge = navigator.resident_size();
+                Ok((navigator, charge))
             })
             .await
     }
@@ -93,26 +46,18 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn invalid_shape_reports_expected_and_actual_values() {
-        let error = CentroidMatrix::new(2, 3, vec![0.0; 5]).unwrap_err();
-
-        assert!(error.to_string().contains("2 x 3"));
-        assert!(error.to_string().contains("6 values, found 5"));
-    }
-
     #[tokio::test]
-    async fn cached_matrix_validates_requested_shape() {
+    async fn caches_one_exact_navigator() {
         let cache = CentroidCache::new(2, 1024);
-        let matrix = cache
+        let navigator = cache
             .get_or_load("centroids", || async {
-                CentroidMatrix::new(1, 2, vec![0.0, 1.0])
+                CentroidNavigator::new(1, 2, Arc::from([0.0, 1.0]))
             })
             .await
             .unwrap();
 
-        assert_eq!(matrix.values(1, 2).unwrap(), [0.0, 1.0]);
-        assert!(matrix.values(2, 1).is_err());
+        navigator.validate_shape(1, 2).unwrap();
+        assert!(navigator.validate_shape(2, 1).is_err());
         assert_eq!(cache.stats(), (1, 2 * size_of::<f32>()));
     }
 }
