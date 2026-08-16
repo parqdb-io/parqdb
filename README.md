@@ -1,7 +1,7 @@
 <div align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/petrizhang/relify/docs/vision-centents/assets/parqdb-logo-dark.svg">
-    <img src="https://raw.githubusercontent.com/petrizhang/relify/docs/vision-centents/assets/parqdb-logo.svg" alt="ParqDB" width="520">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/petrizhang/relify/docs/vision-centents/assets/parqdb/logo-dark.svg">
+    <img src="https://raw.githubusercontent.com/petrizhang/relify/docs/vision-centents/assets/parqdb/logo.svg" alt="ParqDB" width="520">
   </picture>
   <p>
     English |
