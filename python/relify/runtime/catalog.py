@@ -164,7 +164,7 @@ def open_index_catalog(
     storage_options: Mapping[str, str] | None = None,
 ) -> IndexCatalog:
     """Open the query-engine-independent Relify index catalog."""
-    from ._repository import open_index_repository
+    from .repository import open_index_repository
 
     return IndexCatalog(
         open_index_repository(

@@ -20,12 +20,13 @@ with relify.connect("./relify-data") as session:
     print(session.list_tables())
 ```
 
-An explicit catalog and index root may be configured independently:
+Index relations may be stored in a separate warehouse while catalog state stays
+under the local root:
 
 ```python
 session = relify.connect(
-    catalog="sqlite:///absolute/path/catalog.sqlite",
-    index_root="s3://bucket/relify/",
+    "/var/lib/relify",
+    warehouse="s3://bucket/relify/",
     storage_options={"aws_region": "us-east-1"},
 )
 ```
@@ -42,28 +43,15 @@ Install the optional server dependencies in the server environment:
 python -m pip install "relify[server]"
 ```
 
-Create an ASGI application over a catalog. Remote source registration is denied
-by default; expose only the server-visible file roots or object-store prefixes
-that clients may register:
-
-```python
-# service.py
-from relify.server import create_app
-
-app = create_app(
-    "/srv/relify",
-    allowed_source_prefixes=[
-        "/srv/lakehouse",
-        "s3://company-data/documents",
-    ],
-)
-```
-
-Run that application with one ASGI worker, then use the same session facade:
+Start the server with its default TOML configuration:
 
 ```bash
-uvicorn service:app --host 127.0.0.1 --port 8000
+relify config init
+relify serve
 ```
+
+See the [server guide](guides/server.md) for source authorization, storage,
+runtime settings, and the ASGI embedding API.
 
 ```python
 session = relify.connect("http://127.0.0.1:8000")
@@ -74,8 +62,8 @@ hits = session.collect(documents.search(vector).limit(10))
 The same table and index lifecycle API is available remotely. Paths passed to
 `register_parquet` are resolved by the server; the operation does not upload
 client files or credentials. Index builds are accepted asynchronously, and
-`wait_for_index` polls their server-side status. `datafusion_context()` remains
-embedded-only.
+`wait_for_index` polls their server-side status. `datafusion_context()`
+remains embedded-only.
 
 ## Register and Discover Tables
 

@@ -12,10 +12,7 @@ from weakref import WeakSet
 
 import pyarrow
 
-from ._service import AsyncBatchStream, TableDescriptor
-from ._transport import InProcessTransport, SessionTransport
 from .build import IndexStatus
-from .catalog import IndexInfo
 from .config import IVF, WriteOptions
 from .datafusion import RuntimeEnvBuilder
 from .datafusion import SessionConfig as DataFusionSessionConfig
@@ -23,7 +20,10 @@ from .datafusion.expr import SortKey
 from .errors import UnsupportedOperationError
 from .identifier import TableIdentifier
 from .query import VectorQuery
+from .runtime.catalog import IndexInfo
+from .runtime.service import AsyncBatchStream, TableDescriptor
 from .table import _normalize_query
+from .transport.base import InProcessTransport, SessionTransport
 
 _T = TypeVar("_T")
 
@@ -374,12 +374,9 @@ class Session:
         return self._embedded_host().root
 
     @property
-    def index_root(self) -> str:
+    def warehouse(self) -> str:
+        """Return the index warehouse bound to this embedded session."""
         return self._embedded_host().index_root
-
-    @property
-    def indexes(self) -> Any:
-        return self._embedded_host().indexes
 
     @property
     def maintenance(self) -> Any:
@@ -610,8 +607,7 @@ class _BlockingBridge:
 async def connect_async(
     root: str | os.PathLike[str] | None = None,
     *,
-    catalog: str | None = None,
-    index_root: str | None = None,
+    warehouse: str | None = None,
     storage_options: Mapping[str, str] | None = None,
     iceberg: object | None = None,
     config: DataFusionSessionConfig | None = None,
@@ -622,14 +618,13 @@ async def connect_async(
     location = os.fspath(root) if root is not None else None
     if isinstance(location, str) and _is_http_url(location):
         _reject_remote_embedded_options(
-            catalog=catalog,
-            index_root=index_root,
+            warehouse=warehouse,
             storage_options=storage_options,
             iceberg=iceberg,
             config=config,
             runtime=runtime,
         )
-        from ._http_transport import HttpTransport
+        from .transport.http import HttpTransport
 
         transport: SessionTransport = await HttpTransport.open(
             location,
@@ -639,10 +634,11 @@ async def connect_async(
     else:
         if headers is not None or timeout is not None:
             raise ValueError("headers and timeout require an http(s) server URL")
+        if location is None:
+            raise TypeError("connect requires a local root or http(s) server URL")
         transport = await InProcessTransport.open(
             location,
-            catalog=catalog,
-            index_root=index_root,
+            warehouse=warehouse,
             storage_options=storage_options,
             iceberg=iceberg,
             config=config,
@@ -654,8 +650,7 @@ async def connect_async(
 def connect(
     root: str | os.PathLike[str] | None = None,
     *,
-    catalog: str | None = None,
-    index_root: str | None = None,
+    warehouse: str | None = None,
     storage_options: Mapping[str, str] | None = None,
     iceberg: object | None = None,
     config: DataFusionSessionConfig | None = None,
@@ -668,8 +663,7 @@ def connect(
         session = bridge.run(
             connect_async(
                 root,
-                catalog=catalog,
-                index_root=index_root,
+                warehouse=warehouse,
                 storage_options=storage_options,
                 iceberg=iceberg,
                 config=config,

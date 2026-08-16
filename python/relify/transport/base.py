@@ -7,15 +7,15 @@ from typing import Any, Protocol
 
 import pyarrow
 
-from ._service import AsyncBatchStream, SessionService, TableDescriptor
-from .build import IndexStatus
-from .catalog import IndexInfo
-from .config import IVF, WriteOptions
-from .datafusion import RuntimeEnvBuilder
-from .datafusion import SessionConfig as DataFusionSessionConfig
-from .datafusion.expr import SortKey
-from .identifier import TableIdentifier
-from .query import VectorQuery
+from ..build import IndexStatus
+from ..config import IVF, WriteOptions
+from ..datafusion import RuntimeEnvBuilder
+from ..datafusion import SessionConfig as DataFusionSessionConfig
+from ..datafusion.expr import SortKey
+from ..identifier import TableIdentifier
+from ..query import VectorQuery
+from ..runtime.catalog import IndexInfo
+from ..runtime.service import AsyncBatchStream, SessionService, TableDescriptor
 
 
 class SessionTransport(Protocol):
@@ -101,10 +101,9 @@ class InProcessTransport:
     @classmethod
     async def open(
         cls,
-        root: str | Path | None,
+        root: str | Path,
         *,
-        catalog: str | None,
-        index_root: str | None,
+        warehouse: str | None,
         storage_options: Mapping[str, str] | None,
         iceberg: object | None,
         config: DataFusionSessionConfig | None,
@@ -113,8 +112,7 @@ class InProcessTransport:
         return cls(
             await SessionService.open(
                 root,
-                catalog=catalog,
-                index_root=index_root,
+                warehouse=warehouse,
                 storage_options=storage_options,
                 iceberg=iceberg,
                 config=config,

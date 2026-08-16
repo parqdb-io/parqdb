@@ -4,8 +4,8 @@ from collections.abc import Awaitable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
-from .datafusion import RuntimeEnvBuilder
-from .datafusion import SessionConfig as DataFusionSessionConfig
+from ..datafusion import RuntimeEnvBuilder
+from ..datafusion import SessionConfig as DataFusionSessionConfig
 
 
 class ASGIApp(Protocol):
@@ -18,10 +18,9 @@ class ASGIApp(Protocol):
 
 
 def create_app(
-    root: str | Path | None = None,
+    root: str | Path,
     *,
-    catalog: str | None = None,
-    index_root: str | None = None,
+    warehouse: str | None = None,
     storage_options: Mapping[str, str] | None = None,
     config: DataFusionSessionConfig | None = None,
     runtime: RuntimeEnvBuilder | None = None,
@@ -29,7 +28,7 @@ def create_app(
 ) -> ASGIApp:
     """Create an ASGI server with explicit server-visible source prefixes."""
     try:
-        from ._http_server import create_http_app
+        from .app import create_http_app
     except ModuleNotFoundError as error:
         if error.name != "starlette":
             raise
@@ -38,8 +37,7 @@ def create_app(
         ) from error
     return create_http_app(
         root,
-        catalog=catalog,
-        index_root=index_root,
+        warehouse=warehouse,
         storage_options=storage_options,
         config=config,
         runtime=runtime,

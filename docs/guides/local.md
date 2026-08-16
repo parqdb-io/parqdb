@@ -31,19 +31,19 @@ The directory contains the SQLite catalog, immutable metadata documents, and
 Parquet index snapshots. Reopening the same path restores persistent source
 registrations and index mappings.
 
-Separate the local catalog from index storage when the relations belong on
-shared storage:
+Store index relations on shared storage while keeping the local session state
+under one directory:
 
 ```python
 session = relify.connect(
-    catalog="sqlite:///var/lib/relify/catalog.sqlite",
-    index_root="s3://lakehouse-indexes/relify",
+    "/var/lib/relify",
+    warehouse="s3://lakehouse-indexes/relify",
     storage_options={"aws_region": "us-east-1"},
 )
 ```
 
-The SQLite path must be absolute. See [configuration](../configuration.md) for
-S3-compatible storage and HDFS settings.
+See [configuration](../configuration.md) for S3-compatible storage and HDFS
+settings.
 
 ## Register a Source
 

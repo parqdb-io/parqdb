@@ -31,7 +31,7 @@ def test_exact_search_does_not_require_an_index(tmp_path: Path) -> None:
         pa.float32(),
         nullable=False,
     )
-    assert session.indexes.list() == []
+    assert session._indexes.list() == []
 
 
 def test_exact_search_applies_prefilter_before_top_k(tmp_path: Path) -> None:

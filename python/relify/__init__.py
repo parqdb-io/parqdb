@@ -22,8 +22,6 @@ from .api import (
     IVF,
     AsyncSession,
     AsyncSourceTable,
-    CatalogEntry,
-    IndexCatalog,
     IndexInfo,
     IndexStatus,
     Maintenance,
@@ -38,7 +36,6 @@ from .api import (
     WriteOptions,
     connect,
     connect_async,
-    open_index_catalog,
 )
 from .errors import (
     ServiceUnavailableError,
@@ -56,9 +53,7 @@ __all__ = [
     "AsyncSourceTable",
     "BackendError",
     "BuildAlreadyRunningError",
-    "CatalogEntry",
     "CatalogError",
-    "IndexCatalog",
     "IndexInfo",
     "IndexNotFoundError",
     "IndexStatus",
@@ -87,5 +82,4 @@ __all__ = [
     "connect_async",
     "datafusion",
     "datasets",
-    "open_index_catalog",
 ]

@@ -10,21 +10,21 @@ from typing import Any, Literal, Protocol, cast
 
 import pyarrow
 
-from .build import IndexStatus
-from .catalog import IndexInfo
-from .config import IVF, WriteOptions, native_writer_options
-from .datafusion import RuntimeEnvBuilder
-from .datafusion import SessionConfig as DataFusionSessionConfig
-from .datafusion.expr import SortKey
-from .identifier import TableIdentifier
-from .query import VectorQuery
-from .session import (
+from ..build import IndexStatus
+from ..config import IVF, WriteOptions, native_writer_options
+from ..datafusion import RuntimeEnvBuilder
+from ..datafusion import SessionConfig as DataFusionSessionConfig
+from ..datafusion.expr import SortKey
+from ..identifier import TableIdentifier
+from ..query import VectorQuery
+from ..session import (
     _connect_embedded,
     _EmbeddedSession,
     _EmbeddedSourceTable,
     _index_namespace,
     _wrap_datafusion_context,
 )
+from .catalog import IndexInfo
 
 
 class AsyncBatchStream(Protocol):
@@ -53,10 +53,9 @@ class SessionService:
     @classmethod
     async def open(
         cls,
-        root: str | Path | None,
+        root: str | Path,
         *,
-        catalog: str | None,
-        index_root: str | None,
+        warehouse: str | None,
         storage_options: Mapping[str, str] | None,
         iceberg: object | None,
         config: DataFusionSessionConfig | None,
@@ -66,8 +65,7 @@ class SessionService:
             partial(
                 _connect_embedded,
                 root,
-                catalog=catalog,
-                index_root=index_root,
+                warehouse=warehouse,
                 storage_options=storage_options,
                 iceberg=iceberg,
                 config=config,

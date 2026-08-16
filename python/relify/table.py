@@ -5,10 +5,10 @@ from datetime import timedelta
 from typing import Protocol, SupportsFloat, runtime_checkable
 
 from .build import IndexStatus
-from .catalog import IndexInfo
 from .config import IVF, WriteOptions
 from .identifier import TableIdentifier
 from .query import VectorQuery
+from .runtime.catalog import IndexInfo
 
 
 @runtime_checkable

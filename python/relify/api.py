@@ -6,7 +6,6 @@ from ._native import (
     QueryQueueTimeoutError,
 )
 from .build import IndexStatus
-from .catalog import CatalogEntry, IndexCatalog, IndexInfo, open_index_catalog
 from .config import IVF, SessionConfig, WriteOptions
 from .errors import (
     ServiceUnavailableError,
@@ -24,6 +23,7 @@ from .facade import (
 from .identifier import TableIdentifier
 from .maintenance import Maintenance, MaintenanceObject
 from .query import VectorQuery
+from .runtime.catalog import IndexInfo
 from .session import ParquetPageCacheStats
 from .table import Table
 
@@ -32,8 +32,6 @@ __all__ = [
     "AsyncSession",
     "AsyncSourceTable",
     "BuildAlreadyRunningError",
-    "CatalogEntry",
-    "IndexCatalog",
     "IndexInfo",
     "IndexStatus",
     "Maintenance",
@@ -53,5 +51,4 @@ __all__ = [
     "WriteOptions",
     "connect",
     "connect_async",
-    "open_index_catalog",
 ]

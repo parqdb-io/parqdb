@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-from ._native import _NativeIndexRepository
+from .._native import _NativeIndexRepository
 
 
 def open_index_repository(

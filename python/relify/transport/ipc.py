@@ -8,8 +8,8 @@ from typing import Any, Protocol, Self
 
 import pyarrow
 
-from ._native import _IpcDecoder, _IpcEncoder
-from ._service import AsyncBatchStream
+from .._native import _IpcDecoder, _IpcEncoder
+from ..runtime.service import AsyncBatchStream
 
 DEFAULT_CHUNK_BYTES = 64 * 1024
 DEFAULT_MAX_FRAME_BYTES = 256 * 1024 * 1024

@@ -14,7 +14,14 @@ import pytest
 import relify
 import uvicorn
 from _support import WAIT, build_index, register_source, write_vectors
-from relify._http_models import (
+from relify.facade import AsyncSession
+from relify.runtime.service import SessionService
+from relify.server.app import create_http_app, create_http_app_for_service
+from relify.server.openapi import openapi_document
+from relify.server.source_policy import SourceUriPolicy
+from relify.transport.base import InProcessTransport
+from relify.transport.http import HttpTransport
+from relify.transport.models import (
     decode_identifier_path,
     encode_identifier_path,
     identifier_from_json,
@@ -32,13 +39,6 @@ from relify._http_models import (
     writer_options_from_json,
     writer_options_to_json,
 )
-from relify._http_openapi import openapi_document
-from relify._http_server import create_http_app, create_http_app_for_service
-from relify._http_transport import HttpTransport
-from relify._service import SessionService
-from relify._source_policy import SourceUriPolicy
-from relify._transport import InProcessTransport
-from relify.facade import AsyncSession
 
 
 class _FailingBatchStream:
@@ -201,8 +201,7 @@ def test_http_transport_matches_embedded_query_surface(tmp_path: Path) -> None:
     async def exercise() -> None:
         service = await SessionService.open(
             root,
-            catalog=None,
-            index_root=None,
+            warehouse=None,
             storage_options=None,
             iceberg=None,
             config=None,
@@ -260,8 +259,7 @@ def test_transport_lifecycle_conformance(tmp_path: Path, mode: str) -> None:
     async def exercise() -> None:
         service = await SessionService.open(
             root,
-            catalog=None,
-            index_root=None,
+            warehouse=None,
             storage_options=None,
             iceberg=None,
             config=None,
@@ -370,8 +368,7 @@ def test_http_server_denies_unconfigured_source_roots(tmp_path: Path) -> None:
     async def exercise() -> None:
         service = await SessionService.open(
             tmp_path / "relify-data",
-            catalog=None,
-            index_root=None,
+            warehouse=None,
             storage_options=None,
             iceberg=None,
             config=None,
@@ -400,8 +397,7 @@ def test_http_server_validates_routes_and_publishes_openapi(tmp_path: Path) -> N
     async def exercise() -> None:
         service = await SessionService.open(
             tmp_path / "relify-data",
-            catalog=None,
-            index_root=None,
+            warehouse=None,
             storage_options=None,
             iceberg=None,
             config=None,

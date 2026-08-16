@@ -24,12 +24,13 @@ one directory:
 session = relify.connect("./relify-data")
 ```
 
-Catalog and index storage may be configured separately:
+Index relations may be stored in a separate warehouse while Relify keeps its
+SQLite catalog and metadata under the local root:
 
 ```python
 session = relify.connect(
-    catalog="sqlite:///absolute/path/catalog.sqlite",
-    index_root="s3://bucket/relify/",
+    "/var/lib/relify",
+    warehouse="s3://bucket/relify/",
     storage_options={
         "aws_region": "us-east-1",
         "aws_endpoint": "https://s3.example.com",
@@ -37,31 +38,19 @@ session = relify.connect(
 )
 ```
 
-`root` and `catalog` are mutually exclusive. An explicit catalog requires an
-explicit `index_root`. The first implementation supports SQLite catalog URIs.
-
 Storage locations must be absolute canonical `file`, `s3`, or `hdfs` URIs.
 Credentials are process configuration and are never written into index
 metadata.
 
-## Server Source Policy
+## Server Configuration
 
-An HTTP server rejects source registration unless the canonical source is below
-an explicitly allowed server-visible prefix:
-
-```python
-from relify.server import create_app
-
-app = create_app(
-    "/srv/relify",
-    allowed_source_prefixes=["/srv/lakehouse", "s3://bucket/documents"],
-)
-```
-
-The default allowlist is empty. File paths are resolved by the server and must
-remain below an allowed file root. Object-store URIs must match the configured
-scheme, authority, and path-segment boundary. Registration requests cannot
-override the server's storage credentials or endpoint configuration.
+Run `relify config init` to write the default `relify.toml`, then use
+`relify serve`. The server guide documents the [configuration file and source
+policy](guides/server.md). The default source allowlist is empty. File paths
+are resolved by the server and must remain below an allowed file root.
+Object-store URIs must match the configured scheme, authority, and path-segment
+boundary. Registration requests cannot override the server's storage
+credentials or endpoint configuration.
 
 ## Session Configuration
 

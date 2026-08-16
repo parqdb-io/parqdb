@@ -130,7 +130,7 @@ def reference_lvq_search(
 def register_fixture(session: relify.Session, fixture: Path, name: str) -> None:
     destination = session.root / fixture.name
     shutil.copyfile(fixture, destination)
-    session.indexes.register(name, destination.as_uri())
+    session._indexes.register(name, destination.as_uri())
 
 
 def ivf_centroids_fingerprint(descriptor: dict[str, object]) -> str:
@@ -221,7 +221,7 @@ def test_valid_metadata_fixture_is_accepted_by_the_native_reader(
     session = relify.connect(tmp_path / "relify-data")
     register_fixture(session, VALID / "metadata.json", "fixture")
 
-    entry = session.indexes.load("fixture")
+    entry = session._indexes.load("fixture")
     assert entry.metadata["format-version"] == 1
     assert entry.metadata["current-snapshot-id"] == 701
 
@@ -232,7 +232,7 @@ def test_composite_metadata_fixture_is_accepted_by_the_native_reader(
     session = relify.connect(tmp_path / "relify-data")
     register_fixture(session, COMPOSITE / "metadata.json", "composite")
 
-    entry = session.indexes.load("composite")
+    entry = session._indexes.load("composite")
     snapshot = entry.metadata["snapshots"][0]
     assert snapshot["source-key-fields"] == ("tenant_id", "document_id")
     assert snapshot["parameters"]["posting_encoding"] == "source"
@@ -246,7 +246,7 @@ def test_lvq_metadata_fixtures_are_accepted_by_the_native_reader(
     session = relify.connect(tmp_path / "relify-data")
     register_fixture(session, VALID / encoding / "metadata.json", encoding)
 
-    entry = session.indexes.load(encoding)
+    entry = session._indexes.load(encoding)
     snapshot = entry.metadata["snapshots"][0]
     assert snapshot["index-schema-version"] == 1
     assert snapshot["parameters"]["posting_encoding"] == encoding
@@ -261,7 +261,7 @@ def test_lvq_pyarrow_fixtures_are_queryable_by_the_native_reader(
     session = relify.connect(tmp_path / "relify-data")
     source, metadata = localize_lvq_fixture(session.root, directory)
     documents = register_source(session, source, "documents")
-    session.indexes.register(
+    session._indexes.register(
         encoding,
         metadata.as_uri(),
         namespace=documents.identifier.index_namespace,

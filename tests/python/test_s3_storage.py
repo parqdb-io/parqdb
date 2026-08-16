@@ -74,7 +74,7 @@ def test_s3_build_search_refresh_and_gc(
 
     session = relify.connect(
         tmp_path / "state",
-        index_root=index_root,
+        warehouse=index_root,
         storage_options=s3.storage_options,
     )
     documents = register_source(
