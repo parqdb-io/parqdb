@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 #[cfg(test)]
 use parallite::Executor;
 use parallite::ParalliteContext;
-use relify_kernels::{LvqBits, LvqEncodedBatch, encode_lvq_rows};
+use relify_kernels::{LvqBits, LvqEncodedBatch, detect, encode_lvq_rows};
 use relify_kmeans::assign_batch_to_centroids;
 
 use graph::{Graph, SearchScratch};
@@ -19,6 +19,7 @@ const DEFAULT_EF_CONSTRUCTION: usize = 128;
 const DEFAULT_EF_SEARCH: usize = 64;
 const DEFAULT_SEED: u64 = 0x7265_6c69_6679;
 const MIN_HNSW_CENTROIDS: usize = 8_192;
+const EXACT_SCAN_NPROBE_DIVISOR: usize = 64;
 
 #[derive(Debug, Clone, Copy)]
 struct HnswConfig {
@@ -333,11 +334,15 @@ impl HnswIndex {
                 "query must match the centroid dimension and contain finite values".into(),
             ));
         }
+        let count = nprobe.min(self.centroid_count());
+        if exact_scan_preferred(count, self.centroid_count()) {
+            return self.route_exact(query, count);
+        }
         let mut output = Vec::with_capacity(nprobe.min(self.centroid_count()));
         self.graph.search_append(
             &self.centroids,
             query,
-            nprobe.min(self.centroid_count()),
+            count,
             ef.max(nprobe),
             &mut scratch.graph,
             &mut output,
@@ -367,6 +372,14 @@ impl HnswIndex {
         let rows = queries.len() / self.centroids.dimension();
         let count = nprobe.min(self.centroid_count());
         let mut output = Vec::with_capacity(rows * count);
+        if exact_scan_preferred(count, self.centroid_count()) {
+            let mut distances = vec![0.0_f32; self.centroid_count()];
+            let mut scored = Vec::with_capacity(self.centroid_count());
+            for query in queries.chunks_exact(self.centroids.dimension()) {
+                self.route_exact_append(query, count, &mut distances, &mut scored, &mut output)?;
+            }
+            return Ok(output);
+        }
         for query in queries.chunks_exact(self.centroids.dimension()) {
             self.graph.search_append(
                 &self.centroids,
@@ -379,6 +392,49 @@ impl HnswIndex {
         }
         Ok(output)
     }
+
+    fn route_exact(&self, query: &[f32], count: usize) -> Result<Vec<usize>> {
+        let mut distances = vec![0.0_f32; self.centroid_count()];
+        let mut scored = Vec::with_capacity(self.centroid_count());
+        let mut output = Vec::with_capacity(count);
+        self.route_exact_append(query, count, &mut distances, &mut scored, &mut output)?;
+        Ok(output)
+    }
+
+    fn route_exact_append(
+        &self,
+        query: &[f32],
+        count: usize,
+        distances: &mut [f32],
+        scored: &mut Vec<(f32, usize)>,
+        output: &mut Vec<usize>,
+    ) -> Result<()> {
+        if count == self.centroid_count() {
+            output.extend(0..count);
+            return Ok(());
+        }
+        detect().lvq_squared_l2_rows(&self.centroids.as_view(), query, distances)?;
+        scored.clear();
+        scored.extend(
+            distances
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(cid, distance)| (distance, cid)),
+        );
+        let compare = |left: &(f32, usize), right: &(f32, usize)| {
+            left.0
+                .total_cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+        };
+        scored.select_nth_unstable_by(count, compare);
+        output.extend(scored[..count].iter().map(|(_, cid)| *cid));
+        Ok(())
+    }
+}
+
+fn exact_scan_preferred(nprobe: usize, nlist: usize) -> bool {
+    nprobe.saturating_mul(EXACT_SCAN_NPROBE_DIVISOR) >= nlist
 }
 
 impl HnswNavigator {
@@ -537,6 +593,28 @@ mod tests {
                 .route_batch(&[73.1, 5.0, 201.0, 14.0], 1, &mut scratch)
                 .unwrap(),
             [73, 201]
+        );
+    }
+
+    #[test]
+    fn large_nprobe_uses_exact_lvq_routing() {
+        let values = points();
+        let navigator = HnswIndex::build(&values, 2, HnswConfig::default()).unwrap();
+        let mut scratch = navigator.scratch();
+        let mut actual = navigator.route(&[73.1, 5.0], 4, &mut scratch).unwrap();
+        let mut expected = navigator.route_exact(&[73.1, 5.0], 4).unwrap();
+        actual.sort_unstable();
+        expected.sort_unstable();
+
+        assert_eq!(actual, expected);
+        assert!(!exact_scan_preferred(3, 256));
+        assert!(exact_scan_preferred(4, 256));
+        assert_eq!(
+            navigator
+                .route_batch(&[73.1, 5.0, 201.0, 14.0], 4, &mut scratch)
+                .unwrap()
+                .len(),
+            8
         );
     }
 
