@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 560" role="img" aria-labelledby="title desc">
+  <title id="title">ParqDB logo</title>
+  <desc id="desc">ParqDB wordmark with stacked columnar data and vector path icon.</desc>
+
+  <g transform="translate(40 28) scale(.49)">
+    <path d="M176 242 512 146 848 242 848 394 512 490 176 394Z" fill="#0B2A68"/>
+    <path d="M176 442 512 538 848 442 848 594 512 690 176 594Z" fill="#6E2BF2"/>
+    <path d="M176 644 512 740 848 644 848 796 512 892 176 796Z" fill="#0EA5EE"/>
+    <path d="M380 748 507 557 718 291" fill="none" stroke="#FFFFFF" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="380" cy="748" r="55" fill="#0EA5EE" stroke="#FFFFFF" stroke-width="28"/>
+    <circle cx="507" cy="557" r="55" fill="#6E2BF2" stroke="#FFFFFF" stroke-width="28"/>
+    <circle cx="718" cy="291" r="55" fill="#0B2A68" stroke="#FFFFFF" stroke-width="28"/>
+  </g>
+
+  <text x="550" y="355" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="216" font-weight="800" letter-spacing="-8">
+    <tspan fill="#0B2A68">Parq</tspan><tspan fill="#0EA5EE">DB</tspan>
+  </text>
+</svg>

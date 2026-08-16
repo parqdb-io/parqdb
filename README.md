@@ -1,11 +1,14 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/petrizhang/relify/main/assets/relify-header.svg" alt="Relify" width="760">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/petrizhang/relify/docs/vision-centents/assets/parqdb-logo-dark.svg">
+    <img src="https://raw.githubusercontent.com/petrizhang/relify/docs/vision-centents/assets/parqdb-logo.svg" alt="ParqDB" width="520">
+  </picture>
   <p>
     English |
     <a href="https://github.com/petrizhang/relify/blob/main/README.zh-CN.md">中文</a>
   </p>
   <p>
-    <strong>Open vector indexes for the SQL engines you already use.</strong>
+    <strong>Billion-scale embedded vector database, built entirely on Parquet and Arrow.</strong>
   </p>
   <p>
     <a href="https://pypi.org/project/relify/"><img alt="PyPI" src="https://img.shields.io/pypi/v/relify.svg"></a>
@@ -24,10 +27,10 @@
 
 ---
 
-Relify is an open-source Python and Rust library for indexing and searching
-lakehouse data with SQL. It stores vector indexes as open Parquet or Iceberg
-tables rather than engine-owned binary artifacts. The current runtime embeds
-DataFusion and keeps source data in place.
+ParqDB is an open-source embedded vector database written in Python and Rust.
+It builds and queries billion-scale vector indexes entirely on Parquet and
+Arrow, keeping source data and index data in open columnar formats. The current
+runtime embeds DataFusion and keeps source data in place.
 
 If Relify is useful to you, a ⭐ helps others find the project.
 
