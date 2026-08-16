@@ -27,12 +27,9 @@
 
 ---
 
-ParqDB is an open-source embedded vector database written in Python and Rust.
-It builds and queries billion-scale vector indexes entirely on Parquet and
-Arrow, keeping source data and index data in open columnar formats. The current
-runtime embeds DataFusion and keeps source data in place.
-
-If Relify is useful to you, a ⭐ helps others find the project.
+ParqDB is an embedded vector database built to search and analyze billion-scale
+multimodal datasets larger than memory. It combines ANN search and SQL analytics
+directly on Parquet, with Arrow-native execution.
 
 ## Quick Start
 
