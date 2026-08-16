@@ -14,10 +14,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check:
-    name: Python and Rust checks
+  scope:
+    name: Classify changes
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+      base: ${{ steps.scope.outputs.base }}
 
     steps:
       - name: Check out source
@@ -50,6 +52,49 @@ jobs:
           echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
           echo "base=$base" >> "$GITHUB_OUTPUT"
 
+  docs:
+    name: Documentation checks
+    needs: scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+          python-version: "3.12"
+
+      - name: Run documentation checks
+        shell: bash
+        run: |
+          uv run --no-project --with markdown-it-py python tools/check_docs.py
+          git diff --check "${{ needs.scope.outputs.base }}" "$GITHUB_SHA"
+          python - <<'PY'
+          from pathlib import Path
+          from xml.etree import ElementTree
+
+          for path in Path("assets").glob("*.svg"):
+              ElementTree.parse(path)
+          PY
+
+  python:
+    name: Python checks
+    needs: scope
+    if: needs.scope.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
       - name: Install uv and Python
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
@@ -58,40 +103,46 @@ jobs:
           python-version: "3.12"
 
       - name: Install Rust
-        if: steps.scope.outputs.docs_only != 'true'
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.96.0"
+
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: ci
+          save-if: false
+
+      - name: Sync environment
+        run: make sync
+
+      - name: Build native extension
+        run: make develop-debug
+
+      - name: Run Python checks
+        run: make check-python
+
+  rust:
+    name: Rust checks
+    needs: scope
+    if: needs.scope.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: "1.96.0"
           components: rustfmt, clippy
 
-      - name: Cache Rust build
-        if: steps.scope.outputs.docs_only != 'true'
+      - name: Restore Rust build cache
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           shared-key: ci
 
-      - name: Sync environment
-        if: steps.scope.outputs.docs_only != 'true'
-        run: make sync
-
-      - name: Build native extension
-        if: steps.scope.outputs.docs_only != 'true'
-        run: make develop-debug
-
-      - name: Run quality gates
-        if: steps.scope.outputs.docs_only != 'true'
-        run: make check
-
-      - name: Run documentation checks
-        if: steps.scope.outputs.docs_only == 'true'
-        shell: bash
-        run: |
-          uv run --no-project --with markdown-it-py python tools/check_docs.py
-          git diff --check "${{ steps.scope.outputs.base }}" "$GITHUB_SHA"
-          python - <<'PY'
-          from pathlib import Path
-          from xml.etree import ElementTree
-
-          for path in Path("assets").glob("*.svg"):
-              ElementTree.parse(path)
-          PY
+      - name: Run Rust checks
+        run: make check-rust

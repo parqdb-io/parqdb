@@ -65,14 +65,8 @@ def _config_init(path: Path) -> int:
 
 def _serve(config_path: Path | None) -> int:
     configuration = _configuration_for_serve(config_path)
-    try:
-        import uvicorn
-    except ModuleNotFoundError as error:
-        if error.name != "uvicorn":
-            raise
-        raise RuntimeError(
-            "relify serve requires the 'server' optional dependency"
-        ) from error
+    import uvicorn
+
     app = create_app(
         configuration.root,
         warehouse=configuration.warehouse,

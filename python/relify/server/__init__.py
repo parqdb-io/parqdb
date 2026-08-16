@@ -27,14 +27,8 @@ def create_app(
     allowed_source_prefixes: Sequence[str | Path] = (),
 ) -> ASGIApp:
     """Create an ASGI server with explicit server-visible source prefixes."""
-    try:
-        from .app import create_http_app
-    except ModuleNotFoundError as error:
-        if error.name != "starlette":
-            raise
-        raise RuntimeError(
-            "the Relify server requires the 'server' optional dependency"
-        ) from error
+    from .app import create_http_app
+
     return create_http_app(
         root,
         warehouse=warehouse,
