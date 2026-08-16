@@ -35,8 +35,10 @@ directly on Parquet, with Arrow-native execution.
 - **Everything is Parquet.** Both source data and vector indexes are stored in
   Parquet, not proprietary binary blobs. An index can be versioned, published
   on Hugging Face, and shared across engines and applications.
-- **Multimodal search with SQL.** Search embeddings from any modality. Filter,
-  join, aggregate, and analyze the results alongside the original data.
+- **Multimodal data, SQL-native search.** Vector search is expressed as relational
+  operations over Parquet, not executed as a black-box index call. This lets the
+  SQL optimizer compose and optimize it with filters, joins, and aggregations in
+  one plan.
 - **Serving and analytics on one index.** Use small-k retrieval for online
   serving and large-k search for ad hoc analytics. No separate index pipeline
   is required.
