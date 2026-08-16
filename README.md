@@ -32,9 +32,9 @@ directly on Parquet, with Arrow-native execution.
 
 **Key Features**
 
-- **Everything is Parquet.** Source datasets and vector indexes share the same
-  open format. An index can be versioned, published on Hugging Face, and shared
-  like any other dataset.
+- **Everything is Parquet.** Source datasets and vector indexes are both Parquet
+  datasets, not proprietary binary blobs. An index can be versioned, published
+  on Hugging Face, and shared like any other dataset.
 - **Multimodal search with SQL.** Search embeddings from any modality. Filter,
   join, aggregate, and analyze the results alongside the original data.
 - **Serving and analytics on one index.** Use small-k retrieval for online
