@@ -98,6 +98,14 @@ fn root_partitions_need_enough_rows_for_every_leaf_centroid() {
 }
 
 #[test]
+fn partition_rows_rejects_out_of_range_labels() {
+    let error = partition_rows(&[0, 2], 2).unwrap_err();
+
+    assert!(error.to_string().contains("label 2"));
+    assert!(error.to_string().contains("cluster count 2"));
+}
+
+#[test]
 fn auto_mode_uses_hierarchical_training_only_for_large_cluster_counts() {
     assert_eq!(resolved_mode(KMeansOptions::new(8_191)), KMeansMode::Flat);
     assert_eq!(
@@ -141,6 +149,46 @@ fn hierarchical_mode_returns_flattened_leaf_centroids() {
     assert_eq!(first.centroids.len(), 64 * 2);
     assert!(first.centroids.iter().all(|value| value.is_finite()));
     assert_eq!(first, second);
+}
+
+#[test]
+fn hierarchical_failure_falls_back_only_in_auto_mode() {
+    let vectors = vec![1.0_f32; 128];
+    let context = ParalliteContext::with_executor(Executor::serial());
+    let mut options = KMeansOptions {
+        n_clusters: 64,
+        max_iter: 1,
+        seed: 42,
+        mode: KMeansMode::Auto,
+    };
+
+    let model = fit_hierarchical_kmeans_with_progress(
+        &vectors,
+        1,
+        vectors.len(),
+        &context,
+        options,
+        &|_| {},
+    )
+    .unwrap();
+    assert_eq!(model.centroids.len(), options.n_clusters);
+    assert!(model.centroids.iter().all(|value| value.is_finite()));
+
+    options.mode = KMeansMode::Hierarchical;
+    let error = fit_hierarchical_kmeans_with_progress(
+        &vectors,
+        1,
+        vectors.len(),
+        &context,
+        options,
+        &|_| {},
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("root partitions cannot form the requested leaf centroids")
+    );
 }
 
 #[test]

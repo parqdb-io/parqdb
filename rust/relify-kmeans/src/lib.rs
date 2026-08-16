@@ -415,7 +415,7 @@ fn fit_hierarchical_kmeans_with_progress(
         &|_| {},
     )?;
     let root_labels = assign_to_centroids(vectors, dimension, &root_model.centroids, context)?;
-    let (root_offsets, root_rows) = partition_rows(&root_labels, root_count);
+    let (root_offsets, root_rows) = partition_rows(&root_labels, root_count)?;
     if !has_sufficient_root_rows(&root_offsets, &child_counts) {
         if options.mode == KMeansMode::Auto {
             return fit_flat_kmeans_with_progress(
@@ -522,9 +522,14 @@ fn rounded_sqrt(value: usize) -> usize {
     root
 }
 
-fn partition_rows(labels: &[usize], cluster_count: usize) -> (Vec<usize>, Vec<usize>) {
+fn partition_rows(labels: &[usize], cluster_count: usize) -> Result<(Vec<usize>, Vec<usize>)> {
     let mut offsets = vec![0_usize; cluster_count + 1];
     for &label in labels {
+        if label >= cluster_count {
+            return Err(Error::InvalidArgument(format!(
+                "K-means label {label} exceeds cluster count {cluster_count}"
+            )));
+        }
         offsets[label + 1] += 1;
     }
     for index in 1..offsets.len() {
@@ -536,7 +541,7 @@ fn partition_rows(labels: &[usize], cluster_count: usize) -> (Vec<usize>, Vec<us
         rows[next[label]] = row;
         next[label] += 1;
     }
-    (offsets, rows)
+    Ok((offsets, rows))
 }
 
 /// Assigns dense vectors to their nearest centroids using `context`.
