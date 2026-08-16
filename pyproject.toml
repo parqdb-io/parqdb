@@ -32,18 +32,15 @@ dependencies = [
     "cloudpickle>=2.0",
     "httpx>=0.28,<1",
     "pyarrow>=18",
+    "starlette>=1.3.1,<2",
     "typing-extensions; python_version < '3.13'",
+    "uvicorn>=0.35,<1",
 ]
 
 [project.optional-dependencies]
 iceberg = [
     "pyiceberg>=0.10,<1",
 ]
-server = [
-    "starlette>=1.3.1,<2",
-    "uvicorn>=0.35,<1",
-]
-
 [project.scripts]
 relify = "relify.cli:main"
 
@@ -70,8 +67,6 @@ wheel-test = [
 dev = [
     { include-group = "benchmark" },
     { include-group = "wheel-test" },
-    "starlette>=1.3.1,<2",
-    "uvicorn>=0.35,<1",
     "markdown-it-py>=4,<5",
     "maturin>=1.9,<2",
     "pip-audit>=2.10,<3",

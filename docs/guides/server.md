@@ -6,11 +6,11 @@ process with one ASGI worker.
 
 ## Install and Start
 
-Install the server extra in the process that will own the catalog, index data,
-and storage credentials:
+Install Relify in the process that will own the catalog, index data, and
+storage credentials:
 
 ```bash
-python -m pip install "relify[server]"
+python -m pip install relify
 mkdir relify-service
 cd relify-service
 relify config init

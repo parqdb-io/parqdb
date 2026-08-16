@@ -37,10 +37,10 @@ is intentionally required.
 
 ### Connect to a Relify Server
 
-Install the optional server dependencies in the server environment:
+Install Relify in the server environment:
 
 ```bash
-python -m pip install "relify[server]"
+python -m pip install relify
 ```
 
 Start the server with its default TOML configuration:
