@@ -1,0 +1,117 @@
+{
+  "benchmark": "build",
+  "benchmark_revision": "75dad2ea7af3fcf9681efc8acbfbf8bbe0c88bc2",
+  "dataset": {
+    "dimension": 128,
+    "ground_truth": null,
+    "id_column": "id",
+    "kind": "sift1b-bigann",
+    "queries": null,
+    "query_file": null,
+    "query_source_id_range": null,
+    "revision": null,
+    "rows": 1000000000,
+    "source_parquet": "/storage_ssd/relify-benchmarks/datasets/sift1b/source",
+    "source_parquet_bytes": 124888648321,
+    "split": null,
+    "vector_column": "embedding"
+  },
+  "generated_at_utc": "2026-08-16T17:20:11.907042+00:00",
+  "implementation_revision": "75dad2ea7af3fcf9681efc8acbfbf8bbe0c88bc2",
+  "parameters": {
+    "encoding": "lvq8",
+    "implementation": "relify",
+    "index_root": "/storage_ssd/relify-benchmarks/indexes/sift1b-lvq8-65536",
+    "max_temp_directory_size_bytes": 322122547200,
+    "nlist": 65536,
+    "rebuild": true,
+    "repetitions": 1,
+    "seed": 42,
+    "threads": 64
+  },
+  "resources": {
+    "cpus": 64,
+    "memory_limit_bytes": 137438953472
+  },
+  "results": [
+    {
+      "build_points_per_second": 463033.65729675285,
+      "build_resource_usage": {
+        "cgroup_memory_anon_bytes": 56372506624,
+        "cgroup_memory_current_bytes": 72963149824,
+        "cgroup_memory_file_bytes": 15962046464,
+        "cgroup_memory_peak_bytes": 122234146816,
+        "cgroup_peak_memory_current_bytes": 122229166080,
+        "cgroup_read_bytes": null,
+        "cgroup_read_operations": null,
+        "cgroup_swap_current_bytes": 0,
+        "cgroup_write_bytes": null,
+        "cgroup_write_operations": null,
+        "cpu_seconds": 100523.322219,
+        "major_page_faults": 753,
+        "minor_page_faults": 59613655,
+        "peak_rss_bytes": 66148950016,
+        "read_bytes": 275493507072,
+        "wall_seconds": 2159.6372898686677,
+        "write_bytes": 312668565504
+      },
+      "build_resource_usage_samples": [
+        {
+          "cgroup_memory_anon_bytes": 56372506624,
+          "cgroup_memory_current_bytes": 72963149824,
+          "cgroup_memory_file_bytes": 15962046464,
+          "cgroup_memory_peak_bytes": 122234146816,
+          "cgroup_peak_memory_current_bytes": 122229166080,
+          "cgroup_read_bytes": null,
+          "cgroup_read_operations": null,
+          "cgroup_swap_current_bytes": 0,
+          "cgroup_write_bytes": null,
+          "cgroup_write_operations": null,
+          "cpu_seconds": 100523.322219,
+          "major_page_faults": 753,
+          "minor_page_faults": 59613655,
+          "peak_rss_bytes": 66148950016,
+          "read_bytes": 275493507072,
+          "wall_seconds": 2159.6372898686677,
+          "write_bytes": 312668565504
+        }
+      ],
+      "build_seconds": 2159.670218873769,
+      "build_seconds_samples": [
+        2159.670218873769
+      ],
+      "encoding": "lvq8",
+      "implementation": "relify",
+      "index_reused": false,
+      "kmeans_max_iterations": 20,
+      "kmeans_seed": 42,
+      "managed_bytes": 142760085867,
+      "managed_bytes_samples": [
+        142760085867
+      ],
+      "peak_memory_bytes": 66148950016,
+      "peak_memory_bytes_samples": [
+        66148950016
+      ],
+      "postings_layout": "hive-cid-file-v1",
+      "preparation_seconds": 125.87726118601859,
+      "preparation_seconds_samples": [
+        125.87726118601859
+      ],
+      "threads": 64,
+      "training_rows": 16777216,
+      "training_sampling": "streaming-reservoir-v2",
+      "workload": "IVF training, assignment, Parquet persistence, and catalog publication; preparation excluded"
+    }
+  ],
+  "schema_version": 1,
+  "software": {
+    "machine": "x86_64",
+    "numpy": "2.5.1",
+    "platform": "Linux-6.8.0-114-generic-x86_64-with-glibc2.36",
+    "pyarrow": "25.0.0",
+    "python": "3.12.2",
+    "relify": "0.1.0rc2",
+    "rustc": null
+  }
+}

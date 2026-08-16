@@ -51,21 +51,24 @@ The source layout is fixed for reproducibility: 65,536 rows per row group and
 dataset. Embedding values use `BYTE_STREAM_SPLIT` and `ZSTD(3)`; IDs are stored
 plain. Preparation is outside the timed index-build measurement.
 
-Build an IVF-LVQ4 index through the normal public API path:
+Build an IVF-LVQ8 index through the normal public API path. The spill limit is
+explicit because the 1B-row postings shuffle exceeds DataFusion's 100 GiB
+default:
 
 ```bash
-DATASET=/home/petrizhang/data/sift1b
-INDEX_ROOT=/storage_ssd/relify-benchmarks/indexes/sift1b-lvq4-65536
+DATASET=/data/sift1b
+INDEX_ROOT=/benchmarks/indexes/sift1b-lvq8-65536
 
 uv run --group benchmark --no-sync python -m benchmarks.build \
   --source-parquet "$DATASET/source" \
   --dataset-name sift1b-bigann \
   --nlist 65536 \
-  --encoding lvq4 \
-  --threads 32 \
+  --encoding lvq8 \
+  --threads 64 \
+  --max-temp-directory-size-bytes 322122547200 \
   --index-root "$INDEX_ROOT" \
   --rebuild \
-  --output /storage_ssd/relify-benchmarks/results/sift1b-lvq4-65536-build.json
+  --output /benchmarks/results/sift1b-lvq8-65536-build.json
 ```
 
 Query against the prepared BigANN queries and ground truth:
@@ -76,19 +79,22 @@ uv run --group benchmark --no-sync python -m benchmarks.query \
   --query-file "$DATASET/queries.fbin" \
   --ground-truth "$DATASET/gt1000.bin" \
   --dataset-name sift1b-bigann \
-  --num-queries 10000 \
+  --num-queries 100 \
   --nlist 65536 \
-  --encoding lvq4 \
+  --encoding lvq8 \
   --nprobe 64 \
   --k 10 \
-  --curve-nprobe-values 1,2,4,8,16,32,64,128,256,512,1024 \
+  --curve-nprobe-values 64 \
   --curve-k-values 10 \
   --search-repetitions 1 \
   --warmup-queries 10 \
-  --threads 32 \
+  --threads 2 \
   --index-root "$INDEX_ROOT" \
-  --output /storage_ssd/relify-benchmarks/results/sift1b-lvq4-65536-query.json
+  --output /benchmarks/results/sift1b-lvq8-65536-query.json
 ```
+
+The recorded 64 vCPU build and 2 vCPU / 4 GiB query run is archived in
+[`results/linux-x86_64-2026-08-17`](results/linux-x86_64-2026-08-17/README.md).
 
 ## Wikipedia 35M
 
