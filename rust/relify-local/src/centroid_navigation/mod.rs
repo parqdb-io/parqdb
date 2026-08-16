@@ -56,6 +56,9 @@ struct HnswNavigator {
     index: Arc<HnswIndex>,
     scratches: Mutex<Vec<RouteScratch>>,
     scratch_capacity: usize,
+    scratch_resident_limit: usize,
+    pooled_result_capacity: usize,
+    pooled_candidate_capacity: usize,
 }
 
 #[derive(Debug)]
@@ -283,8 +286,20 @@ impl HnswIndex {
     }
 
     fn scratch(&self) -> RouteScratch {
+        self.scratch_with_capacity(self.ef_search, self.ef_search.saturating_mul(2))
+    }
+
+    fn scratch_with_capacity(
+        &self,
+        result_capacity: usize,
+        candidate_capacity: usize,
+    ) -> RouteScratch {
         RouteScratch {
-            graph: SearchScratch::new(self.centroid_count()),
+            graph: SearchScratch::new_for_query(
+                self.centroid_count(),
+                result_capacity,
+                candidate_capacity,
+            ),
         }
     }
 
@@ -373,12 +388,25 @@ impl HnswNavigator {
         config: HnswConfig,
         parallel: &ParalliteContext,
     ) -> Result<Self> {
+        let index = Arc::new(HnswIndex::build_parallel(
+            values, dimension, config, parallel,
+        )?);
+        let scratch_capacity = parallel.thread_count().max(1);
+        let pooled_result_capacity = config.ef_search;
+        let pooled_candidate_capacity = config.ef_search.saturating_mul(2);
+        let scratches = (0..scratch_capacity)
+            .map(|_| index.scratch_with_capacity(pooled_result_capacity, pooled_candidate_capacity))
+            .collect::<Vec<_>>();
+        let scratch_resident_limit = scratches
+            .first()
+            .map_or(0, |scratch| scratch.graph.resident_size());
         Ok(Self {
-            index: Arc::new(HnswIndex::build_parallel(
-                values, dimension, config, parallel,
-            )?),
-            scratches: Mutex::new(Vec::new()),
-            scratch_capacity: parallel.thread_count().max(1),
+            index,
+            scratches: Mutex::new(scratches),
+            scratch_capacity,
+            scratch_resident_limit,
+            pooled_result_capacity,
+            pooled_candidate_capacity,
         })
     }
 
@@ -397,7 +425,13 @@ impl HnswNavigator {
     }
 
     fn resident_size(&self) -> usize {
+        let scratches = mutex_lock(&self.scratches);
         self.index.resident_size()
+            + scratches.capacity() * std::mem::size_of::<RouteScratch>()
+            + scratches
+                .iter()
+                .map(|scratch| scratch.graph.resident_size())
+                .sum::<usize>()
     }
 
     #[cfg(test)]
@@ -412,6 +446,13 @@ impl HnswNavigator {
     }
 
     fn return_scratch(&self, scratch: RouteScratch) {
+        let mut scratch = scratch;
+        scratch
+            .graph
+            .trim_for_query_pool(self.pooled_result_capacity, self.pooled_candidate_capacity);
+        if scratch.graph.resident_size() > self.scratch_resident_limit {
+            return;
+        }
         let mut scratches = mutex_lock(&self.scratches);
         if scratches.len() < self.scratch_capacity {
             scratches.push(scratch);
@@ -544,5 +585,20 @@ mod tests {
         for worker in workers {
             worker.join().unwrap();
         }
+    }
+
+    #[test]
+    fn pooled_scratches_are_accounted_and_bounded() {
+        let values = points();
+        let parallel = ParalliteContext::with_executor(Executor::with_threads(4).unwrap());
+        let navigator =
+            HnswNavigator::build_parallel(&values, 2, HnswConfig::default(), &parallel).unwrap();
+        let index_size = navigator.index.resident_size();
+        let initial_size = navigator.resident_size();
+
+        assert!(initial_size > index_size);
+        assert_eq!(mutex_lock(&navigator.scratches).len(), 4);
+        navigator.route(&[73.1, 5.0], 200).unwrap();
+        assert!(navigator.resident_size() <= initial_size);
     }
 }

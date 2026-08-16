@@ -76,6 +76,39 @@ impl SearchScratch {
         }
     }
 
+    pub(super) fn new_for_query(
+        size: usize,
+        result_capacity: usize,
+        candidate_capacity: usize,
+    ) -> Self {
+        let mut scratch = Self::new(size);
+        scratch.ordered = Vec::with_capacity(result_capacity);
+        scratch.query_candidates.reset(candidate_capacity);
+        scratch.query_results = BinaryHeap::with_capacity(result_capacity);
+        scratch
+    }
+
+    pub(super) fn resident_size(&self) -> usize {
+        self.marks.capacity() * std::mem::size_of::<u32>()
+            + self.candidates.capacity() * std::mem::size_of::<Reverse<Scored>>()
+            + self.nearest.capacity() * std::mem::size_of::<Scored>()
+            + self.ordered.capacity() * std::mem::size_of::<Scored>()
+            + self.query_candidates.resident_size()
+            + self.query_results.capacity() * std::mem::size_of::<Scored>()
+    }
+
+    pub(super) fn trim_for_query_pool(
+        &mut self,
+        result_capacity: usize,
+        candidate_capacity: usize,
+    ) {
+        self.ordered.clear();
+        self.ordered.shrink_to(result_capacity);
+        self.query_candidates.trim_to(candidate_capacity);
+        self.query_results.clear();
+        self.query_results.shrink_to(result_capacity);
+    }
+
     fn reset(&mut self) {
         self.epoch = self.epoch.wrapping_add(1);
         if self.epoch == 0 {
@@ -193,6 +226,21 @@ impl MinimaxHeap {
 
     fn is_empty(&self) -> bool {
         self.valid == 0
+    }
+
+    fn resident_size(&self) -> usize {
+        self.ids.capacity() * std::mem::size_of::<i32>()
+            + self.distances.capacity() * std::mem::size_of::<f32>()
+    }
+
+    fn trim_to(&mut self, capacity: usize) {
+        self.length = 0;
+        self.valid = 0;
+        self.capacity = capacity;
+        self.ids.truncate(capacity);
+        self.ids.shrink_to(capacity);
+        self.distances.truncate(capacity);
+        self.distances.shrink_to(capacity);
     }
 
     fn sift_down(&mut self, mut position: usize) {
