@@ -34,7 +34,7 @@ directly on Parquet, with Arrow-native execution.
 
 - **Everything is Parquet.** Both source data and vector indexes are stored in
   Parquet, not proprietary binary blobs. An index can be versioned, published
-  on Hugging Face, and shared like any other dataset.
+  on Hugging Face, and shared across engines and applications.
 - **Multimodal search with SQL.** Search embeddings from any modality. Filter,
   join, aggregate, and analyze the results alongside the original data.
 - **Serving and analytics on one index.** Use small-k retrieval for online
