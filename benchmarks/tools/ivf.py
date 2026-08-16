@@ -332,6 +332,7 @@ def benchmark_relify(
     build_missing: bool,
     show_progress: bool,
     page_cache_capacity_bytes: int | None,
+    max_temp_directory_size_bytes: int | None,
 ) -> dict[str, Any]:
     import relify
 
@@ -364,7 +365,11 @@ def benchmark_relify(
                 .set("relify.build.dop", str(threads))
             )
             session = relify.connect(root / "relify-data", config=build_config)
-            configure_relify_session(session, threads)
+            configure_relify_session(
+                session,
+                threads,
+                max_temp_directory_size_bytes=max_temp_directory_size_bytes,
+            )
             session.register_parquet("benchmark", source.path)
             table = session.table("benchmark")
             assert isinstance(table, relify.SourceTable)
@@ -716,6 +721,11 @@ def validate_args(
     if not 1 <= args.nlist <= rows:
         raise ValueError("nlist must be in 1..=rows")
     if args.operation == "build":
+        if (
+            args.max_temp_directory_size_bytes is not None
+            and args.max_temp_directory_size_bytes <= 0
+        ):
+            raise ValueError("max-temp-directory-size-bytes must be positive")
         return
     if args.num_queries <= 0 or args.search_repetitions <= 0 or args.warmup_queries < 0:
         raise ValueError(
@@ -888,6 +898,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
                     build_missing=args.operation == "build",
                     show_progress=not args.no_progress,
                     page_cache_capacity_bytes=args.page_cache_capacity_bytes,
+                    max_temp_directory_size_bytes=(args.max_temp_directory_size_bytes),
                 )
                 for trial in range(args.repetitions)
             ]
@@ -988,6 +999,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
                 "encoding": args.encoding,
                 "repetitions": args.repetitions,
                 "threads": threads,
+                "max_temp_directory_size_bytes": (args.max_temp_directory_size_bytes),
             },
             "resources": {
                 "cpus": len(available_cpus),
@@ -1065,6 +1077,10 @@ def build_parser(implementation: str = "relify") -> argparse.ArgumentParser:
     command.add_argument("--seed", type=int, default=KMEANS_SEED)
     command.add_argument("--repetitions", type=int, default=1)
     command.add_argument("--rebuild", action="store_true")
+    if implementation == "relify":
+        command.add_argument("--max-temp-directory-size-bytes", type=int)
+    else:
+        command.set_defaults(max_temp_directory_size_bytes=None)
     add_common_arguments(command, implementation=implementation)
     command.set_defaults(
         implementation=implementation,
@@ -1080,6 +1096,7 @@ def build_parser(implementation: str = "relify") -> argparse.ArgumentParser:
         search_repetitions=1,
         warmup_queries=1,
         page_cache_capacity_bytes=None,
+        max_temp_directory_size_bytes=None,
     )
     return command
 
@@ -1123,6 +1140,7 @@ def query_parser(implementation: str = "relify") -> argparse.ArgumentParser:
         seed=KMEANS_SEED,
         repetitions=1,
         rebuild=False,
+        max_temp_directory_size_bytes=None,
     )
     return command
 
