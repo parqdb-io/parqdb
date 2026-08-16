@@ -16,7 +16,7 @@ use crate::Result;
 use crate::runtime::{QueryAdmissionOptions, RelifyRuntime};
 
 const DEFAULT_MANIFEST_CACHE_ENTRIES: usize = 128;
-const DEFAULT_MANIFEST_CACHE_BYTES: usize = 64 * 1024 * 1024;
+const DEFAULT_MANIFEST_CACHE_BYTES: usize = 128 * 1024 * 1024;
 const DEFAULT_CENTROID_CACHE_ENTRIES: usize = 128;
 const DEFAULT_CENTROID_CACHE_BYTES: usize = 256 * 1024 * 1024;
 const DEFAULT_QUERY_CONCURRENCY: usize = 1;

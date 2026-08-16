@@ -8,8 +8,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::heap_size::{DFHeapSize, DFHeapSizeCtx};
-use datafusion::common::{ScalarValue, Statistics};
+use datafusion::common::{ScalarValue, Statistics, TableReference};
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::helpers::pruned_partition_list;
@@ -21,18 +20,34 @@ use datafusion::logical_expr::{Expr, Operator, TableProviderFilterPushDown, Tabl
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::empty::EmptyExec;
 use futures::TryStreamExt;
+use object_store::ObjectMeta;
 use relify_storage::StorageRegistry;
 
 use crate::{Error, Result};
 
 const SCAN_PARTITIONS_PER_WORKER: usize = 4;
 
+#[derive(Clone)]
+struct HiveCidManifestFile {
+    object_meta: ObjectMeta,
+    table_reference: Option<TableReference>,
+}
+
+impl HiveCidManifestFile {
+    fn to_partitioned_file(&self, cid: i32) -> PartitionedFile {
+        let mut file = PartitionedFile::new_from_meta(self.object_meta.clone());
+        file.partition_values = vec![ScalarValue::Int32(Some(cid))];
+        file.table_reference.clone_from(&self.table_reference);
+        file
+    }
+}
+
 pub(super) struct HiveCidParquetProvider {
     schema: SchemaRef,
     file_schema: SchemaRef,
     object_store_url: ObjectStoreUrl,
     format: Arc<dyn FileFormat>,
-    files: BTreeMap<i32, Vec<PartitionedFile>>,
+    files: BTreeMap<i32, Vec<HiveCidManifestFile>>,
 }
 
 impl fmt::Debug for HiveCidParquetProvider {
@@ -82,17 +97,22 @@ impl HiveCidParquetProvider {
             vec![Arc::new(Field::new("cid", DataType::Int32, false))],
         );
         let schema = Arc::clone(table_schema.table_schema());
-        let mut files = BTreeMap::<i32, Vec<PartitionedFile>>::new();
+        let mut files = BTreeMap::<i32, Vec<HiveCidManifestFile>>::new();
         for file in listed {
             let [ScalarValue::Int32(Some(cid))] = file.partition_values.as_slice() else {
                 return Err(Error::InvalidSchema(
                     "Hive CID postings file has an invalid partition value".into(),
                 ));
             };
-            files.entry(*cid).or_default().push(file);
+            files.entry(*cid).or_default().push(HiveCidManifestFile {
+                object_meta: file.object_meta,
+                table_reference: file.table_reference,
+            });
         }
         for cluster_files in files.values_mut() {
-            cluster_files.sort_unstable_by(|left, right| left.path().cmp(right.path()));
+            cluster_files.sort_unstable_by(|left, right| {
+                left.object_meta.location.cmp(&right.object_meta.location)
+            });
         }
         Ok(Self {
             schema,
@@ -105,19 +125,18 @@ impl HiveCidParquetProvider {
 
     pub(super) fn resident_size(&self) -> usize {
         let mut size = size_of::<Self>();
-        let mut heap_size = DFHeapSizeCtx::default();
         for files in self.files.values() {
             size = size
                 .saturating_add(size_of::<i32>())
-                .saturating_add(size_of::<Vec<PartitionedFile>>())
+                .saturating_add(size_of::<Vec<HiveCidManifestFile>>())
                 .saturating_add(
                     files
                         .capacity()
-                        .saturating_mul(size_of::<PartitionedFile>()),
+                        .saturating_mul(size_of::<HiveCidManifestFile>()),
                 );
             for file in files {
                 size = size
-                    .saturating_add(file.path().as_ref().len())
+                    .saturating_add(file.object_meta.location.as_ref().len())
                     .saturating_add(file.object_meta.e_tag.as_ref().map_or(0, String::capacity))
                     .saturating_add(
                         file.object_meta
@@ -126,14 +145,10 @@ impl HiveCidParquetProvider {
                             .map_or(0, String::capacity),
                     )
                     .saturating_add(
-                        file.partition_values
-                            .iter()
-                            .map(ScalarValue::size)
-                            .sum::<usize>(),
+                        file.table_reference
+                            .as_ref()
+                            .map_or(0, |reference| reference.to_string().len()),
                     );
-                if let Some(statistics) = &file.statistics {
-                    size = size.saturating_add(statistics.heap_size(&mut heap_size));
-                }
             }
         }
         size
@@ -150,9 +165,21 @@ impl HiveCidParquetProvider {
         match selected {
             Some(cids) => cids
                 .into_iter()
-                .flat_map(|cid| self.files.get(&cid).into_iter().flatten().cloned())
+                .flat_map(|cid| {
+                    self.files
+                        .get(&cid)
+                        .into_iter()
+                        .flatten()
+                        .map(move |file| file.to_partitioned_file(cid))
+                })
                 .collect(),
-            None => self.files.values().flatten().cloned().collect(),
+            None => self
+                .files
+                .iter()
+                .flat_map(|(&cid, files)| {
+                    files.iter().map(move |file| file.to_partitioned_file(cid))
+                })
+                .collect(),
         }
     }
 
@@ -304,8 +331,11 @@ mod tests {
         ]));
         let files = (0..cluster_count)
             .map(|cid| {
-                let mut file = PartitionedFile::new(format!("cid={cid}/part.parquet"), 1);
-                file.partition_values = vec![ScalarValue::Int32(Some(cid))];
+                let file = HiveCidManifestFile {
+                    object_meta: PartitionedFile::new(format!("cid={cid}/part.parquet"), 1)
+                        .object_meta,
+                    table_reference: None,
+                };
                 (cid, vec![file])
             })
             .collect();
@@ -329,6 +359,16 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(paths, ["cid=1/part.parquet", "cid=3/part.parquet"]);
+        assert_eq!(
+            selected
+                .iter()
+                .map(|file| file.partition_values.as_slice())
+                .collect::<Vec<_>>(),
+            [
+                [ScalarValue::Int32(Some(1))].as_slice(),
+                [ScalarValue::Int32(Some(3))].as_slice(),
+            ]
+        );
         assert_eq!(
             provider.supports_filters_pushdown(&[&cids]).unwrap(),
             [TableProviderFilterPushDown::Exact]
@@ -367,6 +407,13 @@ mod tests {
                 [TableProviderFilterPushDown::Unsupported]
             );
         }
+    }
+
+    #[test]
+    fn billion_scale_manifest_fits_the_bounded_cache() {
+        let provider = provider(65_536);
+
+        assert!(provider.resident_size() < 64 * 1024 * 1024);
     }
 
     #[tokio::test]
