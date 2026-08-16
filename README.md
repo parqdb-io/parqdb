@@ -19,7 +19,6 @@
   </p>
   <p>
     <a href="#quick-start">Quick Start</a> |
-    <a href="#key-features">Key Features</a> |
     <a href="#status">Status</a> |
     <a href="#documentation">Documentation</a>
   </p>
@@ -31,7 +30,7 @@ ParqDB is an embedded vector database built to search and analyze billion-scale
 multimodal datasets larger than memory. It combines ANN search and SQL analytics
 directly on Parquet, with Arrow-native execution.
 
-## Key Features
+**Key Features**
 
 - **Everything is Parquet.** Source datasets and vector indexes share the same
   open format. An index can be versioned, published on Hugging Face, and shared
