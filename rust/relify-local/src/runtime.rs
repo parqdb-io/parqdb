@@ -1,9 +1,11 @@
 //! Process-scoped execution resources shared by local sessions.
 
 mod admission;
+mod memory;
 
 use std::sync::Arc;
 
+use datafusion::execution::memory_pool::FairSpillPool;
 use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use datafusion_datasource_parquet::ParquetPageCacheFactory;
 
@@ -16,6 +18,8 @@ use crate::parquet::{
 use admission::QueryAdmission;
 pub(crate) use admission::QueryPermit;
 pub use admission::{QueryAdmissionOptions, QueryAdmissionStats};
+use memory::automatic_memory_budget;
+pub(crate) use memory::effective_memory_limit;
 
 /// `DataFusion` and cache resources that may be shared by independent sessions.
 pub struct RelifyRuntime {
@@ -26,6 +30,27 @@ pub struct RelifyRuntime {
 }
 
 impl RelifyRuntime {
+    /// Creates a bounded runtime from the process or container memory limit.
+    ///
+    /// Relify reserves 80% of the effective memory limit for `DataFusion` execution
+    /// and the Parquet Page cache. The remaining 20% covers Arrow buffers, writers,
+    /// language bindings, and other allocations outside `DataFusion`'s memory pool.
+    pub(crate) fn automatic(
+        parquet_page_cache_capacity: Option<usize>,
+        query_admission: QueryAdmissionOptions,
+    ) -> Result<Self> {
+        let Some(budget) = automatic_memory_budget(parquet_page_cache_capacity)? else {
+            return Self::with_query_admission(
+                RuntimeEnvBuilder::default(),
+                parquet_page_cache_capacity,
+                query_admission,
+            );
+        };
+        let builder = RuntimeEnvBuilder::default()
+            .with_memory_pool(Arc::new(FairSpillPool::new(budget.execution)));
+        Self::with_query_admission(builder, Some(budget.page_cache), query_admission)
+    }
+
     /// Creates a runtime from a `DataFusion` runtime builder.
     ///
     /// When `parquet_page_cache_capacity` is `None`, the cache uses 20% of the

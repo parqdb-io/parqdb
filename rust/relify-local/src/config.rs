@@ -248,11 +248,21 @@ pub struct LocalSessionOptions {
 
 #[derive(Clone)]
 enum LocalRuntimeOptions {
+    Automatic,
     Builder(RuntimeEnvBuilder),
     Shared(Arc<RelifyRuntime>),
 }
 
 impl LocalSessionOptions {
+    /// Creates options using Relify's automatically bounded runtime.
+    #[must_use]
+    pub const fn automatic(config: SessionConfig) -> Self {
+        Self {
+            config,
+            runtime: LocalRuntimeOptions::Automatic,
+        }
+    }
+
     /// Creates options from `DataFusion`'s native configuration types.
     #[must_use]
     pub const fn new(config: SessionConfig, runtime: RuntimeEnvBuilder) -> Self {
@@ -278,6 +288,10 @@ impl LocalSessionOptions {
         }
         let _ = build_dop(&config)?;
         let runtime = match self.runtime {
+            LocalRuntimeOptions::Automatic => Arc::new(RelifyRuntime::automatic(
+                parquet_page_cache_capacity(&config),
+                query_admission_options(&config)?,
+            )?),
             LocalRuntimeOptions::Builder(builder) => Arc::new(RelifyRuntime::with_query_admission(
                 builder,
                 parquet_page_cache_capacity(&config),
@@ -291,7 +305,7 @@ impl LocalSessionOptions {
 
 impl Default for LocalSessionOptions {
     fn default() -> Self {
-        Self::new(relify_session_config(), RuntimeEnvBuilder::default())
+        Self::automatic(relify_session_config())
     }
 }
 

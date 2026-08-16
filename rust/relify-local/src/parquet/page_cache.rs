@@ -13,6 +13,7 @@ use hashlink::LinkedHashMap;
 use parquet::column::page::{CachedPage, PageCache};
 
 use crate::config::parquet_page_cache_capacity;
+use crate::runtime::effective_memory_limit;
 
 const AUTOMATIC_CAPACITY_DIVISOR: usize = 5;
 const FALLBACK_CAPACITY: usize = 256 * 1024 * 1024;
@@ -321,83 +322,11 @@ impl ParquetPageCacheFactory for RelifyParquetPageCacheFactory {
 pub(crate) fn automatic_page_cache_capacity(memory_pool: &dyn MemoryPool) -> usize {
     match memory_pool.memory_limit() {
         MemoryLimit::Finite(limit) => limit / AUTOMATIC_CAPACITY_DIVISOR,
-        MemoryLimit::Infinite | MemoryLimit::Unknown => system_memory_limit()
+        MemoryLimit::Infinite | MemoryLimit::Unknown => effective_memory_limit()
             .map_or(FALLBACK_CAPACITY, |limit| {
                 limit / AUTOMATIC_CAPACITY_DIVISOR
             }),
     }
-}
-
-#[cfg(target_os = "linux")]
-fn system_memory_limit() -> Option<usize> {
-    let cgroup_limit = cgroup_memory_limits().into_iter().min();
-    let physical_memory = std::fs::read_to_string("/proc/meminfo")
-        .ok()
-        .and_then(|contents| {
-            contents.lines().find_map(|line| {
-                let value = line.strip_prefix("MemTotal:")?;
-                let kib = value.split_whitespace().next()?.parse::<usize>().ok()?;
-                kib.checked_mul(1024)
-            })
-        });
-    cgroup_limit.into_iter().chain(physical_memory).min()
-}
-
-#[cfg(target_os = "linux")]
-fn cgroup_memory_limits() -> Vec<usize> {
-    use std::path::{Path, PathBuf};
-
-    fn collect_ancestors(start: PathBuf, root: &Path, file: &str, limits: &mut Vec<usize>) {
-        let mut current = start;
-        while current.starts_with(root) {
-            limits.extend(read_memory_limit(&current.join(file)));
-            if current == root || !current.pop() {
-                break;
-            }
-        }
-    }
-
-    let mut limits = Vec::new();
-    let Ok(contents) = std::fs::read_to_string("/proc/self/cgroup") else {
-        return limits;
-    };
-    for line in contents.lines() {
-        let mut fields = line.splitn(3, ':');
-        let hierarchy = fields.next().unwrap_or_default();
-        let controllers = fields.next().unwrap_or_default();
-        let relative = fields.next().unwrap_or_default().trim_start_matches('/');
-        if hierarchy == "0" && controllers.is_empty() {
-            let root = Path::new("/sys/fs/cgroup");
-            collect_ancestors(root.join(relative), root, "memory.max", &mut limits);
-        } else if controllers
-            .split(',')
-            .any(|controller| controller == "memory")
-        {
-            let root = Path::new("/sys/fs/cgroup/memory");
-            collect_ancestors(
-                root.join(relative),
-                root,
-                "memory.limit_in_bytes",
-                &mut limits,
-            );
-        }
-    }
-    limits
-}
-
-#[cfg(target_os = "linux")]
-fn read_memory_limit(path: &std::path::Path) -> Option<usize> {
-    let value = std::fs::read_to_string(path).ok()?;
-    let value = value.trim();
-    (value != "max")
-        .then(|| value.parse::<usize>().ok())
-        .flatten()
-        .filter(|value| *value > 0)
-}
-
-#[cfg(not(target_os = "linux"))]
-const fn system_memory_limit() -> Option<usize> {
-    None
 }
 
 #[derive(Debug)]

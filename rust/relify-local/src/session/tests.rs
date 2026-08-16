@@ -8,7 +8,7 @@ use arrow::array::{Array, Float32Builder, Int32Array, Int64Array, ListBuilder, S
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
-use datafusion::execution::memory_pool::{GreedyMemoryPool, MemoryPool};
+use datafusion::execution::memory_pool::{GreedyMemoryPool, MemoryLimit, MemoryPool};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::ParquetReadOptions;
 use futures::StreamExt;
@@ -228,6 +228,25 @@ fn session_preserves_datafusion_config_and_runtime() {
         &session.runtime().datafusion()
     ));
     assert_eq!(session.parquet_page_cache_stats().capacity, 4096 / 5);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn default_session_uses_bounded_fair_spill_pool() {
+    let temporary = TempDir::new().unwrap();
+    let effective_limit = crate::runtime::effective_memory_limit().unwrap();
+    let config = relify_session_config().set_str("relify.parquet.page_cache.capacity", "0");
+    let session =
+        LocalSession::open_with_options(temporary.path(), LocalSessionOptions::automatic(config))
+            .unwrap();
+    let memory_pool = &session.context().runtime_env().memory_pool;
+
+    assert_eq!(memory_pool.name(), "fair");
+    assert!(matches!(
+        memory_pool.memory_limit(),
+        MemoryLimit::Finite(limit) if limit == effective_limit.saturating_mul(4) / 5
+    ));
+    assert_eq!(session.parquet_page_cache_stats().capacity, 0);
 }
 
 #[tokio::test]
