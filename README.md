@@ -45,8 +45,9 @@ directly on Parquet, with Arrow-native execution.
 - **Billion-scale search in bounded memory.** Search indexes larger than RAM
   under a fixed memory budget. IVF pruning, LVQ encoding, and Arrow-native
   execution keep I/O and scoring fast.
-- **From 1 core to 1,000+ cores.** Run embedded on a single core, scale up on one
-  machine, or share the same index with Spark and StarRocks clusters.
+- **Scale from 1 core to thousands.** Run embedded on a single core, scale up on
+  one machine, or share the same index with Spark and StarRocks clusters with
+  thousands of cores.
 
 ## Quick Start
 
