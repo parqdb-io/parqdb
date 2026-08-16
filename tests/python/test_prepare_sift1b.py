@@ -82,12 +82,15 @@ def test_prepare_sift1b_converts_vecs_to_compressed_parquet(tmp_path: Path) -> N
     vector = metadata.row_group(0).column(1)
     assert vector.compression == "ZSTD"
     assert "BYTE_STREAM_SPLIT" in vector.encodings
-    assert prepare_sift1b.prepare(
-        base=base,
-        queries=queries,
-        ground_truth=ground_truth,
-        output=output,
-    ) == manifest
+    assert (
+        prepare_sift1b.prepare(
+            base=base,
+            queries=queries,
+            ground_truth=ground_truth,
+            output=output,
+        )
+        == manifest
+    )
 
 
 def test_prepare_sift1b_rejects_invalid_layout(tmp_path: Path) -> None:

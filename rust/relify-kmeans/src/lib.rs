@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use num_traits::ToPrimitive;
 use parallite::{CollectPartitions, DatasetExt, ParalliteContext, ParalliteError};
 use relify_kernels::{KernelError, detect, row_dot_products};
 use thiserror::Error;
@@ -102,6 +103,8 @@ pub struct ReservoirSampler {
     seen_rows: usize,
     values: Vec<f32>,
     rng: SmallRng,
+    skip_rows: usize,
+    weight: f64,
 }
 
 impl ReservoirSampler {
@@ -118,6 +121,8 @@ impl ReservoirSampler {
             seen_rows: 0,
             values: Vec::new(),
             rng: SmallRng::new(seed),
+            skip_rows: 0,
+            weight: 0.0,
         })
     }
 
@@ -142,22 +147,67 @@ impl ReservoirSampler {
             })?;
             self.dimension = Some(dimension);
         }
-        for vector in vectors.chunks_exact(dimension) {
-            self.seen_rows = self
-                .seen_rows
-                .checked_add(1)
-                .ok_or_else(|| Error::InvalidArgument("reservoir row count overflows".into()))?;
-            if self.values.len() / dimension < self.max_rows {
-                self.values.extend_from_slice(vector);
+        let mut row = 0;
+        let rows = vectors.len() / dimension;
+        while row < rows {
+            let retained_rows = self.values.len() / dimension;
+            if retained_rows < self.max_rows {
+                let copied = (self.max_rows - retained_rows).min(rows - row);
+                let start = row * dimension;
+                let end = (row + copied) * dimension;
+                self.values.extend_from_slice(&vectors[start..end]);
+                self.advance_seen(copied)?;
+                row += copied;
+                if self.values.len() / dimension == self.max_rows {
+                    self.schedule_replacement();
+                }
                 continue;
             }
-            let replacement = self.rng.gen_usize(self.seen_rows);
-            if replacement < self.max_rows {
-                let start = replacement * dimension;
-                self.values[start..start + dimension].copy_from_slice(vector);
+
+            if self.skip_rows > 0 {
+                let skipped = self.skip_rows.min(rows - row);
+                self.advance_seen(skipped)?;
+                self.skip_rows -= skipped;
+                row += skipped;
+                continue;
             }
+
+            let start = row * dimension;
+            let replacement = self.rng.gen_usize(self.max_rows);
+            self.values[replacement * dimension..(replacement + 1) * dimension]
+                .copy_from_slice(&vectors[start..start + dimension]);
+            self.advance_seen(1)?;
+            row += 1;
+            self.schedule_replacement();
         }
         Ok(())
+    }
+
+    fn advance_seen(&mut self, rows: usize) -> Result<()> {
+        self.seen_rows = self
+            .seen_rows
+            .checked_add(rows)
+            .ok_or_else(|| Error::InvalidArgument("reservoir row count overflows".into()))?;
+        Ok(())
+    }
+
+    // Vitter's Algorithm L skips rejected stream rows while preserving the
+    // distribution of a uniform, fixed-size reservoir sample.
+    fn schedule_replacement(&mut self) {
+        let exponent = 1.0 / self.max_rows as f64;
+        let random = self.rng.gen_open_f64();
+        self.weight = if self.weight == 0.0 {
+            random.powf(exponent)
+        } else {
+            self.weight * random.powf(exponent)
+        };
+        let denominator = (-self.weight).ln_1p();
+        let skip_rows = (self.rng.gen_open_f64().ln() / denominator).floor();
+        self.skip_rows = if skip_rows.is_nan() || skip_rows <= 0.0 {
+            0
+        } else {
+            skip_rows.to_usize().unwrap_or(usize::MAX)
+        };
     }
 
     /// Returns the observed vector dimension after the first non-empty batch.
@@ -1242,6 +1292,10 @@ impl SmallRng {
     fn gen_f64(&mut self) -> f64 {
         const SCALE: f64 = 1.0 / ((1_u64 << 53) as f64);
         ((self.next_u64() >> 11) as f64) * SCALE
+    }
+
+    fn gen_open_f64(&mut self) -> f64 {
+        self.gen_f64().max(f64::MIN_POSITIVE)
     }
 }
 

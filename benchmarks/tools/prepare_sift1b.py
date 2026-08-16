@@ -97,7 +97,9 @@ def _embedding_table(start: int, vectors: np.ndarray, *, dimension: int) -> pa.T
 
 
 def _write_source_file(task: SourceFileTask) -> int:
-    vector_type = pa.list_(pa.field("element", pa.float32(), nullable=False), task.dimension)
+    vector_type = pa.list_(
+        pa.field("element", pa.float32(), nullable=False), task.dimension
+    )
     schema = pa.schema(
         [
             pa.field("id", pa.int64(), nullable=False),
@@ -271,7 +273,9 @@ def prepare(
             compression_level=compression_level,
             workers=workers,
         )
-        query_rows = _write_queries(queries, temporary / "queries.fbin", dimension=dimension)
+        query_rows = _write_queries(
+            queries, temporary / "queries.fbin", dimension=dimension
+        )
         ground_truth_k = _write_ground_truth(
             ground_truth,
             temporary / "gt1000.bin",
@@ -331,7 +335,9 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--output", type=Path, required=True)
     command.add_argument("--rows-per-file", type=int, default=DEFAULT_ROWS_PER_FILE)
     command.add_argument("--row-group-rows", type=int, default=DEFAULT_ROW_GROUP_ROWS)
-    command.add_argument("--compression-level", type=int, default=DEFAULT_COMPRESSION_LEVEL)
+    command.add_argument(
+        "--compression-level", type=int, default=DEFAULT_COMPRESSION_LEVEL
+    )
     command.add_argument("--workers", type=int, default=DEFAULT_WORKERS)
     return command
 

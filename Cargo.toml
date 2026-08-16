@@ -55,6 +55,7 @@ iceberg-storage-opendal = { version = "=0.10.0", git = "https://github.com/apach
   "opendal-s3",
 ] }
 matrixmultiply = "0.3.10"
+num-traits = "0.2.19"
 object_store = { version = "0.13.2", features = ["aws", "fs"] }
 parquet = { version = "58.3.0", features = ["arrow"] }
 pyo3 = "0.28.2"

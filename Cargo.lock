@@ -4559,6 +4559,7 @@ dependencies = [
 name = "relify-kmeans"
 version = "0.1.0-rc.2"
 dependencies = [
+ "num-traits",
  "parallite",
  "relify-kernels",
  "thiserror",

@@ -66,7 +66,7 @@ UNTIMED_RELIFY_BUILD_PHASES = {
     "reading_training_vectors",
 }
 TRAINING_SAMPLING = {
-    "relify": "streaming-reservoir-v1",
+    "relify": "streaming-reservoir-v2",
     "faiss": "uniform-without-replacement-v1",
 }
 RELIFY_POSTINGS_LAYOUT = "hive-cid-file-v1"
@@ -358,7 +358,12 @@ def benchmark_relify(
                     f"Relify benchmark artifact is missing at {root}; "
                     "run python -m benchmarks.build first"
                 )
-            session = relify.connect(root / "relify-data")
+            build_config = (
+                relify.SessionConfig()
+                .set("relify.parquet.page_cache.capacity", "0")
+                .set("relify.build.dop", str(threads))
+            )
+            session = relify.connect(root / "relify-data", config=build_config)
             configure_relify_session(session, threads)
             session.register_parquet("benchmark", source.path)
             table = session.table("benchmark")
