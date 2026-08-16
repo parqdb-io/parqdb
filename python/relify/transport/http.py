@@ -13,8 +13,17 @@ from urllib.parse import quote, urlsplit
 import httpx
 import pyarrow
 
-from ._http_errors import raise_remote_build_error, raise_remote_error, unavailable
-from ._http_models import (
+from ..build import IndexStatus
+from ..config import IVF, WriteOptions
+from ..datafusion.expr import SortKey
+from ..errors import StreamExecutionError, UnsupportedOperationError
+from ..identifier import TableIdentifier
+from ..query import VectorQuery
+from ..runtime.catalog import IndexInfo
+from ..runtime.service import AsyncBatchStream, TableDescriptor
+from .errors import raise_remote_build_error, raise_remote_error, unavailable
+from .ipc import decode_ipc_stream
+from .models import (
     ARROW_STREAM_MEDIA_TYPE,
     DEFAULT_IDENTIFIER_DELIMITER,
     encode_identifier_path,
@@ -28,15 +37,6 @@ from ._http_models import (
     vector_query_to_json,
     writer_options_to_json,
 )
-from ._ipc import decode_ipc_stream
-from ._service import AsyncBatchStream, TableDescriptor
-from .build import IndexStatus
-from .catalog import IndexInfo
-from .config import IVF, WriteOptions
-from .datafusion.expr import SortKey
-from .errors import StreamExecutionError, UnsupportedOperationError
-from .identifier import TableIdentifier
-from .query import VectorQuery
 
 _ERROR_BODY_LIMIT = 1024 * 1024
 

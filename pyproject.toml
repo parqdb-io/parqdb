@@ -44,6 +44,9 @@ server = [
     "uvicorn>=0.35,<1",
 ]
 
+[project.scripts]
+relify = "relify.cli:main"
+
 [project.urls]
 Documentation = "https://github.com/petrizhang/relify/blob/main/docs/README.md"
 Repository = "https://github.com/petrizhang/relify"

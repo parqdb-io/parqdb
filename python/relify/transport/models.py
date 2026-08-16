@@ -9,11 +9,11 @@ from urllib.parse import quote, unquote
 
 import pyarrow
 
-from .build import IndexStatus
-from .catalog import IndexInfo
-from .config import IVF, WriteOptions
-from .identifier import TableIdentifier
-from .query import VectorQuery
+from ..build import IndexStatus
+from ..config import IVF, WriteOptions
+from ..identifier import TableIdentifier
+from ..query import VectorQuery
+from ..runtime.catalog import IndexInfo
 
 ARROW_STREAM_MEDIA_TYPE = "application/vnd.apache.arrow.stream"
 DEFAULT_IDENTIFIER_DELIMITER = "$"

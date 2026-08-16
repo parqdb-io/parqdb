@@ -5,8 +5,8 @@ from typing import Any
 
 import httpx
 
-from . import _native
-from .errors import ServiceUnavailableError, UnsupportedOperationError
+from .. import _native
+from ..errors import ServiceUnavailableError, UnsupportedOperationError
 
 
 @dataclass(frozen=True, slots=True)

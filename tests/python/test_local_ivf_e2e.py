@@ -403,7 +403,7 @@ query = (
     .select(["document_id", "title"])
 )
 hits = session.to_arrow(query)
-metadata = session.indexes.load(
+metadata = session._indexes.load(
     "documents_embedding",
     namespace=documents.identifier.index_namespace,
 ).metadata

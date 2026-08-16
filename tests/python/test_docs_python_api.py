@@ -117,6 +117,6 @@ def test_python_api_catalog_recovery_example(tmp_path: Path) -> None:
         entry.metadata_location,
     )
 
-    assert session.indexes.list(namespace=documents.identifier.index_namespace) == [
+    assert session._indexes.list(namespace=documents.identifier.index_namespace) == [
         "recovered_index"
     ]

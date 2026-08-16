@@ -278,7 +278,7 @@ def test_invalid_sources_fail_without_publication(
     assert status.state == "failed"
     assert status.current_snapshot_id is None
     assert status.error is not None
-    assert session.indexes.list(namespace=vectors.identifier.index_namespace) == []
+    assert session._indexes.list(namespace=vectors.identifier.index_namespace) == []
 
 
 def test_nullable_source_schema_accepts_non_null_values(tmp_path: Path) -> None:

@@ -8,12 +8,11 @@ from itertools import count
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
 
 import pyarrow
 
 from ._native import _NativeSession
-from .catalog import IndexCatalog, IndexInfo
 from .datafusion import (
     DataFrame,
     RuntimeEnvBuilder,
@@ -27,6 +26,7 @@ from .iceberg import load_table_state, table_provider_inputs
 from .identifier import TableIdentifier
 from .maintenance import Maintenance
 from .query import VectorQuery
+from .runtime.catalog import IndexCatalog, IndexInfo
 
 
 @dataclass(frozen=True)
@@ -100,10 +100,6 @@ class _EmbeddedSession(SessionContext):
     @property
     def index_root(self) -> str:
         return self._index_root
-
-    @property
-    def indexes(self) -> IndexCatalog:
-        return self._indexes
 
     @classmethod
     def global_ctx(cls) -> SessionContext:
@@ -413,51 +409,18 @@ class _EmbeddedSourceTable(DataFrame):
 
 
 def _connect_embedded(
-    root: str | os.PathLike[str] | None = None,
+    root: str | os.PathLike[str],
     *,
-    catalog: str | None = None,
-    index_root: str | None = None,
+    warehouse: str | None = None,
     storage_options: Mapping[str, str] | None = None,
     iceberg: object | None = None,
     config: DataFusionSessionConfig | None = None,
     runtime: RuntimeEnvBuilder | None = None,
 ) -> _EmbeddedSession:
-    if root is not None and catalog is not None:
-        raise ValueError("root and catalog are mutually exclusive")
-    if root is None and catalog is None:
-        raise TypeError("connect requires a local root or catalog")
-    if catalog is None:
-        assert root is not None
-        return _EmbeddedSession(
-            root,
-            index_root=index_root,
-            storage_options=storage_options,
-            iceberg=iceberg,
-            config=config,
-            runtime=runtime,
-        )
-    if not isinstance(catalog, str):
-        raise TypeError("catalog must be a catalog URI")
-    parsed = urlsplit(catalog)
-    if (
-        parsed.scheme != "sqlite"
-        or parsed.netloc not in {"", "localhost"}
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise NotImplementedError(
-            "the first implementation supports only sqlite:/// catalog URIs"
-        )
-    catalog_path = Path(unquote(parsed.path)).expanduser()
-    if not catalog_path.is_absolute():
-        raise ValueError("SQLite catalog URI must contain an absolute path")
-    if index_root is None:
-        raise ValueError("an explicit catalog requires index_root")
     return _EmbeddedSession(
-        catalog_path.parent,
-        index_root=index_root,
+        root,
+        index_root=warehouse,
         storage_options=storage_options,
-        catalog_path=catalog_path,
         iceberg=iceberg,
         config=config,
         runtime=runtime,

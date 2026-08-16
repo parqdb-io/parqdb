@@ -14,8 +14,13 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
-from ._http_errors import classify_server_error
-from ._http_models import (
+from ..datafusion import RuntimeEnvBuilder
+from ..datafusion import SessionConfig as DataFusionSessionConfig
+from ..identifier import TableIdentifier
+from ..runtime.service import AsyncBatchStream, SessionService
+from ..transport.errors import classify_server_error
+from ..transport.ipc import encode_ipc_stream
+from ..transport.models import (
     ARROW_STREAM_MEDIA_TYPE,
     DEFAULT_IDENTIFIER_DELIMITER,
     MAX_JSON_BODY_BYTES,
@@ -32,20 +37,14 @@ from ._http_models import (
     vector_query_from_json,
     writer_options_from_json,
 )
-from ._http_openapi import openapi_document
-from ._ipc import encode_ipc_stream
-from ._service import AsyncBatchStream, SessionService
-from ._source_policy import SourceUriPolicy
-from .datafusion import RuntimeEnvBuilder
-from .datafusion import SessionConfig as DataFusionSessionConfig
-from .identifier import TableIdentifier
+from .openapi import openapi_document
+from .source_policy import SourceUriPolicy
 
 
 def create_http_app(
-    root: str | Path | None = None,
+    root: str | Path,
     *,
-    catalog: str | None = None,
-    index_root: str | None = None,
+    warehouse: str | None = None,
     storage_options: Mapping[str, str] | None = None,
     config: DataFusionSessionConfig | None = None,
     runtime: RuntimeEnvBuilder | None = None,
@@ -57,8 +56,7 @@ def create_http_app(
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
         service = await SessionService.open(
             root,
-            catalog=catalog,
-            index_root=index_root,
+            warehouse=warehouse,
             storage_options=storage_options,
             iceberg=None,
             config=config,

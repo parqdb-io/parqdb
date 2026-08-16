@@ -124,6 +124,9 @@ adapters are no longer bundled into the Python package.
 See the [local guide](https://github.com/petrizhang/relify/blob/main/docs/guides/local.md)
 for installation and configuration.
 
+The experimental HTTP server is documented in the
+[server guide](https://github.com/petrizhang/relify/blob/main/docs/guides/server.md).
+
 ## Documentation
 
 - [Getting started](https://github.com/petrizhang/relify/blob/main/docs/getting-started.md)
@@ -132,7 +135,8 @@ for installation and configuration.
   [architecture](https://github.com/petrizhang/relify/blob/main/docs/architecture.md),
   and [open index specification](https://github.com/petrizhang/relify/blob/main/spec/README.md)
 - [Python API](https://github.com/petrizhang/relify/blob/main/docs/python-api.md)
-  and [configuration](https://github.com/petrizhang/relify/blob/main/docs/configuration.md)
+  and [configuration](https://github.com/petrizhang/relify/blob/main/docs/configuration.md),
+  including the [server guide](https://github.com/petrizhang/relify/blob/main/docs/guides/server.md)
 - [Current limitations](https://github.com/petrizhang/relify/blob/main/docs/limitations.md),
   [troubleshooting](https://github.com/petrizhang/relify/blob/main/docs/troubleshooting.md),
   and [roadmap](https://github.com/petrizhang/relify/blob/main/docs/roadmap.md)

@@ -16,7 +16,7 @@ lakehouse tables and querying them with an embedded SQL runtime.
 | Goal | Guide | Status |
 | --- | --- | --- |
 | Build and query Parquet indexes in one Python process | [Embedded DataFusion and Parquet](guides/local.md) | Supported |
-| Build and query through a Relify server | [Python API](python-api.md#connect-to-a-relify-server) | Experimental |
+| Build and query through a Relify server | [Relify server](guides/server.md) | Experimental |
 | Resolve exact Iceberg snapshots through PyIceberg | [Embedded DataFusion and Parquet](guides/local.md) | Experimental |
 | Run maintained examples | [Python examples](../examples/python/README.md) | Tested |
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._http_models import (
+from ..transport.models import (
     ARROW_STREAM_MEDIA_TYPE,
     DEFAULT_IDENTIFIER_DELIMITER,
     MAX_LIST_TABLES_PAGE_SIZE,

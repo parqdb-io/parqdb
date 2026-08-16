@@ -10,6 +10,7 @@ from urllib.parse import unquote, urlparse
 import pyarrow as pa
 import pyarrow.parquet as pq
 import relify
+from relify.runtime.catalog import CatalogEntry
 
 WAIT = timedelta(seconds=30)
 
@@ -80,8 +81,8 @@ def load_table_index(
     session: relify.Session,
     table: relify.SourceTable,
     index: str,
-) -> relify.CatalogEntry:
-    return session.indexes.load(
+) -> CatalogEntry:
+    return session._indexes.load(
         index,
         namespace=table.identifier.index_namespace,
     )
@@ -93,7 +94,7 @@ def register_table_index(
     index: str,
     metadata_location: str,
 ) -> None:
-    session.indexes.register(
+    session._indexes.register(
         index,
         metadata_location,
         namespace=table.identifier.index_namespace,
@@ -105,7 +106,7 @@ def drop_table_index_entry(
     table: relify.SourceTable,
     index: str,
 ) -> None:
-    session.indexes.drop(
+    session._indexes.drop(
         index,
         namespace=table.identifier.index_namespace,
     )

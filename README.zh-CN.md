@@ -116,6 +116,8 @@ print(summary.to_pydict())
 时；Python 包不再内置分布式计算引擎适配器。
 
 安装和配置参见[本地 DataFusion 指南](https://github.com/petrizhang/relify/blob/main/docs/guides/local.md)。
+实验性的 HTTP 服务端部署参见
+[Server guide](https://github.com/petrizhang/relify/blob/main/docs/guides/server.md)。
 
 ## 文档
 
@@ -125,7 +127,8 @@ print(summary.to_pydict())
   [系统架构](https://github.com/petrizhang/relify/blob/main/docs/architecture.md)和
   [开放索引规范](https://github.com/petrizhang/relify/blob/main/spec/README.md)
 - [Python API](https://github.com/petrizhang/relify/blob/main/docs/python-api.md)
-  和[配置说明](https://github.com/petrizhang/relify/blob/main/docs/configuration.md)
+  和[配置说明](https://github.com/petrizhang/relify/blob/main/docs/configuration.md)，包括
+  [Server guide](https://github.com/petrizhang/relify/blob/main/docs/guides/server.md)
 - [当前限制](https://github.com/petrizhang/relify/blob/main/docs/limitations.md)、
   [故障排查](https://github.com/petrizhang/relify/blob/main/docs/troubleshooting.md)和
   [路线图](https://github.com/petrizhang/relify/blob/main/docs/roadmap.md)

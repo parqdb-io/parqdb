@@ -36,7 +36,7 @@ supported exact-equality types and contain no null values.
 
 ## Catalog and Index Selection
 
-Two processes must use the same absolute SQLite catalog and index root. List
+Two processes must use the same local Relify root and index warehouse. List
 indexes through the source table:
 
 ```python

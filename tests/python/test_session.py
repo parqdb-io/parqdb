@@ -21,11 +21,11 @@ def test_session_has_explicit_idempotent_lifecycle(tmp_path: Path) -> None:
     session = relify.connect(tmp_path / "relify-data")
 
     assert session.root == (tmp_path / "relify-data").resolve()
-    assert session.index_root == (tmp_path / "relify-data").resolve().as_uri() + "/"
+    assert session.warehouse == (tmp_path / "relify-data").resolve().as_uri() + "/"
     assert hasattr(session, "close")
     assert hasattr(session, "__enter__")
-    with pytest.raises(AttributeError):
-        session.indexes = cast(Any, object())
+    assert not hasattr(session, "indexes")
+    assert not hasattr(relify, "open_index_catalog")
     assert not hasattr(session, "context")
     session.close()
     session.close()
@@ -349,20 +349,21 @@ def test_non_parquet_relations_remain_plain_dataframes(tmp_path: Path) -> None:
         session.table("values")
 
 
-def test_explicit_sqlite_catalog_and_file_index_root_are_independent(
+def test_file_warehouse_is_independent_from_local_session_state(
     tmp_path: Path,
 ) -> None:
-    catalog_path = tmp_path / "state" / "index-catalog.sqlite"
+    root = tmp_path / "state"
+    catalog_path = root / "catalog.sqlite"
     index_root = tmp_path / "indexes"
     index_root.mkdir()
 
     session = relify.connect(
-        catalog=f"sqlite://{catalog_path}",
-        index_root=index_root.as_uri(),
+        root,
+        warehouse=index_root.as_uri(),
     )
 
-    assert session.root == catalog_path.parent.resolve()
-    assert session.index_root == index_root.as_uri() + "/"
+    assert session.root == root.resolve()
+    assert session.warehouse == index_root.as_uri() + "/"
     assert catalog_path.is_file()
     assert not (index_root / "catalog.sqlite").exists()
 
@@ -377,25 +378,20 @@ def test_explicit_sqlite_catalog_and_file_index_root_are_independent(
     assert not (catalog_path.parent / "indexes").exists()
 
 
-def test_connect_validates_catalog_and_index_root_arguments(
+def test_connect_requires_a_root_and_validates_warehouse_options(
     tmp_path: Path,
 ) -> None:
-    with pytest.raises(ValueError, match="mutually exclusive"):
+    with pytest.raises(TypeError, match="unexpected keyword argument 'catalog'"):
         relify.connect(
             tmp_path / "state",
             catalog=f"sqlite://{tmp_path / 'catalog.sqlite'}",
-            index_root=tmp_path.as_uri(),
+            warehouse=tmp_path.as_uri(),
         )
-    with pytest.raises(ValueError, match="requires index_root"):
-        relify.connect(catalog=f"sqlite://{tmp_path / 'catalog.sqlite'}")
-    with pytest.raises(NotImplementedError, match="only sqlite"):
-        relify.connect(
-            catalog="postgresql://database/relify",
-            index_root=tmp_path.as_uri(),
-        )
+    with pytest.raises(TypeError, match="requires a local root or http"):
+        relify.connect()
     with pytest.raises(TypeError, match="keys and values"):
         relify.connect(
             tmp_path / "state",
-            index_root=tmp_path.as_uri(),
+            warehouse=tmp_path.as_uri(),
             storage_options=cast(Any, {"aws_region": 1}),
         )

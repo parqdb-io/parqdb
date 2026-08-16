@@ -55,6 +55,13 @@ The service never accepts client-supplied storage credentials. Index builds use
 the same process-scoped coordinator as embedded sessions; HTTP create and
 refresh calls acknowledge submission, while clients poll portable index status.
 
+The Python package mirrors those ownership boundaries: `relify.server` owns
+the public ASGI factory and server-only deployment policy; `relify.transport`
+owns the portable HTTP, Arrow IPC, and in-process transports; and
+`relify.runtime` owns the transport-neutral session service and repository
+bridge. The public `relify.server` import remains stable while its server
+implementation evolves behind that package boundary.
+
 ## Rust Components
 
 - `relify-local` owns the embedded DataFusion session, query planning, Parquet
