@@ -19,7 +19,7 @@
   </p>
   <p>
     <a href="#quick-start">Quick Start</a> |
-    <a href="#why-relify">Why Relify</a> |
+    <a href="#key-features">Key Features</a> |
     <a href="#status">Status</a> |
     <a href="#documentation">Documentation</a>
   </p>
@@ -30,6 +30,23 @@
 ParqDB is an embedded vector database built to search and analyze billion-scale
 multimodal datasets larger than memory. It combines ANN search and SQL analytics
 directly on Parquet, with Arrow-native execution.
+
+## Key Features
+
+- **Everything is Parquet.** Source datasets and vector indexes share the same
+  open format. An index can be versioned, published on Hugging Face, and shared
+  like any other dataset.
+- **Multimodal search with SQL.** Search embeddings from any modality. Filter,
+  join, aggregate, and analyze the results alongside the original data.
+- **Serving and analytics on one index.** Use small-k retrieval for online
+  serving and large-k search for ad hoc analytics. No separate index pipeline
+  is required.
+- **Predictable memory use.** A configurable memory budget controls query
+  execution and caches, even when the index is larger than RAM.
+- **High-performance execution.** IVF pruning reduces I/O. LVQ4 and LVQ8 reduce
+  storage and memory bandwidth. Arrow-native kernels accelerate vector scoring.
+- **From 1 core to 1,000+ cores.** Run embedded on a single core, scale up on one
+  machine, or share the same index with Spark and StarRocks clusters.
 
 ## Quick Start
 
@@ -96,18 +113,6 @@ The packaged dataset makes this example self-contained. The
 [getting-started guide](https://github.com/petrizhang/relify/blob/main/docs/getting-started.md)
 covers persistent tables, existing indexes, query inspection, and source schema
 requirements.
-
-## Why Relify
-
-- **Zero ETL into a vector database.** Source vectors stay in their existing
-  lakehouse tables; Relify writes only index data and metadata.
-- **One open vector index.** IVF centroids and postings are ordinary relational
-  data, published as Parquet datasets or Iceberg tables rather than an
-  engine-owned binary artifact.
-- **Engine-independent storage.** Index data follows a published table schema
-  instead of being coupled to one process or proprietary runtime.
-- **SQL-native execution.** Cluster pruning, source filtering, joins, distance
-  computation, and top-k remain inside the host engine's relational plan.
 
 ## Status
 
