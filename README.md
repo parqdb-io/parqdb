@@ -8,7 +8,7 @@
     <a href="https://github.com/petrizhang/relify/blob/main/README.zh-CN.md">中文</a>
   </p>
   <p>
-    <strong>Billion-scale embedded vector database, built entirely on Parquet and Arrow.</strong>
+    <strong>Billion-scale embedded vector database built on Parquet and Arrow.</strong>
   </p>
   <p>
     <a href="https://pypi.org/project/relify/"><img alt="PyPI" src="https://img.shields.io/pypi/v/relify.svg"></a>
