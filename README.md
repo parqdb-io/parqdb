@@ -35,6 +35,8 @@ directly on Parquet, with Arrow-native execution.
 - **Everything is Parquet.** Both source data and vector indexes are stored in
   Parquet, not proprietary binary blobs. An index can be versioned, published
   on Hugging Face, and shared across engines and applications.
+- **Billion-scale search in bounded memory.** Search 1B vectors at 90.3% recall
+  with 63.05 ms median latency, using 2 CPU cores and 4 GB of memory.
 - **Multimodal data, SQL-native search.** Vector search is expressed as relational
   operations over Parquet, not executed as a black-box index call. This lets the
   SQL optimizer compose and optimize it with filters, joins, and aggregations in
@@ -42,9 +44,6 @@ directly on Parquet, with Arrow-native execution.
 - **Hybrid serving and analytics.** For online serving, ParqDB parallelizes
   across queries to maximize QPS. For analytical workloads, it parallelizes
   within a query to minimize large-k latency.
-- **Billion-scale search in bounded memory.** Search indexes larger than RAM
-  under a fixed memory budget. IVF pruning, LVQ encoding, and Arrow-native
-  execution keep I/O and scoring fast.
 - **Scale from 1 core to thousands.** Run embedded on a single core, scale up on
   one machine, or share the same index with Spark and StarRocks clusters with
   thousands of cores.
