@@ -4580,6 +4580,7 @@ dependencies = [
  "futures",
  "hashlink 0.11.1",
  "humantime",
+ "libc",
  "object_store",
  "parallite",
  "parquet",

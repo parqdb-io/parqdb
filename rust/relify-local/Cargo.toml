@@ -27,6 +27,7 @@ datafusion-datasource-parquet.workspace = true
 futures.workspace = true
 hashlink.workspace = true
 humantime.workspace = true
+libc.workspace = true
 object_store.workspace = true
 parquet.workspace = true
 parallite = { version = "0.1.0-rc.2", path = "../parallite" }

@@ -23,6 +23,9 @@ use futures::TryStreamExt;
 use object_store::ObjectMeta;
 use relify_storage::StorageRegistry;
 
+use crate::config::IndexIoMode;
+#[cfg(target_os = "linux")]
+use crate::parquet::DirectIoParquetFileReaderFactory;
 use crate::{Error, Result};
 
 const SCAN_PARTITIONS_PER_WORKER: usize = 4;
@@ -65,6 +68,7 @@ impl HiveCidParquetProvider {
         registry: &StorageRegistry,
         location: &str,
         state: &dyn Session,
+        index_io: IndexIoMode,
     ) -> Result<Self> {
         let resolved = registry.resolve(location)?;
         let store = resolved.store();
@@ -87,8 +91,26 @@ impl HiveCidParquetProvider {
         let first = listed.first().ok_or_else(|| {
             Error::InvalidArgument(format!("Parquet table contains no data files: {location}"))
         })?;
-        let format =
-            Arc::new(ParquetFormat::new().with_options(state.default_table_options().parquet));
+        let mut format = ParquetFormat::new().with_options(state.default_table_options().parquet);
+        if index_io == IndexIoMode::Direct {
+            if table_path.object_store() != ObjectStoreUrl::local_filesystem() {
+                return Err(Error::InvalidArgument(
+                    "relify.parquet.index_io='direct' requires a local file index".into(),
+                ));
+            }
+            #[cfg(target_os = "linux")]
+            {
+                let metadata_cache = state.runtime_env().cache_manager.get_file_metadata_cache();
+                format = format.with_parquet_file_reader_factory(Arc::new(
+                    DirectIoParquetFileReaderFactory::new(Arc::clone(&store), metadata_cache),
+                ));
+            }
+            #[cfg(not(target_os = "linux"))]
+            return Err(Error::InvalidArgument(
+                "relify.parquet.index_io='direct' requires Linux".into(),
+            ));
+        }
+        let format = Arc::new(format);
         let file_schema = format
             .infer_schema(state, &store, std::slice::from_ref(&first.object_meta))
             .await?;
@@ -478,9 +500,14 @@ mod tests {
             .await
             .unwrap();
         let custom = Arc::new(
-            HiveCidParquetProvider::load(&store.registry(), &location, &context.state())
-                .await
-                .unwrap(),
+            HiveCidParquetProvider::load(
+                &store.registry(),
+                &location,
+                &context.state(),
+                IndexIoMode::Buffered,
+            )
+            .await
+            .unwrap(),
         );
         context.register_table("listing", listing).unwrap();
         context.register_table("custom", custom).unwrap();

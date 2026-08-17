@@ -333,6 +333,7 @@ def benchmark_relify(
     show_progress: bool,
     page_cache_capacity_bytes: int | None,
     max_temp_directory_size_bytes: int | None,
+    index_io: str,
 ) -> dict[str, Any]:
     import relify
 
@@ -410,6 +411,7 @@ def benchmark_relify(
             if queries is None or expected is None:
                 raise ValueError("queries and ground truth are required for search")
             query_config = relify.SessionConfig()
+            query_config.set("relify.parquet.index_io", index_io)
             if page_cache_capacity_bytes is not None:
                 query_config.set(
                     "relify.parquet.page_cache.capacity",
@@ -899,6 +901,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
                     show_progress=not args.no_progress,
                     page_cache_capacity_bytes=args.page_cache_capacity_bytes,
                     max_temp_directory_size_bytes=(args.max_temp_directory_size_bytes),
+                    index_io=args.index_io,
                 )
                 for trial in range(args.repetitions)
             ]
@@ -1000,6 +1003,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
                 "repetitions": args.repetitions,
                 "threads": threads,
                 "max_temp_directory_size_bytes": (args.max_temp_directory_size_bytes),
+                "index_io": args.index_io,
             },
             "resources": {
                 "cpus": len(available_cpus),
@@ -1097,6 +1101,7 @@ def build_parser(implementation: str = "relify") -> argparse.ArgumentParser:
         warmup_queries=1,
         page_cache_capacity_bytes=None,
         max_temp_directory_size_bytes=None,
+        index_io="buffered",
     )
     return command
 
@@ -1128,8 +1133,13 @@ def query_parser(implementation: str = "relify") -> argparse.ArgumentParser:
     command.add_argument("--warmup-queries", type=int, default=5)
     if implementation == "relify":
         command.add_argument("--page-cache-capacity-bytes", type=int)
+        command.add_argument(
+            "--index-io",
+            choices=("buffered", "direct"),
+            default="buffered",
+        )
     else:
-        command.set_defaults(page_cache_capacity_bytes=None)
+        command.set_defaults(page_cache_capacity_bytes=None, index_io="buffered")
     add_common_arguments(command, implementation=implementation)
     command.set_defaults(
         implementation=implementation,

@@ -55,7 +55,9 @@ use datafusion_physical_plan::ExecutionPlan;
 use datafusion_session::Session;
 
 use crate::metadata::{DFParquetMetadata, lex_ordering_to_sorting_columns};
-use crate::reader::{CachedParquetFileReaderFactory, ParquetPageCacheFactoryConfig};
+use crate::reader::{
+    CachedParquetFileReaderFactory, ParquetFileReaderFactory, ParquetPageCacheFactoryConfig,
+};
 use crate::source::{
     ParquetSource, parse_coerce_int96_string, parse_coerce_int96_tz_string,
 };
@@ -142,6 +144,7 @@ impl Debug for ParquetFormatFactory {
 #[derive(Debug, Default)]
 pub struct ParquetFormat {
     options: TableParquetOptions,
+    parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
 }
 
 impl ParquetFormat {
@@ -197,6 +200,15 @@ impl ParquetFormat {
     /// Set Parquet options for the ParquetFormat
     pub fn with_options(mut self, options: TableParquetOptions) -> Self {
         self.options = options;
+        self
+    }
+
+    /// Set the Parquet file reader factory used by scans created by this format.
+    pub fn with_parquet_file_reader_factory(
+        mut self,
+        factory: Arc<dyn ParquetFileReaderFactory>,
+    ) -> Self {
+        self.parquet_file_reader_factory = Some(factory);
         self
     }
 
@@ -496,9 +508,13 @@ impl FileFormat for ParquetFormat {
         let store = state
             .runtime_env()
             .object_store(conf.object_store_url.clone())?;
-        let cached_parquet_read_factory =
-            Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
-        source = source.with_parquet_file_reader_factory(cached_parquet_read_factory);
+        let parquet_file_reader_factory = self
+            .parquet_file_reader_factory
+            .clone()
+            .unwrap_or_else(|| {
+                Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache))
+            });
+        source = source.with_parquet_file_reader_factory(parquet_file_reader_factory);
 
         if let Some(page_cache) = state
             .config()
