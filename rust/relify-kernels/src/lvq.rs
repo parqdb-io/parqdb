@@ -553,6 +553,51 @@ impl DistanceKernel {
         }
         Ok(())
     }
+
+    #[allow(unsafe_code)]
+    /// Computes pairwise squared-L2 distances between LVQ rows and exact query rows.
+    pub fn lvq_squared_l2_pairs(
+        self,
+        batch: &LvqBatchView<'_>,
+        queries: &[f32],
+        output: &mut [f32],
+    ) -> Result<()> {
+        let expected_values = batch
+            .row_count()
+            .checked_mul(batch.dimension)
+            .ok_or_else(|| KernelError("query vector matrix shape overflows usize".into()))?;
+        if queries.len() != expected_values {
+            return invalid("query vector matrix does not match the LVQ row count");
+        }
+        if queries.iter().any(|value| !value.is_finite()) {
+            return invalid("query vectors must contain only finite values");
+        }
+        if output.len() != batch.row_count() {
+            return invalid("distance output does not match the LVQ row count");
+        }
+
+        match self.backend {
+            #[cfg(not(target_arch = "aarch64"))]
+            CpuBackend::Scalar => lvq_squared_l2_pairs_scalar(batch, queries, output),
+            #[cfg(target_arch = "aarch64")]
+            CpuBackend::Neon => lvq_squared_l2_pairs_scalar(batch, queries, output),
+            #[cfg(target_arch = "x86_64")]
+            CpuBackend::Avx2 => {
+                if std::is_x86_feature_detected!("avx512f")
+                    && std::is_x86_feature_detected!("avx512bw")
+                {
+                    // SAFETY: both AVX-512 features are checked at runtime and
+                    // the view validates every buffer before construction.
+                    unsafe { lvq_squared_l2_pairs_avx512(batch, queries, output) };
+                } else {
+                    // SAFETY: this backend is selected only after AVX2 runtime
+                    // detection and the view validates all buffer shapes.
+                    unsafe { lvq_squared_l2_pairs_avx2(batch, queries, output) };
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 fn invalid<T>(message: impl Into<String>) -> Result<T> {
@@ -575,6 +620,20 @@ fn code_at(bits: LvqBits, codes: &[u8], dimension: usize) -> u8 {
 
 fn lvq_squared_l2_rows_scalar(batch: &LvqBatchView<'_>, query: &[f32], output: &mut [f32]) {
     batch.codes.for_each_row(|row, row_codes| {
+        let mut sum = 0.0_f32;
+        for (dimension, query_value) in query.iter().copied().enumerate() {
+            let decoded = batch.offsets[row]
+                + batch.scales[row] * f32::from(code_at(batch.bits, row_codes, dimension));
+            let delta = query_value - decoded;
+            sum += delta * delta;
+        }
+        output[row] = sum;
+    });
+}
+
+fn lvq_squared_l2_pairs_scalar(batch: &LvqBatchView<'_>, queries: &[f32], output: &mut [f32]) {
+    batch.codes.for_each_row(|row, row_codes| {
+        let query = &queries[row * batch.dimension..(row + 1) * batch.dimension];
         let mut sum = 0.0_f32;
         for (dimension, query_value) in query.iter().copied().enumerate() {
             let decoded = batch.offsets[row]
@@ -778,10 +837,52 @@ unsafe fn lvq_squared_l2_rows_avx2(batch: &LvqBatchView<'_>, query: &[f32], outp
 }
 
 #[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+#[allow(unsafe_code)]
+unsafe fn lvq_squared_l2_pairs_avx2(batch: &LvqBatchView<'_>, queries: &[f32], output: &mut [f32]) {
+    batch.codes.for_each_row(|row, row_codes| {
+        let query = &queries[row * batch.dimension..(row + 1) * batch.dimension];
+        output[row] = unsafe {
+            lvq_squared_l2_row_avx2(
+                batch.bits,
+                batch.dimension,
+                row_codes,
+                batch.offsets[row],
+                batch.scales[row],
+                query,
+            )
+        };
+    });
+}
+
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f,avx512bw")]
 #[allow(unsafe_code)]
 unsafe fn lvq_squared_l2_rows_avx512(batch: &LvqBatchView<'_>, query: &[f32], output: &mut [f32]) {
     batch.codes.for_each_row(|row, row_codes| {
+        output[row] = unsafe {
+            lvq_squared_l2_row_avx512(
+                batch.bits,
+                batch.dimension,
+                row_codes,
+                batch.offsets[row],
+                batch.scales[row],
+                query,
+            )
+        };
+    });
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f,avx512bw")]
+#[allow(unsafe_code)]
+unsafe fn lvq_squared_l2_pairs_avx512(
+    batch: &LvqBatchView<'_>,
+    queries: &[f32],
+    output: &mut [f32],
+) {
+    batch.codes.for_each_row(|row, row_codes| {
+        let query = &queries[row * batch.dimension..(row + 1) * batch.dimension];
         output[row] = unsafe {
             lvq_squared_l2_row_avx512(
                 batch.bits,
@@ -890,6 +991,32 @@ mod tests {
             .unwrap();
 
         assert_eq!(distances, [5.0, 25.0]);
+    }
+
+    #[test]
+    fn distance_kernel_scores_row_aligned_query_vectors() {
+        let encoded = encode_lvq_rows(&[1.0, 2.0, 3.0, 4.0], 2, LvqBits::Eight).unwrap();
+        let mut distances = [0.0; 2];
+
+        detect()
+            .lvq_squared_l2_pairs(&encoded.as_view(), &[1.0, 2.0, 2.0, 2.0], &mut distances)
+            .unwrap();
+
+        assert_eq!(distances, [0.0, 5.0]);
+        assert!(
+            detect()
+                .lvq_squared_l2_pairs(&encoded.as_view(), &[1.0, 2.0], &mut distances)
+                .is_err()
+        );
+        assert!(
+            detect()
+                .lvq_squared_l2_pairs(
+                    &encoded.as_view(),
+                    &[1.0, 2.0, f32::NAN, 4.0],
+                    &mut distances,
+                )
+                .is_err()
+        );
     }
 
     #[test]

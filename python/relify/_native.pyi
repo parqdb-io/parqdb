@@ -235,6 +235,16 @@ class _NativeSession:
         filter: str | None = ...,
         bypass_index: bool = ...,
     ) -> _NativeQueryStream: ...
+    async def stream_batch_search(
+        self,
+        source: str,
+        index_namespace: Sequence[str],
+        queries: Sequence[Sequence[float]],
+        index: str | None = ...,
+        column: str | None = ...,
+        nprobe: int | None = ...,
+        limit: int = ...,
+    ) -> _NativeQueryStream: ...
     async def stream_explain_search(
         self,
         source: str,

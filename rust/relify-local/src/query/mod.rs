@@ -34,6 +34,7 @@ use crate::ivf::{
 use crate::{ClusterSelection, Error, ResolvedSearch, Result};
 use relify_kernels::{LvqBatchView, LvqBits, detect};
 
+pub(crate) mod batch;
 mod fused_topk;
 mod lvq_codes;
 mod stream;
@@ -281,15 +282,20 @@ impl ScalarUDFImpl for LvqSquaredL2 {
                 "LVQ posting columns must not contain nulls".into(),
             ));
         }
-        let query = match query {
-            ColumnarValue::Scalar(query) => query.to_array()?,
-            ColumnarValue::Array(_) => {
-                return Err(DataFusionError::Execution(
-                    "LVQ search requires one constant query vector".into(),
-                ));
+        let (query, query_count) = match query {
+            ColumnarValue::Scalar(query) => (query.to_array()?, 1),
+            ColumnarValue::Array(queries) => {
+                if queries.len() != arguments.number_rows {
+                    return Err(DataFusionError::Execution(format!(
+                        "query vector array contains {} rows but the input contains {}",
+                        queries.len(),
+                        arguments.number_rows
+                    )));
+                }
+                (Arc::clone(queries), arguments.number_rows)
             }
         };
-        let (query, dimension) = crate::ivf::borrow_vectors_allow_nullable_elements(&query)
+        let (queries, dimension) = crate::ivf::borrow_vectors_allow_nullable_elements(&query)
             .map_err(|error| DataFusionError::Execution(error.to_string()))?;
         let codes = lvq_code_rows(codes.as_ref(), self.bits.code_size(dimension))?;
         let view = LvqBatchView::try_new_rows(
@@ -301,9 +307,13 @@ impl ScalarUDFImpl for LvqSquaredL2 {
         )
         .map_err(|error| DataFusionError::Execution(error.to_string()))?;
         let mut distances = vec![0.0; arguments.number_rows];
-        detect()
-            .lvq_squared_l2_rows(&view, query, &mut distances)
-            .map_err(|error| DataFusionError::Execution(error.to_string()))?;
+        let kernel = detect();
+        if query_count == 1 {
+            kernel.lvq_squared_l2_rows(&view, queries, &mut distances)
+        } else {
+            kernel.lvq_squared_l2_pairs(&view, queries, &mut distances)
+        }
+        .map_err(|error| DataFusionError::Execution(error.to_string()))?;
         Ok(ColumnarValue::Array(Arc::new(Float32Array::from(
             distances,
         ))))

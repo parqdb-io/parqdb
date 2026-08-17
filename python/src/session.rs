@@ -9,9 +9,9 @@ use datafusion_python::context::{PyRuntimeEnvBuilder, PySessionConfig};
 use datafusion_python::dataframe::PyDataFrame;
 use pyo3::prelude::*;
 use relify_local::{
-    DistanceMetric, IndexBuildState, IvfConfig, LocalSession, LocalSessionOptions,
-    ParquetWriterOptions, PersistentParquetOptions, PostingEncoding, SearchRequest,
-    relify_session_config,
+    BatchSearchRequest, DistanceMetric, IndexBuildState, IvfConfig, LocalSession,
+    LocalSessionOptions, ParquetWriterOptions, PersistentParquetOptions, PostingEncoding,
+    SearchRequest, relify_session_config,
 };
 use relify_meta::RelationReference;
 use tokio::runtime::Runtime;
@@ -77,6 +77,26 @@ fn search_request(
         projection,
         filter,
         bypass_index,
+    })
+}
+
+fn batch_search_request(
+    source: &str,
+    index_namespace: Vec<String>,
+    queries: Vec<Vec<f32>>,
+    index: Option<String>,
+    column: Option<String>,
+    nprobe: Option<usize>,
+    limit: usize,
+) -> PyResult<BatchSearchRequest> {
+    Ok(BatchSearchRequest {
+        source: parse_relation_reference(source)?,
+        index_namespace,
+        index,
+        column,
+        queries,
+        nprobe,
+        limit,
     })
 }
 
@@ -796,6 +816,52 @@ impl PyNativeSession {
         )?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let task = query_runtime.spawn(async move { session.stream_search(&request).await });
+            let mut abort_on_drop = AbortOnDrop::new(task.abort_handle());
+            let stream = task
+                .await
+                .map_err(|error| runtime_error(error.to_string()))?
+                .map_err(|error| core_error(&error))?;
+            abort_on_drop.disarm();
+            Ok(PyNativeQueryStream::new(stream, runtime))
+        })
+    }
+
+    #[pyo3(signature = (
+        source,
+        index_namespace,
+        queries,
+        index=None,
+        column=None,
+        nprobe=None,
+        limit=10
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn stream_batch_search<'py>(
+        &self,
+        py: Python<'py>,
+        source: &str,
+        index_namespace: Vec<String>,
+        queries: Vec<Vec<f32>>,
+        index: Option<String>,
+        column: Option<String>,
+        nprobe: Option<usize>,
+        limit: usize,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let session = Arc::clone(&self.session);
+        let runtime = Arc::clone(&self.runtime);
+        let query_runtime = Arc::clone(&runtime);
+        let request = batch_search_request(
+            source,
+            index_namespace,
+            queries,
+            index,
+            column,
+            nprobe,
+            limit,
+        )?;
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let task =
+                query_runtime.spawn(async move { session.stream_batch_search(&request).await });
             let mut abort_on_drop = AbortOnDrop::new(task.abort_handle());
             let stream = task
                 .await

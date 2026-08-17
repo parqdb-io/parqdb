@@ -7,6 +7,7 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion::execution::context::SQLOptions;
+use datafusion::physical_plan::{ExecutionPlan, collect, execute_stream};
 use datafusion::prelude::{SessionContext, col, lit};
 use relify_meta::{DistanceMetric, IndexSnapshot, PostingEncoding, RelationReference};
 use uuid::Uuid;
@@ -17,12 +18,13 @@ use super::source::{
     SourceBinding, exact_vector_field, relation_key, resolve_search_projection,
     validate_index_source_schema, vector_elements_are_f64,
 };
+use crate::query::batch::{BatchRoutes, compile_index_only_batch_plan};
 use crate::query::{
     ManagedQueryStream, compile_datafusion_sql, compile_index_only_plan,
     datafusion_centroid_relation_required, datafusion_cluster_relation_required,
     datafusion_source_relation_required, use_native_cluster_routing, validated_cluster_search,
 };
-use crate::{ClusterSelection, Error, ResolvedSearch, Result, SearchRequest};
+use crate::{BatchSearchRequest, ClusterSelection, Error, ResolvedSearch, Result, SearchRequest};
 
 struct RegisteredSearchRelations {
     execution: ResolvedSearch,
@@ -30,6 +32,16 @@ struct RegisteredSearchRelations {
     postings: Option<String>,
     centroids: Option<String>,
     selected_clusters: Option<String>,
+}
+
+struct ResolvedBatchSearch {
+    routes: BatchRoutes,
+    postings_relation_key: String,
+    posting_encoding: PostingEncoding,
+    metric: DistanceMetric,
+    source_key_fields: Vec<String>,
+    nlist: usize,
+    limit: usize,
 }
 
 impl RegisteredSearchRelations {
@@ -60,6 +72,27 @@ impl LocalSession {
     pub async fn stream_search(&self, request: &SearchRequest) -> Result<ManagedQueryStream> {
         let permit = self.runtime.admit_query().await?;
         let stream = self.plan_search(request).await?.execute_stream().await?;
+        Ok(ManagedQueryStream::new(stream, permit))
+    }
+
+    /// Executes an index-only batch search and returns source keys and distances per query.
+    pub async fn batch_search(
+        &self,
+        request: &BatchSearchRequest,
+    ) -> Result<(Vec<RecordBatch>, SchemaRef)> {
+        let plan = self.plan_batch_search(request).await?;
+        let schema = plan.schema();
+        Ok((collect(plan, self.context.task_ctx()).await?, schema))
+    }
+
+    /// Executes an index-only batch search as one admission-controlled Arrow stream.
+    pub async fn stream_batch_search(
+        &self,
+        request: &BatchSearchRequest,
+    ) -> Result<ManagedQueryStream> {
+        let permit = self.runtime.admit_query().await?;
+        let plan = self.plan_batch_search(request).await?;
+        let stream = execute_stream(plan, self.context.task_ctx())?;
         Ok(ManagedQueryStream::new(stream, permit))
     }
 
@@ -108,6 +141,35 @@ impl LocalSession {
     ) -> Result<datafusion::dataframe::DataFrame> {
         let resolved = self.resolve_search(request).await?;
         self.datafusion_plan(&resolved).await
+    }
+
+    /// Plans one index-only batch search over a single postings scan.
+    pub async fn plan_batch_search(
+        &self,
+        request: &BatchSearchRequest,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let resolved = self.resolve_batch_search(request).await?;
+        let cids = resolved.routes.distinct_cids().collect::<Vec<_>>();
+        let postings = self
+            .index_relation_dataframe(
+                &resolved.postings_relation_key,
+                IndexRelationLayout::HiveCid,
+            )
+            .await?;
+        let postings = if cids.len() < resolved.nlist {
+            select_clusters(postings, &cids)?
+        } else {
+            postings
+        };
+        compile_index_only_batch_plan(
+            postings,
+            resolved.routes,
+            resolved.posting_encoding,
+            resolved.metric,
+            &resolved.source_key_fields,
+            resolved.limit,
+        )
+        .await
     }
 
     /// Compiles one search into executable SQL for this session's registered tables.
@@ -173,6 +235,77 @@ impl LocalSession {
         }
         self.resolve_indexed_search(request, &source, projection)
             .await
+    }
+
+    async fn resolve_batch_search(
+        &self,
+        request: &BatchSearchRequest,
+    ) -> Result<ResolvedBatchSearch> {
+        let _guard = self.coordination.read()?;
+        validate_batch_search_request(request)?;
+        let source = self.bind_relation(&request.source).await?;
+        let loaded = self
+            .select_index_in(
+                &request.index_namespace,
+                &source.reference,
+                request.index.as_deref(),
+                request.column.as_deref(),
+            )
+            .await?;
+        let snapshot = loaded.metadata.current_snapshot()?;
+        validate_index_source_schema(source.schema.as_ref(), snapshot)?;
+        let metric = DistanceMetric::from_metadata(&snapshot.metric).ok_or_else(|| {
+            Error::InvalidMetadata(format!("unsupported IVF metric: {}", snapshot.metric))
+        })?;
+        let posting_encoding = PostingEncoding::from_snapshot(snapshot)?;
+        if posting_encoding == PostingEncoding::Source {
+            return Err(Error::InvalidArgument(
+                "batch search currently requires an LVQ4 or LVQ8 index".into(),
+            ));
+        }
+        let centroid_artifact = self.indexes.load_snapshot_ivf_centroids(snapshot).await?;
+        let centroid_cache_key = format!(
+            "{}\0ivf_centroids",
+            centroid_artifact.entry.metadata_location
+        );
+        let mut queries = Vec::with_capacity(request.queries.len());
+        let mut cids_by_query = Vec::with_capacity(request.queries.len());
+        let mut nlist = None;
+        for query in &request.queries {
+            let query = crate::vector::transform_query(query, metric)?;
+            let (selection, query_nlist) = self
+                .resolve_cluster_selection(snapshot, &centroid_cache_key, &query, request.nprobe)
+                .await?;
+            let cids = match selection {
+                ClusterSelection::Native(cids) => cids,
+                ClusterSelection::All => (0..query_nlist)
+                    .map(|cid| {
+                        i32::try_from(cid).map_err(|_| {
+                            Error::InvalidSchema(
+                                "centroid cid exceeds the INT32 index domain".into(),
+                            )
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+                ClusterSelection::Relational { .. } => {
+                    return Err(Error::InvalidArgument(
+                        "batch search currently requires native IVF routing".into(),
+                    ));
+                }
+            };
+            queries.push(query);
+            cids_by_query.push(cids);
+            nlist = Some(query_nlist);
+        }
+        Ok(ResolvedBatchSearch {
+            routes: BatchRoutes::try_new(queries, cids_by_query)?,
+            postings_relation_key: relation_key(index_relation(snapshot, "ivf_postings")?),
+            posting_encoding,
+            metric,
+            source_key_fields: snapshot.source_key_fields.clone(),
+            nlist: nlist.expect("validated non-empty batch"),
+            limit: request.limit,
+        })
     }
 
     async fn resolve_indexed_search(
@@ -499,6 +632,18 @@ fn validate_search_request(request: &SearchRequest) -> Result<()> {
     {
         return Err(Error::InvalidArgument(
             "filter must not be empty".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_batch_search_request(request: &BatchSearchRequest) -> Result<()> {
+    if request.limit == 0 {
+        return Err(Error::InvalidArgument("limit must be positive".into()));
+    }
+    if request.queries.is_empty() {
+        return Err(Error::InvalidArgument(
+            "batch search requires at least one query vector".into(),
         ));
     }
     Ok(())

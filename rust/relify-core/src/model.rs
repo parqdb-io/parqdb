@@ -90,6 +90,25 @@ pub struct SearchRequest {
     pub bypass_index: bool,
 }
 
+/// User-supplied inputs for one index-only batch vector search.
+#[derive(Debug, Clone)]
+pub struct BatchSearchRequest {
+    /// Exact portable reference for the source table.
+    pub source: RelationReference,
+    /// Catalog namespace containing indexes for this table binding.
+    pub index_namespace: Vec<String>,
+    /// Explicit index name, or `None` for source-based discovery.
+    pub index: Option<String>,
+    /// Vector column used to disambiguate implicit index discovery.
+    pub column: Option<String>,
+    /// Query vectors in input order.
+    pub queries: Vec<Vec<f32>>,
+    /// Number of IVF clusters to probe for each query.
+    pub nprobe: Option<usize>,
+    /// Maximum number of results returned for each query.
+    pub limit: usize,
+}
+
 /// Immutable index relations and family parameters produced by a backend builder.
 #[derive(Debug, Clone)]
 pub struct IndexArtifacts {

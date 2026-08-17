@@ -28,8 +28,8 @@ pub use query::{
 };
 pub use relify_catalog::IndexIdentifier;
 pub use relify_core::{
-    DistanceMetric, IndexArtifacts, IndexFormat, IvfConfig, PostingEncoding, PublishedIndex,
-    SearchRequest,
+    BatchSearchRequest, DistanceMetric, IndexArtifacts, IndexFormat, IvfConfig, PostingEncoding,
+    PublishedIndex, SearchRequest,
 };
 pub use relify_index::MetadataCacheConfig;
 pub use relify_meta::{IndexMetadata, IndexSnapshot, RelationReference};

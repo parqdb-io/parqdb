@@ -27,7 +27,9 @@ use uuid::Uuid;
 
 use super::*;
 use crate::local_uri::directory_to_file_uri;
-use crate::{IvfConfig, MaintenanceKind, PublishedIndex, relify_session_config};
+use crate::{
+    BatchSearchRequest, IvfConfig, MaintenanceKind, PublishedIndex, relify_session_config,
+};
 use crate::{QueryAdmissionOptions, QueryAdmissionStats, RelifyRuntime};
 
 struct MemoryEntry {
@@ -1090,6 +1092,55 @@ async fn assert_lvq_index(
         plan.contains(&format!("encoding={}", encoding.as_str())),
         "{plan}"
     );
+
+    let batch_request = BatchSearchRequest {
+        index_namespace: vec![],
+        source: request.source.clone(),
+        index: request.index.clone(),
+        column: None,
+        queries: vec![vec![0.0, 0.0], vec![10.0, 0.0]],
+        nprobe: Some(2),
+        limit: 1,
+    };
+    let batch_plan = session.plan_batch_search(&batch_request).await.unwrap();
+    let formatted = datafusion::physical_plan::displayable(batch_plan.as_ref())
+        .indent(false)
+        .to_string();
+    assert!(formatted.contains("BatchIvfTopKExec"), "{formatted}");
+    assert!(formatted.contains("BatchTopKMergeExec"), "{formatted}");
+    assert!(!formatted.contains("WindowAggExec"), "{formatted}");
+    let (batch, batch_schema) = session.batch_search(&batch_request).await.unwrap();
+    assert_eq!(
+        batch_schema
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>(),
+        ["_query_id", "source_pid", "_distance"]
+    );
+    let query_ids = batch[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::UInt32Array>()
+        .unwrap();
+    let batch_pids = batch[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap();
+    assert_eq!(query_ids.values(), &[0, 1]);
+    for (query_ordinal, query) in batch_request.queries.iter().enumerate() {
+        let mut single = request.clone();
+        single.query.clone_from(query);
+        let (single_result, _) = session.search(&single).await.unwrap();
+        let single_pid = single_result[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .value(0);
+        assert_eq!(batch_pids.value(query_ordinal), single_pid);
+    }
 
     let mut source_projection = request.clone();
     source_projection.projection = Some(vec!["source_pid".into(), "label".into()]);
