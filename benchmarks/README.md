@@ -82,13 +82,15 @@ uv run --group benchmark --no-sync python -m benchmarks.query \
   --num-queries 100 \
   --nlist 65536 \
   --encoding lvq8 \
-  --nprobe 64 \
+  --nprobe 32 \
   --k 10 \
-  --curve-nprobe-values 64 \
+  --curve-nprobe-values 32 \
   --curve-k-values 10 \
   --search-repetitions 1 \
   --warmup-queries 10 \
   --threads 2 \
+  --index-io direct \
+  --page-cache-capacity-bytes 687194767 \
   --index-root "$INDEX_ROOT" \
   --output /benchmarks/results/sift1b-lvq8-65536-query.json
 ```
