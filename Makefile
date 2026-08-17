@@ -38,29 +38,29 @@ check-docs:
 	$(UV_RUN) python tools/check_docs.py
 
 test-python:
-	$(UV_RUN) pytest
+	$(UV_RUN) python -m pytest
 
 test-rust:
 	cargo test --workspace
 
 test-interop:
-	$(UV_RUN) pytest tests/interop
+	$(UV_RUN) python -m pytest tests/interop
 
 test-capabilities:
-	$(UV_RUN) pytest --capabilities
+	$(UV_RUN) python -m pytest --capabilities
 
 test-s3:
 	@command -v docker >/dev/null 2>&1 || { echo "test-s3 requires Docker"; exit 1; }
 	@set -eu; \
 	trap 'docker compose -f tests/integration/compose.yaml down --volumes' EXIT; \
 	docker compose -f tests/integration/compose.yaml up --detach --wait minio; \
-	$(UV_RUN) pytest \
+	$(UV_RUN) python -m pytest \
 		--test-env tests/integration/minio.toml \
 		--require s3 \
 		tests/python/test_s3_storage.py
 
 test-hdfs:
-	$(UV_RUN) pytest \
+	$(UV_RUN) python -m pytest \
 		--test-env tests/integration/minidfs.toml \
 		--require hdfs \
 		tests/integration/test_hdfs_storage.py
@@ -87,7 +87,7 @@ datasets:
 	$(UV_RUN) python tools/generate_example_datasets.py
 
 benchmark-smoke:
-	$(UV_RUN) pytest tests/python/test_benchmark.py -q -k 'build_benchmark_smoke or build_then_query'
+	$(UV_RUN) python -m pytest tests/python/test_benchmark.py -q -k 'build_benchmark_smoke or build_then_query'
 
 benchmark-chart:
 	$(UV_RUN) python -m benchmarks.tools.render_build_results $(SEARCH_BENCHMARK_RESULT) --output assets/build-time.svg

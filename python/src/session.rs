@@ -148,10 +148,11 @@ impl PyNativeSession {
         config: Option<PySessionConfig>,
         runtime: Option<PyRuntimeEnvBuilder>,
     ) -> PyResult<Self> {
-        let options = LocalSessionOptions::new(
-            config.map_or_else(relify_session_config, |config| config.config),
-            runtime.map_or_else(Default::default, |runtime| runtime.builder),
-        );
+        let config = config.map_or_else(relify_session_config, |config| config.config);
+        let options = match runtime {
+            Some(runtime) => LocalSessionOptions::new(config, runtime.builder),
+            None => LocalSessionOptions::automatic(config),
+        };
         let session = match (catalog_path, warehouse) {
             (Some(catalog_path), Some(warehouse)) => LocalSession::open_sqlite_with_options(
                 catalog_path,

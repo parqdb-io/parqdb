@@ -28,6 +28,76 @@ standalone `benchmarks.tools.faiss` runner with the prepared files. Run the two
 implementations under equivalent resource limits, then combine their JSON files
 with `benchmarks.tools.merge_results`.
 
+## SIFT1B
+
+The standard BigANN files are already available in many ANN benchmark
+environments. Relify's preparation command reads the compact `uint8` base and
+query `bvecs` files directly; it does not use a converted `fvecs` copy. It
+writes a normal Parquet source table with `id: INT64` and
+`embedding: FixedSizeList<FLOAT, 128>`, plus an `fbin` query matrix and
+canonical ground-truth matrix for the existing build and query runners.
+
+```bash
+uv run --group benchmark --no-sync python -m benchmarks.tools.prepare_sift1b \
+  --base /home/share/vector_data/sift1b/sift1b_base.bvecs \
+  --queries /home/share/vector_data/sift1b/sift1b_query.bvecs \
+  --ground-truth /home/share/vector_data/sift1b/sift1b_groundtruth.ivecs \
+  --output /storage_ssd/relify-benchmarks/datasets/sift1b \
+  --workers 32
+```
+
+The source layout is fixed for reproducibility: 65,536 rows per row group and
+2,097,152 rows per file, producing 477 Parquet files for the complete 1B-row
+dataset. Embedding values use `BYTE_STREAM_SPLIT` and `ZSTD(3)`; IDs are stored
+plain. Preparation is outside the timed index-build measurement.
+
+Build an IVF-LVQ8 index through the normal public API path. The spill limit is
+explicit because the 1B-row postings shuffle exceeds DataFusion's 100 GiB
+default:
+
+```bash
+DATASET=/data/sift1b
+INDEX_ROOT=/benchmarks/indexes/sift1b-lvq8-65536
+
+uv run --group benchmark --no-sync python -m benchmarks.build \
+  --source-parquet "$DATASET/source" \
+  --dataset-name sift1b-bigann \
+  --nlist 65536 \
+  --encoding lvq8 \
+  --threads 64 \
+  --max-temp-directory-size-bytes 322122547200 \
+  --index-root "$INDEX_ROOT" \
+  --rebuild \
+  --output /benchmarks/results/sift1b-lvq8-65536-build.json
+```
+
+Query against the prepared BigANN queries and ground truth:
+
+```bash
+uv run --group benchmark --no-sync python -m benchmarks.query \
+  --source-parquet "$DATASET/source" \
+  --query-file "$DATASET/queries.fbin" \
+  --ground-truth "$DATASET/gt1000.bin" \
+  --dataset-name sift1b-bigann \
+  --num-queries 100 \
+  --nlist 65536 \
+  --encoding lvq8 \
+  --nprobe 32 \
+  --k 10 \
+  --curve-nprobe-values 32 \
+  --curve-k-values 10 \
+  --search-repetitions 1 \
+  --warmup-queries 10 \
+  --threads 2 \
+  --index-io direct \
+  --page-cache-capacity-bytes 687194767 \
+  --index-root "$INDEX_ROOT" \
+  --output /benchmarks/results/sift1b-lvq8-65536-query.json
+```
+
+The recorded 64 vCPU build and 2 vCPU / 4 GiB query run is archived in
+[`results/linux-x86_64-2026-08-17`](results/linux-x86_64-2026-08-17/README.md).
+
 ## Wikipedia 35M
 
 The larger release benchmark uses the `train` split of

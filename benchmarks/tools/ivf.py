@@ -66,7 +66,7 @@ UNTIMED_RELIFY_BUILD_PHASES = {
     "reading_training_vectors",
 }
 TRAINING_SAMPLING = {
-    "relify": "streaming-reservoir-v1",
+    "relify": "streaming-reservoir-v2",
     "faiss": "uniform-without-replacement-v1",
 }
 RELIFY_POSTINGS_LAYOUT = "hive-cid-file-v1"
@@ -332,6 +332,8 @@ def benchmark_relify(
     build_missing: bool,
     show_progress: bool,
     page_cache_capacity_bytes: int | None,
+    max_temp_directory_size_bytes: int | None,
+    index_io: str,
 ) -> dict[str, Any]:
     import relify
 
@@ -358,8 +360,17 @@ def benchmark_relify(
                     f"Relify benchmark artifact is missing at {root}; "
                     "run python -m benchmarks.build first"
                 )
-            session = relify.connect(root / "relify-data")
-            configure_relify_session(session, threads)
+            build_config = (
+                relify.SessionConfig()
+                .set("relify.parquet.page_cache.capacity", "0")
+                .set("relify.build.dop", str(threads))
+            )
+            session = relify.connect(root / "relify-data", config=build_config)
+            configure_relify_session(
+                session,
+                threads,
+                max_temp_directory_size_bytes=max_temp_directory_size_bytes,
+            )
             session.register_parquet("benchmark", source.path)
             table = session.table("benchmark")
             assert isinstance(table, relify.SourceTable)
@@ -400,6 +411,7 @@ def benchmark_relify(
             if queries is None or expected is None:
                 raise ValueError("queries and ground truth are required for search")
             query_config = relify.SessionConfig()
+            query_config.set("relify.parquet.index_io", index_io)
             if page_cache_capacity_bytes is not None:
                 query_config.set(
                     "relify.parquet.page_cache.capacity",
@@ -711,6 +723,11 @@ def validate_args(
     if not 1 <= args.nlist <= rows:
         raise ValueError("nlist must be in 1..=rows")
     if args.operation == "build":
+        if (
+            args.max_temp_directory_size_bytes is not None
+            and args.max_temp_directory_size_bytes <= 0
+        ):
+            raise ValueError("max-temp-directory-size-bytes must be positive")
         return
     if args.num_queries <= 0 or args.search_repetitions <= 0 or args.warmup_queries < 0:
         raise ValueError(
@@ -883,6 +900,8 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
                     build_missing=args.operation == "build",
                     show_progress=not args.no_progress,
                     page_cache_capacity_bytes=args.page_cache_capacity_bytes,
+                    max_temp_directory_size_bytes=(args.max_temp_directory_size_bytes),
+                    index_io=args.index_io,
                 )
                 for trial in range(args.repetitions)
             ]
@@ -983,6 +1002,8 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
                 "encoding": args.encoding,
                 "repetitions": args.repetitions,
                 "threads": threads,
+                "max_temp_directory_size_bytes": (args.max_temp_directory_size_bytes),
+                "index_io": args.index_io,
             },
             "resources": {
                 "cpus": len(available_cpus),
@@ -1060,6 +1081,10 @@ def build_parser(implementation: str = "relify") -> argparse.ArgumentParser:
     command.add_argument("--seed", type=int, default=KMEANS_SEED)
     command.add_argument("--repetitions", type=int, default=1)
     command.add_argument("--rebuild", action="store_true")
+    if implementation == "relify":
+        command.add_argument("--max-temp-directory-size-bytes", type=int)
+    else:
+        command.set_defaults(max_temp_directory_size_bytes=None)
     add_common_arguments(command, implementation=implementation)
     command.set_defaults(
         implementation=implementation,
@@ -1075,6 +1100,8 @@ def build_parser(implementation: str = "relify") -> argparse.ArgumentParser:
         search_repetitions=1,
         warmup_queries=1,
         page_cache_capacity_bytes=None,
+        max_temp_directory_size_bytes=None,
+        index_io="buffered",
     )
     return command
 
@@ -1106,8 +1133,13 @@ def query_parser(implementation: str = "relify") -> argparse.ArgumentParser:
     command.add_argument("--warmup-queries", type=int, default=5)
     if implementation == "relify":
         command.add_argument("--page-cache-capacity-bytes", type=int)
+        command.add_argument(
+            "--index-io",
+            choices=("buffered", "direct"),
+            default="buffered",
+        )
     else:
-        command.set_defaults(page_cache_capacity_bytes=None)
+        command.set_defaults(page_cache_capacity_bytes=None, index_io="buffered")
     add_common_arguments(command, implementation=implementation)
     command.set_defaults(
         implementation=implementation,
@@ -1118,6 +1150,7 @@ def query_parser(implementation: str = "relify") -> argparse.ArgumentParser:
         seed=KMEANS_SEED,
         repetitions=1,
         rebuild=False,
+        max_temp_directory_size_bytes=None,
     )
     return command
 

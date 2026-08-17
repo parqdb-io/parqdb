@@ -16,7 +16,7 @@ use crate::Result;
 use crate::runtime::{QueryAdmissionOptions, RelifyRuntime};
 
 const DEFAULT_MANIFEST_CACHE_ENTRIES: usize = 128;
-const DEFAULT_MANIFEST_CACHE_BYTES: usize = 64 * 1024 * 1024;
+const DEFAULT_MANIFEST_CACHE_BYTES: usize = 128 * 1024 * 1024;
 const DEFAULT_CENTROID_CACHE_ENTRIES: usize = 128;
 const DEFAULT_CENTROID_CACHE_BYTES: usize = 256 * 1024 * 1024;
 const DEFAULT_QUERY_CONCURRENCY: usize = 1;
@@ -70,6 +70,9 @@ config_namespace! {
 config_namespace! {
     /// Options for Parquet reads.
     pub struct ParquetOptions {
+        /// Local index I/O mode: `buffered` or `direct`.
+        pub index_io: String, default = "buffered".into()
+
         /// Decompressed Page-cache options.
         pub page_cache: ParquetPageCacheOptions, default = ParquetPageCacheOptions::default()
     }
@@ -248,11 +251,21 @@ pub struct LocalSessionOptions {
 
 #[derive(Clone)]
 enum LocalRuntimeOptions {
+    Automatic,
     Builder(RuntimeEnvBuilder),
     Shared(Arc<RelifyRuntime>),
 }
 
 impl LocalSessionOptions {
+    /// Creates options using Relify's automatically bounded runtime.
+    #[must_use]
+    pub const fn automatic(config: SessionConfig) -> Self {
+        Self {
+            config,
+            runtime: LocalRuntimeOptions::Automatic,
+        }
+    }
+
     /// Creates options from `DataFusion`'s native configuration types.
     #[must_use]
     pub const fn new(config: SessionConfig, runtime: RuntimeEnvBuilder) -> Self {
@@ -277,7 +290,12 @@ impl LocalSessionOptions {
             config = config.with_target_partitions(query_dop);
         }
         let _ = build_dop(&config)?;
+        let _ = index_io_mode(&config)?;
         let runtime = match self.runtime {
+            LocalRuntimeOptions::Automatic => Arc::new(RelifyRuntime::automatic(
+                parquet_page_cache_capacity(&config),
+                query_admission_options(&config)?,
+            )?),
             LocalRuntimeOptions::Builder(builder) => Arc::new(RelifyRuntime::with_query_admission(
                 builder,
                 parquet_page_cache_capacity(&config),
@@ -291,7 +309,7 @@ impl LocalSessionOptions {
 
 impl Default for LocalSessionOptions {
     fn default() -> Self {
-        Self::new(relify_session_config(), RuntimeEnvBuilder::default())
+        Self::automatic(relify_session_config())
     }
 }
 
@@ -331,6 +349,30 @@ pub(crate) fn parquet_page_cache_capacity(config: &SessionConfig) -> Option<usiz
         .parquet
         .page_cache
         .capacity
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IndexIoMode {
+    Buffered,
+    Direct,
+}
+
+pub(crate) fn index_io_mode(config: &SessionConfig) -> Result<IndexIoMode> {
+    let mode = config
+        .options()
+        .extensions
+        .get::<RelifyConfig>()
+        .expect("Relify config extension must be installed")
+        .parquet
+        .index_io
+        .as_str();
+    match mode {
+        "buffered" => Ok(IndexIoMode::Buffered),
+        "direct" => Ok(IndexIoMode::Direct),
+        _ => Err(crate::Error::InvalidArgument(format!(
+            "relify.parquet.index_io must be 'buffered' or 'direct', got {mode:?}"
+        ))),
+    }
 }
 
 pub(crate) fn query_admission_options(config: &SessionConfig) -> Result<QueryAdmissionOptions> {
@@ -433,6 +475,7 @@ mod tests {
             .set_str("relify.build.dop", "4")
             .set_str("relify.metadata.cache.max_entries", "7")
             .set_str("relify.metadata.cache.max_bytes", "4096")
+            .set_str("relify.parquet.index_io", "buffered")
             .set_str("relify.parquet.page_cache.capacity", "8192")
             .set_str("relify.query.manifest.cache.max_entries", "3")
             .set_str("relify.query.manifest.cache.max_bytes", "1024")
@@ -452,6 +495,7 @@ mod tests {
         );
         assert_eq!(config.target_partitions(), 2);
         assert_eq!(build_dop(&config).unwrap(), Some(4));
+        assert_eq!(index_io_mode(&config).unwrap(), IndexIoMode::Buffered);
         assert_eq!(
             metadata_cache_config(&config),
             MetadataCacheConfig::new(7, 4096)
@@ -466,6 +510,16 @@ mod tests {
                 centroid_max_bytes: 2048,
             }
         );
+    }
+
+    #[test]
+    fn session_rejects_unknown_index_io_mode() {
+        let config = relify_session_config().set_str("relify.parquet.index_io", "unknown");
+        let error = LocalSessionOptions::new(config, RuntimeEnvBuilder::default())
+            .into_parts()
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("relify.parquet.index_io"));
     }
 
     #[test]

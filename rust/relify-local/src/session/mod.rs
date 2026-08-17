@@ -279,6 +279,7 @@ impl LocalSession {
         let warehouse = Warehouse::open(warehouse_root, registry.clone())?;
         let (session_config, runtime) = options.into_parts()?;
         let relation_cache_config = index_relation_cache_config(&session_config);
+        let index_io = crate::config::index_io_mode(&session_config)?;
         let build_dop = build_dop(&session_config)?;
         let session_config = session_config.with_extension(Arc::new(
             ParquetPageCacheFactoryConfig::new(runtime.parquet_page_cache_factory()),
@@ -309,6 +310,7 @@ impl LocalSession {
             index_relation_providers: Arc::new(index_relation::IndexRelationProviderRegistry::new(
                 registry,
                 relation_cache_config,
+                index_io,
             )),
             sql_relations: Arc::new(RwLock::new(HashMap::new())),
             state_root,

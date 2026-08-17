@@ -22,7 +22,7 @@ use centroid::CentroidCache;
 pub(super) use centroid::CentroidNavigator;
 use hive_cid::HiveCidParquetProvider;
 
-use crate::config::IndexRelationCacheConfig;
+use crate::config::{IndexIoMode, IndexRelationCacheConfig};
 use crate::parquet::uniform_dataset_listing_table;
 use crate::{Error, Result};
 
@@ -60,6 +60,7 @@ pub(super) struct IndexRelationProviderRegistry {
     registered: RwLock<HashMap<String, Provider>>,
     parquet: BoundedAsyncCache<ParquetProviderKey, Provider>,
     centroids: CentroidCache,
+    index_io: IndexIoMode,
 }
 
 impl Default for IndexRelationProviderRegistry {
@@ -67,17 +68,23 @@ impl Default for IndexRelationProviderRegistry {
         Self::new(
             StorageRegistry::default(),
             IndexRelationCacheConfig::default(),
+            IndexIoMode::Buffered,
         )
     }
 }
 
 impl IndexRelationProviderRegistry {
-    pub(super) fn new(storage: StorageRegistry, config: IndexRelationCacheConfig) -> Self {
+    pub(super) fn new(
+        storage: StorageRegistry,
+        config: IndexRelationCacheConfig,
+        index_io: IndexIoMode,
+    ) -> Self {
         Self {
             storage,
             registered: RwLock::new(HashMap::new()),
             parquet: BoundedAsyncCache::new(config.manifest_max_entries, config.manifest_max_bytes),
             centroids: CentroidCache::new(config.centroid_max_entries, config.centroid_max_bytes),
+            index_io,
         }
     }
 
@@ -125,9 +132,13 @@ impl IndexRelationProviderRegistry {
                         Ok((listing as Provider, PLAIN_PROVIDER_CHARGE))
                     }
                     IndexRelationLayout::HiveCid => {
-                        let provider =
-                            HiveCidParquetProvider::load(&self.storage, relation_key, state)
-                                .await?;
+                        let provider = HiveCidParquetProvider::load(
+                            &self.storage,
+                            relation_key,
+                            state,
+                            self.index_io,
+                        )
+                        .await?;
                         let charge = provider.resident_size();
                         Ok((Arc::new(provider) as Provider, charge))
                     }
@@ -264,6 +275,7 @@ mod tests {
                 centroid_max_entries: 2,
                 centroid_max_bytes: 1024,
             },
+            IndexIoMode::Buffered,
         )
     }
 

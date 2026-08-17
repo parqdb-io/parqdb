@@ -76,9 +76,14 @@ session = relify.connect("./relify-data", config=config)
 | `relify.execution.query_queue_capacity` | Maximum queued queries |
 | `relify.execution.query_queue_timeout` | Maximum queue wait |
 | `relify.build.dop` | Worker count used by an accepted index build |
+| `relify.parquet.index_io` | Local index reads: `buffered` (default) or Linux `direct` I/O |
 
 Resource settings are resolved when the session is created. Changing a
 DataFusion `SET` value later does not rebuild the process runtime.
+
+`direct` applies only to immutable local index postings. It uses Linux
+`O_DIRECT` for Parquet data ranges while retaining buffered, cached metadata
+reads. Source tables and remote object stores keep their normal I/O path.
 
 ## Cache Configuration
 

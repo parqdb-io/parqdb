@@ -12,10 +12,25 @@ if TYPE_CHECKING:
     import relify
 
 
-def configure_relify_session(session: relify.Session, threads: int) -> None:
+def _datafusion_memory_size(size_bytes: int) -> str:
+    kibibytes = (size_bytes + 1023) // 1024
+    return f"{kibibytes}K"
+
+
+def configure_relify_session(
+    session: relify.Session,
+    threads: int,
+    *,
+    max_temp_directory_size_bytes: int | None = None,
+) -> None:
     session.datafusion_context().sql(
         f"SET datafusion.execution.target_partitions = '{threads}'"
     ).collect()
+    if max_temp_directory_size_bytes is not None:
+        session.datafusion_context().sql(
+            "SET datafusion.runtime.max_temp_directory_size = "
+            f"'{_datafusion_memory_size(max_temp_directory_size_bytes)}'"
+        ).collect()
 
 
 def relify_search(

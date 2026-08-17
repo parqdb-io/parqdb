@@ -1,7 +1,11 @@
 //! Managed Parquet relation I/O for the embedded backend.
 
+#[cfg(target_os = "linux")]
+mod direct_io;
 mod page_cache;
 
+#[cfg(target_os = "linux")]
+pub(crate) use direct_io::DirectIoParquetFileReaderFactory;
 pub use page_cache::ParquetPageCacheStats;
 pub(crate) use page_cache::{
     DecompressedParquetPageCache, RelifyParquetPageCacheFactory, automatic_page_cache_capacity,

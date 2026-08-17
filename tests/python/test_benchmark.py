@@ -35,6 +35,8 @@ def test_build_benchmark_smoke(tmp_path: Path) -> None:
             "4",
             "--seed",
             "42",
+            "--max-temp-directory-size-bytes",
+            str(1024**3),
             "--output",
             str(output),
         ],
@@ -62,6 +64,7 @@ def test_build_benchmark_smoke(tmp_path: Path) -> None:
     assert result["software"]["rustc"].startswith("rustc ")
     assert result["benchmark"] == "build"
     assert result["parameters"]["encoding"] == "lvq8"
+    assert result["parameters"]["max_temp_directory_size_bytes"] == 1024**3
     assert result["results"][0]["encoding"] == "lvq8"
 
 

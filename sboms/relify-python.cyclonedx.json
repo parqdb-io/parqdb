@@ -18690,6 +18690,7 @@
     },
     {
       "dependsOn": [
+        "pkg:cargo/num-traits@0.2.19",
         "pkg:cargo/parallite@0.1.0-rc.2",
         "pkg:cargo/relify-kernels@0.1.0-rc.2",
         "pkg:cargo/thiserror@2.0.19"
@@ -18709,6 +18710,7 @@
         "pkg:cargo/futures@0.3.33",
         "pkg:cargo/hashlink@0.11.1",
         "pkg:cargo/humantime@2.4.0",
+        "pkg:cargo/libc@0.2.189",
         "pkg:cargo/object_store@0.13.2",
         "pkg:cargo/parallite@0.1.0-rc.2",
         "pkg:cargo/parquet@58.4.0",
@@ -20209,7 +20211,7 @@
     "properties": [
       {
         "name": "relify:cargo-lock-sha256",
-        "value": "1a89cec291fea029bed712e5e666ab697492c3ecebe66a2df88065ec889e4fbf"
+        "value": "993130f7939e63e20dec99166caab186ba696c36a55e32d72b83e5c7849e4fc6"
       }
     ]
   },

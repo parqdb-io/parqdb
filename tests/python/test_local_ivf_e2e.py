@@ -250,6 +250,38 @@ def test_local_lvq_build_and_search(tmp_path: Path) -> None:
         assert "HashJoinExec" in session.explain(payload_query)
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Direct I/O requires Linux")
+def test_local_lvq_search_with_direct_io(tmp_path: Path) -> None:
+    source = tmp_path / "documents.parquet"
+    write_documents(source, 32)
+    config = (
+        relify.SessionConfig()
+        .set("relify.parquet.index_io", "direct")
+        .set("relify.parquet.page_cache.capacity", str(8 * 1024 * 1024))
+    )
+    session = relify.connect(tmp_path / "relify-data", config=config)
+    documents = register_source(session, source, "documents")
+    documents.create_index(
+        "documents_lvq8",
+        column="embedding",
+        key=["document_id"],
+        config=relify.IVF(nlist=2, encoding="lvq8"),
+        wait_timeout=WAIT,
+    )
+    query = (
+        documents.search([10.0, *([0.0] * 31)], index="documents_lvq8")
+        .nprobes(2)
+        .select(["document_id"])
+        .limit(1)
+    )
+
+    assert session.to_arrow(query)["document_id"].to_pylist() == ["c"]
+    cold = session.parquet_page_cache_stats()
+    assert cold.admissions > 0
+    assert session.to_arrow(query)["document_id"].to_pylist() == ["c"]
+    assert session.parquet_page_cache_stats().hits > cold.hits
+
+
 def test_ivf_centroids_float64_and_cosine_end_to_end(tmp_path: Path) -> None:
     source = tmp_path / "cosine.parquet"
     vector = pa.list_(pa.field("element", pa.float64(), nullable=False))
