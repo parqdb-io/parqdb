@@ -5,10 +5,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import parqdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-import relify
 from _support import (
     WAIT,
     load_metadata_file,
@@ -64,14 +64,14 @@ def test_local_build_publish_and_search(tmp_path: Path) -> None:
     source = tmp_path / "documents.parquet"
     write_documents(source)
 
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     documents = register_source(session, source, "documents")
     documents.create_index(
         "documents_embedding",
         column="embedding",
         key=["document_id"],
-        config=relify.IVF(nlist=2),
-        writer_options=relify.WriteOptions(
+        config=parqdb.IVF(nlist=2),
+        writer_options=parqdb.WriteOptions(
             max_row_group_rows=2,
             write_batch_rows=1,
             partitions=2,
@@ -168,9 +168,9 @@ def test_local_build_publish_and_search(tmp_path: Path) -> None:
         assert "cid" not in parquet_file.schema_arrow.names
     assert load_metadata_file(entry.metadata_location) == thaw_json(entry.metadata)
 
-    reopened = relify.connect(tmp_path / "relify-data")
+    reopened = parqdb.connect(tmp_path / "parqdb-data")
     documents = reopened.table("documents")
-    assert isinstance(documents, relify.SourceTable)
+    assert isinstance(documents, parqdb.SourceTable)
     hits = reopened.to_arrow(documents.search([10.0, 0.0]).nprobes(1).limit(2))
     assert hits["document_id"].to_pylist() == ["c", "d"]
 
@@ -180,7 +180,7 @@ def test_local_lvq_build_and_search(tmp_path: Path) -> None:
     query_vector = [10.0, *([0.0] * (dimension - 1))]
     source = tmp_path / "documents.parquet"
     write_documents(source, dimension)
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     documents = register_source(session, source, "documents")
 
     for encoding in ["lvq4", "lvq8"]:
@@ -189,7 +189,7 @@ def test_local_lvq_build_and_search(tmp_path: Path) -> None:
             name,
             column="embedding",
             key=["document_id"],
-            config=relify.IVF(nlist=2, encoding=encoding),
+            config=parqdb.IVF(nlist=2, encoding=encoding),
             wait_timeout=WAIT,
         )
         snapshot = load_table_index(session, documents, name).metadata["snapshots"][0]
@@ -255,17 +255,17 @@ def test_local_lvq_search_with_direct_io(tmp_path: Path) -> None:
     source = tmp_path / "documents.parquet"
     write_documents(source, 32)
     config = (
-        relify.SessionConfig()
-        .set("relify.parquet.index_io", "direct")
-        .set("relify.parquet.page_cache.capacity", str(8 * 1024 * 1024))
+        parqdb.SessionConfig()
+        .set("parqdb.parquet.index_io", "direct")
+        .set("parqdb.parquet.page_cache.capacity", str(8 * 1024 * 1024))
     )
-    session = relify.connect(tmp_path / "relify-data", config=config)
+    session = parqdb.connect(tmp_path / "parqdb-data", config=config)
     documents = register_source(session, source, "documents")
     documents.create_index(
         "documents_lvq8",
         column="embedding",
         key=["document_id"],
-        config=relify.IVF(nlist=2, encoding="lvq8"),
+        config=parqdb.IVF(nlist=2, encoding="lvq8"),
         wait_timeout=WAIT,
     )
     query = (
@@ -298,7 +298,7 @@ def test_ivf_centroids_float64_and_cosine_end_to_end(tmp_path: Path) -> None:
         ),
     )
     pq.write_table(table, source)
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     documents = register_source(session, source, "documents")
 
     cosine_snapshots = []
@@ -308,7 +308,7 @@ def test_ivf_centroids_float64_and_cosine_end_to_end(tmp_path: Path) -> None:
             name,
             column="embedding",
             key=["document_id"],
-            config=relify.IVF(nlist=1, encoding=encoding, metric="cosine"),
+            config=parqdb.IVF(nlist=1, encoding=encoding, metric="cosine"),
             wait_timeout=WAIT,
         )
         snapshot = load_table_index(session, documents, name).metadata["snapshots"][0]
@@ -348,7 +348,7 @@ def test_ivf_centroids_float64_and_cosine_end_to_end(tmp_path: Path) -> None:
         "l2_source",
         column="embedding",
         key=["document_id"],
-        config=relify.IVF(nlist=1, metric="l2_squared"),
+        config=parqdb.IVF(nlist=1, metric="l2_squared"),
         wait_timeout=WAIT,
     )
     l2_snapshot = load_table_index(session, documents, "l2_source").metadata[
@@ -364,7 +364,7 @@ def test_ivf_centroids_float64_and_cosine_end_to_end(tmp_path: Path) -> None:
     assert l2_hits["document_id"].to_pylist() == ["x", "diagonal", "y"]
     assert l2_hits["_distance"].to_pylist() == pytest.approx([0.0, 2.0, 13.0])
 
-    with pytest.raises(relify.InvalidArgumentError, match="non-zero norm"):
+    with pytest.raises(parqdb.InvalidArgumentError, match="non-zero norm"):
         session.to_arrow(documents.search([0.0, 0.0], index="cosine_source"))
 
 
@@ -386,15 +386,15 @@ def test_cosine_build_rejects_zero_source_vectors(tmp_path: Path) -> None:
         ),
         source,
     )
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     documents = register_source(session, source, "documents")
 
-    with pytest.raises(relify.InvalidSchemaError, match="non-zero norm"):
+    with pytest.raises(parqdb.InvalidSchemaError, match="non-zero norm"):
         documents.create_index(
             "cosine_index",
             column="embedding",
             key=["document_id"],
-            config=relify.IVF(nlist=1, metric="cosine"),
+            config=parqdb.IVF(nlist=1, metric="cosine"),
             wait_timeout=WAIT,
         )
 
@@ -404,29 +404,29 @@ def test_index_and_source_catalog_survive_python_process_restart(
 ) -> None:
     source_root = tmp_path / "documents"
     source = source_root / "*" / "data" / "*.parquet"
-    root = tmp_path / "relify-data"
+    root = tmp_path / "parqdb-data"
     write_partitioned_documents(source_root)
     build = """
-import relify
+import parqdb
 import sys
 
-session = relify.connect(sys.argv[1])
+session = parqdb.connect(sys.argv[1])
 session.register_parquet("documents", sys.argv[2])
 documents = session.table("documents")
 documents.create_index(
     "documents_embedding",
     column="embedding",
     key=["document_id"],
-    config=relify.IVF(nlist=2),
+    config=parqdb.IVF(nlist=2),
 )
 documents.wait_for_index("documents_embedding")
 """
     query = """
 import json
-import relify
+import parqdb
 import sys
 
-session = relify.connect(sys.argv[1])
+session = parqdb.connect(sys.argv[1])
 documents = session.table("documents")
 query = (
     documents.search([10.0, 0.0])
@@ -491,13 +491,13 @@ def test_composite_keys_are_stored_directly_in_postings(tmp_path: Path) -> None:
         ),
         source,
     )
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     documents = register_source(session, source, "documents")
     documents.create_index(
         "composite_index",
         column="embedding",
         key=["tenant", "document_id"],
-        config=relify.IVF(nlist=2),
+        config=parqdb.IVF(nlist=2),
         wait_timeout=WAIT,
     )
 
@@ -526,13 +526,13 @@ def test_composite_keys_are_stored_directly_in_postings(tmp_path: Path) -> None:
 def test_vectors_can_be_omitted_from_postings(tmp_path: Path) -> None:
     source = tmp_path / "documents.parquet"
     write_documents(source)
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     documents = register_source(session, source, "documents")
     documents.create_index(
         "compact_index",
         column="embedding",
         key=["document_id"],
-        config=relify.IVF(nlist=2, encoding="source"),
+        config=parqdb.IVF(nlist=2, encoding="source"),
         wait_timeout=WAIT,
     )
 
@@ -583,13 +583,13 @@ def test_gemm_build_and_simd_search_path(tmp_path: Path) -> None:
         ),
         source,
     )
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
     vectors.create_index(
         "gemm_index",
         column="embedding",
         key=["id"],
-        config=relify.IVF(nlist=16),
+        config=parqdb.IVF(nlist=16),
         wait_timeout=WAIT,
     )
 

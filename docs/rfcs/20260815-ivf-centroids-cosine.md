@@ -8,11 +8,11 @@ reusable object must therefore be the centroid relation, not another logical
 IVF index and not its postings.
 
 The current schema also supports only squared Euclidean distance and requires
-source vectors to be `list<float>`. This prevents Relify from indexing datasets
+source vectors to be `list<float>`. This prevents ParqDB from indexing datasets
 that store vectors as `list<double>`, including the Cohere datasets used by
 VectorDBBench. The `flat` postings encoding works around source access by
 copying full vectors into the index, which conflicts with the goal that source
-data remains authoritative and is not duplicated by Relify.
+data remains authoritative and is not duplicated by ParqDB.
 
 This RFC separates the reusable IVF structure from its vector encoding and
 adds cosine distance by mapping it to squared-L2 over normalized vectors.
@@ -101,7 +101,7 @@ includes the table UUID and snapshot ID. Parquet has no snapshot identity: its
 canonical URI is treated as the state key, and the user must keep the resolved
 files unchanged. Replacing files or changing the files matched by a URI pattern
 requires registering the changed data under a new URI before building another
-index. Relify does not compute a Parquet file-manifest fingerprint in this RFC.
+index. ParqDB does not compute a Parquet file-manifest fingerprint in this RFC.
 
 The Parquet rule is deliberately literal:
 
@@ -299,7 +299,7 @@ training, assignment, encoding, routing, or source scoring. A zero-norm vector
 is invalid. An index build fails if any indexed source vector has zero norm; a
 query fails if its query vector has zero norm.
 
-Relify reuses squared-L2 execution over normalized vectors:
+ParqDB reuses squared-L2 execution over normalized vectors:
 
 ```text
 cosine_distance(q, x) = squared_l2(normalize(q), normalize(x)) / 2
@@ -368,14 +368,14 @@ be resolved after Top-K. Both retain the exact source-state requirement.
 
 ## 8. Public API
 
-Relify keeps one index-construction entry point:
+ParqDB keeps one index-construction entry point:
 
 ```python
 documents.create_index(
     "documents_lvq8",
     column="embedding",
     key=["document_id"],
-    config=relify.IVF(nlist=8192, encoding="lvq8", metric="cosine"),
+    config=parqdb.IVF(nlist=8192, encoding="lvq8", metric="cosine"),
 )
 ```
 
@@ -419,7 +419,7 @@ a new centroid fingerprint. Refresh builds or reuses the matching new centroid
 artifact, builds the requested representation, and commits a new logical index
 snapshot. It does not mutate the previous centroid artifact.
 
-For Parquet, Relify cannot detect replacement at the same URI. The user must
+For Parquet, ParqDB cannot detect replacement at the same URI. The user must
 publish changed source data under a new URI before rebuilding. Reusing centroids
 after changing the files behind its Parquet URI violates the source contract.
 For example, refreshing `s3://bucket/documents/v1/` without modifying that
@@ -452,7 +452,7 @@ branches:
 - metrics are `l2_squared` and `cosine`.
 
 Implementations reject old IVF metadata with an error that instructs the user
-to rebuild the index. Relify has not published a stable index-format release,
+to rebuild the index. ParqDB has not published a stable index-format release,
 so retaining read and write paths for the experimental schemas would impose
 more complexity than the migration is worth.
 

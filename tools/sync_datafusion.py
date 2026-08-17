@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Synchronize Relify's embedded DataFusion Python bindings.
+"""Synchronize ParqDB's embedded DataFusion Python bindings.
 
 The generated Rust crate and Python package are committed to the repository so
-building Relify never depends on an available network connection. Do not edit
+building ParqDB never depends on an available network connection. Do not edit
 those generated files directly; update this script or the upstream version and
 run it again.
 """
@@ -23,7 +23,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 VENDOR_DIR = ROOT / "vendor" / "datafusion-python"
-PYTHON_DIR = ROOT / "python" / "relify" / "datafusion"
+PYTHON_DIR = ROOT / "python" / "parqdb" / "datafusion"
 
 CRATE_URL = "https://crates.io/api/v1/crates/datafusion-python/{version}/download"
 CRATE_JSON_URL = "https://crates.io/api/v1/crates/datafusion-python/{version}"
@@ -37,7 +37,7 @@ RUST_INITIALIZER = """/// Low-level DataFusion internal package.
 fn _internal(py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {"""
 EMBEDDED_RUST_INITIALIZER = """/// Initialize the low-level bindings in an embedding Python module.
 ///
-/// Relify calls this function to install the complete DataFusion Python API in
+/// ParqDB calls this function to install the complete DataFusion Python API in
 /// the same extension module as its Rust-owned `SessionContext`.
 pub fn init_internal_module(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {"""
 RUST_WRAPPER_ANCHOR = """#[cfg(feature = "substrait")]
@@ -58,7 +58,7 @@ RUST_IMPORT_DOC_REWRITES = (
     (
         "/// Get the Python formatter from the datafusion.dataframe_formatter module",
         "/// Get the Python formatter from the "
-        "relify.datafusion.dataframe_formatter module",
+        "parqdb.datafusion.dataframe_formatter module",
     ),
 )
 
@@ -83,7 +83,7 @@ from . import _internal as _internal
 def download(url: str) -> tuple[bytes, str]:
     request = urllib.request.Request(
         url,
-        headers={"User-Agent": "relify-datafusion-sync"},
+        headers={"User-Agent": "parqdb-datafusion-sync"},
     )
     for attempt in range(3):
         try:
@@ -163,7 +163,7 @@ def rewrite_rust_imports(crate_root: Path) -> None:
         source = path.read_text()
         original_source = source
         source, count = RUST_DATAFUSION_IMPORT.subn(
-            r"\g<prefix>relify.datafusion",
+            r"\g<prefix>parqdb.datafusion",
             source,
         )
         replacements += count
@@ -191,19 +191,19 @@ def rewrite_python_imports(package_root: Path, version: str) -> None:
     import_patterns = (
         (
             re.compile(r"^(\s*)from datafusion(?=\.|\s)", re.MULTILINE),
-            r"\1from relify.datafusion",
+            r"\1from parqdb.datafusion",
         ),
         (
             re.compile(r"^(\s*)import datafusion(?=\.|\s)", re.MULTILINE),
-            r"\1import relify.datafusion",
+            r"\1import parqdb.datafusion",
         ),
     )
     for path in sorted(package_root.rglob("*.py")):
         source = path.read_text()
         for pattern, replacement in import_patterns:
             source = pattern.sub(replacement, source)
-        source = source.replace("from datafusion", "from relify.datafusion")
-        source = source.replace("import datafusion", "import relify.datafusion")
+        source = source.replace("from datafusion", "from parqdb.datafusion")
+        source = source.replace("import datafusion", "import parqdb.datafusion")
         path.write_text(source)
 
     init_py = package_root / "__init__.py"
@@ -247,7 +247,7 @@ def synchronize(
     vendor_dir: Path = VENDOR_DIR,
     python_dir: Path = PYTHON_DIR,
 ) -> None:
-    with tempfile.TemporaryDirectory(prefix="relify-datafusion-") as temp_name:
+    with tempfile.TemporaryDirectory(prefix="parqdb-datafusion-") as temp_name:
         temp = Path(temp_name)
 
         crate_contents, crate_digest = crate_archive(version)
@@ -279,13 +279,13 @@ def synchronize(
             'patch = "export init_internal_module and relocate runtime imports"\n'
         )
         (vendor_dir / "UPSTREAM.toml").write_text(manifest)
-        (vendor_dir / "RELIFY_PATCH.md").write_text(
-            "# Relify patch\n\n"
+        (vendor_dir / "PARQDB_PATCH.md").write_text(
+            "# ParqDB patch\n\n"
             "The vendored crate exposes its private `_internal` module "
             "initializer as `init_internal_module` and redirects runtime imports "
-            "from `datafusion.*` to `relify.datafusion.*`. Relify "
+            "from `datafusion.*` to `parqdb.datafusion.*`. ParqDB "
             "uses the initializer to install the complete binding surface inside "
-            "`relify._native`, ensuring that Python and Rust share one "
+            "`parqdb._native`, ensuring that Python and Rust share one "
             "`SessionContext` implementation.\n\n"
             "## Upgrade\n\n"
             "1. Update the DataFusion version pins in the workspace manifest.\n"
@@ -315,7 +315,7 @@ def directory_manifest(root: Path) -> dict[str, str]:
 
 
 def check_synchronized(version: str) -> None:
-    with tempfile.TemporaryDirectory(prefix="relify-datafusion-check-") as temp_name:
+    with tempfile.TemporaryDirectory(prefix="parqdb-datafusion-check-") as temp_name:
         generated = Path(temp_name)
         generated_vendor = generated / "vendor"
         generated_python = generated / "python"

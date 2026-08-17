@@ -5,15 +5,15 @@
 
 ## Context
 
-Relify currently declares support for CPython 3.12 only and produces a
+ParqDB currently declares support for CPython 3.12 only and produces a
 CPython-minor-specific native wheel. That range is too narrow for a library
 intended to integrate with existing lakehouse environments. Building a separate
 66 MB wheel for every Python minor also multiplies build, upload, verification,
 and retention costs without changing the Rust implementation.
 
 The native module uses PyO3 0.28. The vendored DataFusion Python crate already
-defines an `abi3` feature based on `pyo3/abi3-py310`, although Relify currently
-disables that crate's default features. The Relify Python sources otherwise
+defines an `abi3` feature based on `pyo3/abi3-py310`, although ParqDB currently
+disables that crate's default features. The ParqDB Python sources otherwise
 have a Python 3.11 baseline except for two PEP 695 type-alias declarations that
 require Python 3.12.
 
@@ -23,13 +23,13 @@ outside the initial compatibility range.
 
 ## Proposed Decision
 
-Relify 0.1 targets standard CPython 3.11, 3.12, 3.13, and 3.14 builds:
+ParqDB 0.1 targets standard CPython 3.11, 3.12, 3.13, and 3.14 builds:
 
 ```toml
 requires-python = ">=3.11,<3.15"
 ```
 
-Relify will enable the PyO3 and vendored DataFusion ABI3 features and publish
+ParqDB will enable the PyO3 and vendored DataFusion ABI3 features and publish
 one ABI3 wheel per supported platform and architecture. The expected wheel
 interpreter and ABI tag is `cp310-abi3`, inherited from DataFusion's minimum
 stable ABI. The `cp310` wheel tag does not declare Python 3.10 product support;

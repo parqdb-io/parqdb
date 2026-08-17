@@ -35,7 +35,7 @@ def main() -> None:
     repository = args.repository.resolve()
     wheel = args.wheel.resolve()
     verify_wheel(repository, wheel)
-    with TemporaryDirectory(prefix="relify-release-") as directory:
+    with TemporaryDirectory(prefix="parqdb-release-") as directory:
         root = Path(directory)
         requirements = root / "requirements.txt"
         uv_environment = os.environ.copy()
@@ -63,7 +63,7 @@ def main() -> None:
         python_versions = args.python_versions or SUPPORTED_PYTHONS
         for python_version in python_versions:
             with TemporaryDirectory(
-                prefix=f"relify-python-{python_version}-"
+                prefix=f"parqdb-python-{python_version}-"
             ) as environment_directory:
                 environment = Path(environment_directory) / "venv"
                 subprocess.run(
@@ -80,7 +80,7 @@ def main() -> None:
                 python = environment / (
                     "Scripts/python.exe" if os.name == "nt" else "bin/python"
                 )
-                requirement = "relify[iceberg] @ " + wheel.as_uri()
+                requirement = "parqdb[iceberg] @ " + wheel.as_uri()
                 subprocess.run(
                     [
                         "uv",

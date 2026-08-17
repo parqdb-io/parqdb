@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import timedelta
 from pathlib import Path
 
+import parqdb
 import pytest
-import relify
 from _support import (
     WAIT,
     build_index,
@@ -19,18 +19,18 @@ from _support import (
 def test_published_index_cannot_be_created_again(tmp_path: Path) -> None:
     source = tmp_path / "vectors.parquet"
     write_vectors(source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
     build_index(vectors)
 
-    with pytest.raises(relify.AlreadyExistsError, match="index already exists"):
+    with pytest.raises(parqdb.AlreadyExistsError, match="index already exists"):
         build_index(vectors)
 
 
 def test_wait_validation_and_missing_index_errors(tmp_path: Path) -> None:
     source = tmp_path / "vectors.parquet"
     write_vectors(source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
 
     with pytest.raises(ValueError, match="wait_timeout must be positive"):
@@ -38,16 +38,16 @@ def test_wait_validation_and_missing_index_errors(tmp_path: Path) -> None:
             "vectors_embedding",
             column="embedding",
             key=["id"],
-            config=relify.IVF(nlist=1),
+            config=parqdb.IVF(nlist=1),
             wait_timeout=timedelta(0),
         )
     assert vectors.list_indexes() == []
 
     with pytest.raises(ValueError, match="timeout must be positive"):
         vectors.wait_for_index("missing", timeout=timedelta(0))
-    with pytest.raises(relify.IndexNotFoundError, match="index not found"):
+    with pytest.raises(parqdb.IndexNotFoundError, match="index not found"):
         vectors.wait_for_index("missing", timeout=timedelta(seconds=1))
-    with pytest.raises(relify.IndexNotFoundError, match="index not found"):
+    with pytest.raises(parqdb.IndexNotFoundError, match="index not found"):
         vectors.index_status("missing")
 
 
@@ -58,13 +58,13 @@ def test_invalid_index_names_fail_as_invalid_arguments(
 ) -> None:
     source = tmp_path / "vectors.parquet"
     write_vectors(source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
 
-    with pytest.raises(relify.InvalidArgumentError, match="index name"):
+    with pytest.raises(parqdb.InvalidArgumentError, match="index name"):
         build_index(vectors, name)
 
-    with pytest.raises(relify.InvalidArgumentError, match="index name"):
+    with pytest.raises(parqdb.InvalidArgumentError, match="index name"):
         vectors.index_status(name)
     assert vectors.list_indexes() == []
 
@@ -86,19 +86,19 @@ def test_invalid_build_requests_fail_before_training(
 ) -> None:
     source = tmp_path / "vectors.parquet"
     write_vectors(source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
 
-    with pytest.raises(relify.InvalidArgumentError, match=message):
+    with pytest.raises(parqdb.InvalidArgumentError, match=message):
         vectors.create_index(
             "vectors_embedding",
             column=column,
             key=key,
-            config=relify.IVF(nlist=1),
+            config=parqdb.IVF(nlist=1),
             wait_timeout=WAIT,
         )
 
-    with pytest.raises(relify.IndexNotFoundError):
+    with pytest.raises(parqdb.IndexNotFoundError):
         vectors.index_status("vectors_embedding")
     assert vectors.list_indexes() == []
 
@@ -106,10 +106,10 @@ def test_invalid_build_requests_fail_before_training(
 def test_create_index_rejects_unsupported_python_objects(tmp_path: Path) -> None:
     source = tmp_path / "vectors.parquet"
     write_vectors(source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
 
-    with pytest.raises(TypeError, match=r"relify\.IVF"):
+    with pytest.raises(TypeError, match=r"parqdb\.IVF"):
         vectors.create_index(
             "vectors_embedding",
             column="embedding",
@@ -122,10 +122,10 @@ def test_create_index_rejects_unsupported_python_objects(tmp_path: Path) -> None
 def test_failed_build_can_be_retried_under_the_same_name(tmp_path: Path) -> None:
     source = tmp_path / "vectors.parquet"
     write_vectors(source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
 
-    with pytest.raises(relify.InvalidSchemaError, match="key column not found"):
+    with pytest.raises(parqdb.InvalidSchemaError, match="key column not found"):
         build_index(vectors, key=["missing"])
     assert vectors.index_status("vectors_embedding").state == "failed"
 
@@ -139,10 +139,10 @@ def test_catalog_publication_supersedes_an_unpublished_failure(
 ) -> None:
     source = tmp_path / "vectors.parquet"
     write_vectors(source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
 
-    with pytest.raises(relify.InvalidSchemaError):
+    with pytest.raises(parqdb.InvalidSchemaError):
         build_index(vectors, "failed_embedding", key=["missing"])
     assert vectors.index_status("failed_embedding").state == "failed"
 

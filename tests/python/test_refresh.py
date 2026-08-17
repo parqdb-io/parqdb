@@ -4,8 +4,8 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any, cast
 
+import parqdb
 import pytest
-import relify
 from _support import WAIT, build_index, load_table_index, register_source, write_vectors
 
 
@@ -14,7 +14,7 @@ def test_refresh_reuses_ivf_centroids_for_the_same_immutable_source(
 ) -> None:
     source = tmp_path / "vectors.parquet"
     write_vectors(source, [0, 1, 2], [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]])
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
     build_index(vectors, nlist=2)
     before = load_table_index(session, vectors, "vectors_embedding")
@@ -65,13 +65,13 @@ def test_refresh_can_change_ivf_configuration(tmp_path: Path) -> None:
         [0, 1, 2, 3],
         [[0.0, 0.0], [1.0, 0.0], [10.0, 0.0], [11.0, 0.0]],
     )
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
     build_index(vectors, nlist=2)
 
     vectors.refresh_index(
         "vectors_embedding",
-        config=relify.IVF(nlist=1, encoding="source"),
+        config=parqdb.IVF(nlist=1, encoding="source"),
     )
     vectors.wait_for_index("vectors_embedding", timeout=WAIT)
 
@@ -89,18 +89,18 @@ def test_refresh_can_change_ivf_configuration(tmp_path: Path) -> None:
 def test_refresh_rejects_changing_the_distance_metric(tmp_path: Path) -> None:
     source = tmp_path / "vectors.parquet"
     write_vectors(source, [0, 1], [[1.0, 0.0], [0.0, 1.0]])
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
     build_index(vectors, nlist=1)
     before = load_table_index(session, vectors, "vectors_embedding")
 
     with pytest.raises(
-        relify.InvalidArgumentError,
+        parqdb.InvalidArgumentError,
         match="refresh cannot change the distance metric",
     ):
         vectors.refresh_index(
             "vectors_embedding",
-            config=relify.IVF(nlist=1, metric="cosine"),
+            config=parqdb.IVF(nlist=1, metric="cosine"),
             wait_timeout=WAIT,
         )
 
@@ -112,15 +112,15 @@ def test_refresh_rejects_changing_the_distance_metric(tmp_path: Path) -> None:
 def test_failed_refresh_preserves_the_published_snapshot(tmp_path: Path) -> None:
     source = tmp_path / "vectors.parquet"
     write_vectors(source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
     build_index(vectors, nlist=1)
     before = load_table_index(session, vectors, "vectors_embedding")
 
-    with pytest.raises(relify.RelifyError):
+    with pytest.raises(parqdb.ParqDBError):
         vectors.refresh_index(
             "vectors_embedding",
-            config=relify.IVF(nlist=3),
+            config=parqdb.IVF(nlist=3),
             wait_timeout=WAIT,
         )
 
@@ -135,9 +135,9 @@ def test_failed_refresh_preserves_the_published_snapshot(tmp_path: Path) -> None
         0
     ]
 
-    reopened = relify.connect(tmp_path / "relify-data")
+    reopened = parqdb.connect(tmp_path / "parqdb-data")
     reopened_vectors = reopened.table("vectors")
-    assert isinstance(reopened_vectors, relify.SourceTable)
+    assert isinstance(reopened_vectors, parqdb.SourceTable)
     reopened_vectors.refresh_index("vectors_embedding", wait_timeout=WAIT)
 
     refreshed = vectors.index_status("vectors_embedding")
@@ -151,24 +151,24 @@ def test_refresh_requires_an_index_for_the_bound_source(tmp_path: Path) -> None:
     second_source = tmp_path / "second.parquet"
     write_vectors(first_source, [0], [[0.0, 0.0]])
     write_vectors(second_source, [0], [[0.0, 0.0]])
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     first = register_source(session, first_source, "first")
     second = register_source(session, second_source, "second")
     build_index(first, nlist=1)
 
-    with pytest.raises(relify.IndexNotFoundError):
+    with pytest.raises(parqdb.IndexNotFoundError):
         second.refresh_index("vectors_embedding")
-    with pytest.raises(relify.IndexNotFoundError):
+    with pytest.raises(parqdb.IndexNotFoundError):
         first.refresh_index("missing")
 
 
 def test_refresh_validates_config_and_timeout(tmp_path: Path) -> None:
     source = tmp_path / "vectors.parquet"
     write_vectors(source, [0], [[0.0, 0.0]])
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
 
-    with pytest.raises(TypeError, match=r"relify\.IVF"):
+    with pytest.raises(TypeError, match=r"parqdb\.IVF"):
         vectors.refresh_index("missing", config=cast(Any, object()))
     with pytest.raises(ValueError, match="wait_timeout must be positive"):
         vectors.refresh_index("missing", wait_timeout=timedelta(0))

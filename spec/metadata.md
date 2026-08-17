@@ -1,8 +1,8 @@
-# Relify Index Metadata Spec
+# ParqDB Index Metadata Spec
 
 ## Overview
 
-A Relify catalog identifier points to the current metadata file for one logical
+A ParqDB catalog identifier points to the current metadata file for one logical
 index. Metadata files are immutable, self-contained JSON documents. The
 catalog identifier is not stored in metadata.
 
@@ -11,7 +11,7 @@ Metadata storage follows the model used by
 [views](https://iceberg.apache.org/view-spec/#overview): object state is stored
 in immutable metadata files and a catalog atomically tracks the current file.
 
-Relify metadata describes the logical index. It does not replace or copy the
+ParqDB metadata describes the logical index. It does not replace or copy the
 metadata of the source and index tables. An index snapshot binds one source
 table to the exact states of the tables that contain its index data. Each
 referenced table remains governed by its own relation profile.
@@ -124,8 +124,8 @@ Changing an identity field creates a new `index-uuid`. Changing a source table
 snapshot, family parameters, schema version, or physical index table creates a
 new snapshot of the existing index.
 
-An index snapshot is a Relify metadata object, not an Iceberg table snapshot.
-It may compose several independently committed table states. Relify
+An index snapshot is a ParqDB metadata object, not an Iceberg table snapshot.
+It may compose several independently committed table states. ParqDB
 metadata stores only the references needed to bind that composition; table
 schemas, partition specifications, manifests, data files, and table snapshot
 history remain in the referenced table's metadata.
@@ -227,7 +227,7 @@ catalog:
 {
   "format-version": 1,
   "index-uuid": "2f1c7f5e-3c43-4a44-8f2a-cf560c4db8d1",
-  "location": "s3://warehouse/relify/documents_embedding",
+  "location": "s3://warehouse/parqdb/documents_embedding",
   "last-updated-ms": 1750000000000,
   "last-sequence-number": 1,
   "current-snapshot-id": 701,
@@ -263,14 +263,14 @@ catalog:
         "posting_encoding": "source",
         "ivf_centroids_fingerprint": "73a6be1d-5c50-4f9f-a70b-035ca68b105d",
         "ivf_centroids_uuid": "fe985f6d-3592-4385-a1ca-71347057a210",
-        "ivf_centroids_metadata_location": "s3://warehouse/relify/centroid-artifacts/fe985f6d/v1.metadata.json"
+        "ivf_centroids_metadata_location": "s3://warehouse/parqdb/centroid-artifacts/fe985f6d/v1.metadata.json"
       },
       "index-relations": {
         "ivf_centroids": {
           "profile": "iceberg",
           "catalog": "lakehouse",
           "namespace": [
-            "relify"
+            "parqdb"
           ],
           "name": "documents_embedding_centroids",
           "table-uuid": "3a4b5c6d-7e8f-4901-a234-56789abcdef0",
@@ -280,7 +280,7 @@ catalog:
           "profile": "iceberg",
           "catalog": "lakehouse",
           "namespace": [
-            "relify"
+            "parqdb"
           ],
           "name": "documents_embedding",
           "table-uuid": "4b5c6d7e-8f90-4a12-b345-6789abcdef01",

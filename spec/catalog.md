@@ -1,15 +1,15 @@
-# Relify Catalog Spec
+# ParqDB Catalog Spec
 
 ## Overview
 
-A catalog maps an identifier to the current metadata location of one Relify
+A catalog maps an identifier to the current metadata location of one ParqDB
 index. It owns naming, discovery, registration, and metadata publication. It
 does not execute index queries.
 
 This spec defines operation semantics, not an API, SQL syntax, metastore
 schema, or network protocol.
 
-A Relify index catalog is supplied to a Relify operation at runtime. An index
+A ParqDB index catalog is supplied to a ParqDB operation at runtime. An index
 identifier uses the
 [Apache Iceberg `TableIdentifier` model](https://iceberg.apache.org/javadoc/latest/org/apache/iceberg/catalog/TableIdentifier.html):
 an ordered namespace and a name. Namespace segments and names are non-empty
@@ -74,8 +74,8 @@ snapshot, or retain the source or index tables referenced by that file.
 Relation profiles define the guarantees of those references.
 
 For Iceberg tables, a publisher first commits the required table snapshots,
-then creates a Relify index snapshot that references their exact table UUIDs
-and snapshot IDs, and finally commits the Relify metadata location. The Relify
+then creates a ParqDB index snapshot that references their exact table UUIDs
+and snapshot IDs, and finally commits the ParqDB metadata location. The ParqDB
 catalog commit and every Iceberg catalog commit remain independent publication
 operations.
 
@@ -93,7 +93,7 @@ Creating an index writes initial metadata with a new `index-uuid`, then
 registers it under an absent identifier. Registering an existing metadata file
 can recover catalog state without changing index identity.
 
-The runtime name of the Relify index catalog is not stored in metadata. Rename
+The runtime name of the ParqDB index catalog is not stored in metadata. Rename
 therefore leaves metadata, `index-uuid`, snapshots, and index data unchanged.
 
 `drop` removes catalog visibility but does not delete metadata or data.

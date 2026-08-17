@@ -33,8 +33,8 @@ def test_canonical_repository_links_are_checked_locally(tmp_path: Path) -> None:
     (tmp_path / "docs" / "target.md").write_text("# Existing\n", encoding="utf-8")
     (tmp_path / "asset.svg").write_text("<svg/>\n", encoding="utf-8")
     (tmp_path / "source.md").write_text(
-        "[doc](https://github.com/petrizhang/relify/blob/main/docs/target.md#existing)\n"
-        "![asset](https://raw.githubusercontent.com/petrizhang/relify/main/asset.svg)\n",
+        "[doc](https://github.com/parqdb-io/parqdb/blob/main/docs/target.md#existing)\n"
+        "![asset](https://raw.githubusercontent.com/parqdb-io/parqdb/main/asset.svg)\n",
         encoding="utf-8",
     )
 

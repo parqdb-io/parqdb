@@ -2,14 +2,14 @@
 
 ## Supported Versions
 
-Relify has not published a stable release. Security fixes are applied to the
+ParqDB has not published a stable release. Security fixes are applied to the
 latest code on `main`. After releases begin, only the newest release line will
 receive fixes until a longer support policy is announced.
 
 ## Reporting a Vulnerability
 
 Please use
-[GitHub private vulnerability reporting](https://github.com/petrizhang/relify/security/advisories/new)
+[GitHub private vulnerability reporting](https://github.com/parqdb-io/parqdb/security/advisories/new)
 for suspected vulnerabilities. Include affected versions, impact, reproduction
 steps, and any known mitigations.
 

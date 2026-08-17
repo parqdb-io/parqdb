@@ -1,4 +1,4 @@
-"""Shared measurement and host utilities for Relify benchmarks."""
+"""Shared measurement and host utilities for ParqDB benchmarks."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 if TYPE_CHECKING:
-    import relify
+    import parqdb
 
 from benchmarks.tools.datasets import load_float_matrix
 from benchmarks.tools.resources import ResourceMonitor
@@ -35,7 +35,7 @@ class BuildProgressBar:
         self._last_phase: str | None = None
         self._rendered = False
 
-    def update(self, status: relify.IndexStatus) -> None:
+    def update(self, status: parqdb.IndexStatus) -> None:
         if not self._enabled:
             return
         phase = status.phase or status.state
@@ -220,7 +220,7 @@ def command_version(*command: str) -> str | None:
 
 
 def benchmark_revision() -> str | None:
-    override = os.environ.get("RELIFY_BENCHMARK_REVISION")
+    override = os.environ.get("PARQDB_BENCHMARK_REVISION")
     if override:
         return override
     return command_version("git", "rev-parse", "HEAD")

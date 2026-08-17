@@ -73,7 +73,7 @@ jobs:
       - name: Verify wheel on Python 3.11 through 3.14
         shell: bash
         run: |
-          wheel="$(find dist -maxdepth 1 -name 'relify-*.whl' -print -quit)"
+          wheel="$(find dist -maxdepth 1 -name 'parqdb-*.whl' -print -quit)"
           test -n "$wheel"
           uv run --no-sync python tools/verify_release.py "$wheel"
 
@@ -81,7 +81,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wheel-${{ matrix.platform }}
-          path: dist/relify-*.whl
+          path: dist/parqdb-*.whl
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
@@ -93,7 +93,7 @@ jobs:
     timeout-minutes: 15
     environment:
       name: pypi
-      url: https://pypi.org/p/relify
+      url: https://pypi.org/p/parqdb
     permissions:
       actions: read
       id-token: write
@@ -109,7 +109,7 @@ jobs:
       - name: Verify release bundle
         shell: bash
         run: |
-          mapfile -t wheels < <(find dist -maxdepth 1 -type f -name 'relify-*.whl' | sort)
+          mapfile -t wheels < <(find dist -maxdepth 1 -type f -name 'parqdb-*.whl' | sort)
           test "${#wheels[@]}" -eq 2
           sha256sum "${wheels[@]}" > SHA256SUMS
 
@@ -118,7 +118,7 @@ jobs:
         with:
           name: release-${{ github.ref_name }}
           path: |
-            dist/relify-*.whl
+            dist/parqdb-*.whl
             SHA256SUMS
           if-no-files-found: error
           retention-days: 30

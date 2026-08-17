@@ -1,7 +1,7 @@
 # Managed by `make test-s3`. These credentials are local test fixtures.
 [s3]
-uri = "s3://relify-tests"
+uri = "s3://parqdb-tests"
 endpoint = "http://127.0.0.1:9000"
-access_key = "relify"
-secret_key = "relify-secret"
+access_key = "parqdb"
+secret_key = "parqdb-secret"
 region = "us-east-1"

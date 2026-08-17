@@ -7,13 +7,13 @@ use arrow::pyarrow::PyArrowType;
 use datafusion_python::context::PySessionContext;
 use datafusion_python::context::{PyRuntimeEnvBuilder, PySessionConfig};
 use datafusion_python::dataframe::PyDataFrame;
-use pyo3::prelude::*;
-use relify_local::{
+use parqdb_local::{
     DistanceMetric, IndexBuildState, IvfConfig, LocalSession, LocalSessionOptions,
     ParquetWriterOptions, PersistentParquetOptions, PostingEncoding, SearchRequest,
-    relify_session_config,
+    parqdb_session_config,
 };
-use relify_meta::RelationReference;
+use parqdb_meta::RelationReference;
+use pyo3::prelude::*;
 use tokio::runtime::Runtime;
 
 use crate::errors::{InvalidArgumentError, core_error, runtime_error};
@@ -148,7 +148,7 @@ impl PyNativeSession {
         config: Option<PySessionConfig>,
         runtime: Option<PyRuntimeEnvBuilder>,
     ) -> PyResult<Self> {
-        let config = config.map_or_else(relify_session_config, |config| config.config);
+        let config = config.map_or_else(parqdb_session_config, |config| config.config);
         let options = match runtime {
             Some(runtime) => LocalSessionOptions::new(config, runtime.builder),
             None => LocalSessionOptions::automatic(config),
@@ -307,7 +307,7 @@ impl PyNativeSession {
         namespace: Vec<String>,
         name: String,
     ) -> PyResult<Option<String>> {
-        let identifier = relify_catalog::TableIdentifier::new(catalog, namespace, name)
+        let identifier = parqdb_catalog::TableIdentifier::new(catalog, namespace, name)
             .map_err(|error| core_error(&error.into()))?;
         self.session
             .persistent_table_source_by_identifier(identifier)
@@ -932,7 +932,7 @@ impl PyNativeSession {
 
 #[pyfunction(name = "_new_session_config")]
 fn new_session_config() -> PySessionConfig {
-    relify_session_config().into()
+    parqdb_session_config().into()
 }
 
 fn parse_relation_reference(value: &str) -> PyResult<RelationReference> {

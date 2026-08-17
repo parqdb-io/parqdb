@@ -1,12 +1,12 @@
 # Benchmarks
 
-Relify has two benchmark entry points:
+ParqDB has two benchmark entry points:
 
 - `python -m benchmarks.build` builds and persists an IVF index.
 - `python -m benchmarks.query` measures Recall@K and query latency against an
   existing index.
 
-The benchmark runs Relify with LVQ8 by default and also supports `lvq4` and
+The benchmark runs ParqDB with LVQ8 by default and also supports `lvq4` and
 `flat`. The standalone Faiss runner uses IVF-SQ8 by default and also supports
 `sq4` and `flat`.
 
@@ -18,7 +18,7 @@ verifies its SHA-256, and converts it to Parquet in bounded batches:
 
 ```bash
 uv run --no-sync python -m benchmarks.tools.prepare_gist \
-  --root /data/relify-benchmarks
+  --root /data/parqdb-benchmarks
 ```
 
 The prepared directory contains one million 960-dimensional base vectors, 1,000
@@ -31,7 +31,7 @@ with `benchmarks.tools.merge_results`.
 ## SIFT1B
 
 The standard BigANN files are already available in many ANN benchmark
-environments. Relify's preparation command reads the compact `uint8` base and
+environments. ParqDB's preparation command reads the compact `uint8` base and
 query `bvecs` files directly; it does not use a converted `fvecs` copy. It
 writes a normal Parquet source table with `id: INT64` and
 `embedding: FixedSizeList<FLOAT, 128>`, plus an `fbin` query matrix and
@@ -42,7 +42,7 @@ uv run --group benchmark --no-sync python -m benchmarks.tools.prepare_sift1b \
   --base /home/share/vector_data/sift1b/sift1b_base.bvecs \
   --queries /home/share/vector_data/sift1b/sift1b_query.bvecs \
   --ground-truth /home/share/vector_data/sift1b/sift1b_groundtruth.ivecs \
-  --output /storage_ssd/relify-benchmarks/datasets/sift1b \
+  --output /storage_ssd/parqdb-benchmarks/datasets/sift1b \
   --workers 32
 ```
 
@@ -120,7 +120,7 @@ upstream dataset solely to create a disjoint query set.
 
 Wikipedia remains a manual dataset because the benchmark intentionally reads the
 upstream Parquet files without rewriting them. Prepare the pinned upstream
-directory and the GT file published with the Relify benchmark release, then set:
+directory and the GT file published with the ParqDB benchmark release, then set:
 
 ```bash
 SOURCE=/data/wikipedia/data
@@ -146,7 +146,7 @@ checksum and does not rewrite the source data.
 ## Build Wikipedia
 
 Run each implementation in a fresh environment limited to **32 vCPU and 128
-GiB**. Both read the same original Parquet columns. The default compares Relify
+GiB**. Both read the same original Parquet columns. The default compares ParqDB
 LVQ8 with Faiss IVF-SQ8. Both use `nlist=8192`. Each implementation draws a
 seeded bounded sample of up to 256 training vectors per centroid.
 Input inspection and training-sample materialization are recorded as preparation
@@ -166,7 +166,7 @@ uv run --no-sync python -m benchmarks.build \
   --threads 32 \
   --index-root "$INDEX_ROOT" \
   --rebuild \
-  --output "$RESULT_ROOT/build-relify.json"
+  --output "$RESULT_ROOT/build-parqdb.json"
 ```
 
 Run the Faiss baseline with the same source and workload arguments using
@@ -179,7 +179,7 @@ Merge the independently executed results only after both runs complete:
 
 ```bash
 python -m benchmarks.tools.merge_results \
-  "$RESULT_ROOT/build-relify.json" \
+  "$RESULT_ROOT/build-parqdb.json" \
   "$RESULT_ROOT/build-faiss.json" \
   --output "$RESULT_ROOT/build-comparison.json"
 ```
@@ -216,7 +216,7 @@ uv run --no-sync python -m benchmarks.query \
   --warmup-queries 5 \
   --threads 32 \
   --index-root "$INDEX_ROOT" \
-  --output "$RESULT_ROOT/query-relify.json"
+  --output "$RESULT_ROOT/query-parqdb.json"
 ```
 
 Run the Faiss baseline with the same query arguments using
@@ -231,7 +231,7 @@ benchmark revisions, or common workload parameters.
 ## Constrained Memory
 
 The same persisted indexes may also be queried in an environment limited to **1
-vCPU and 2 GiB** to characterize storage-backed execution. Relify reads its
+vCPU and 2 GiB** to characterize storage-backed execution. ParqDB reads its
 Parquet index through its bounded decompressed Page cache; Faiss opens the
 standard persisted index with read-only mmap. Queries run once in source order
 without actively evicting the cache, so frequently accessed index partitions

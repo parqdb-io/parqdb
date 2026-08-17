@@ -13,14 +13,14 @@ pytestmark = pytest.mark.requires("hdfs")
 def test_hdfs_warehouse_contract(hdfs: HdfsConfig) -> None:
     environment = os.environ.copy()
     if hdfs.uri is not None:
-        environment["RELIFY_TEST_HDFS_URI"] = hdfs.uri
+        environment["PARQDB_TEST_HDFS_URI"] = hdfs.uri
     subprocess.run(
         [
             "cargo",
             "test",
             "--locked",
             "-p",
-            "relify-storage",
+            "parqdb-storage",
             "--features",
             "hdfs-integration",
             "--test",

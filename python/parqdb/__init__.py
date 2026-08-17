@@ -1,0 +1,85 @@
+from importlib.metadata import version as _package_version
+
+from . import _native as _native
+from . import datafusion as datafusion
+from . import datasets as datasets
+from ._native import (
+    AlreadyExistsError,
+    AmbiguousIndexError,
+    BackendError,
+    BuildAlreadyRunningError,
+    CatalogError,
+    IndexNotFoundError,
+    InvalidArgumentError,
+    InvalidMetadataError,
+    InvalidSchemaError,
+    ParqDBError,
+    QueryQueueFullError,
+    QueryQueueTimeoutError,
+    StorageError,
+)
+from .api import (
+    IVF,
+    AsyncSession,
+    AsyncSourceTable,
+    IndexInfo,
+    IndexStatus,
+    Maintenance,
+    MaintenanceObject,
+    ParquetPageCacheStats,
+    Session,
+    SessionConfig,
+    SourceTable,
+    Table,
+    TableIdentifier,
+    VectorQuery,
+    WriteOptions,
+    connect,
+    connect_async,
+)
+from .errors import (
+    ServiceUnavailableError,
+    StreamExecutionError,
+    UnsupportedOperationError,
+)
+
+__version__ = _package_version("parqdb")
+
+__all__ = [
+    "IVF",
+    "AlreadyExistsError",
+    "AmbiguousIndexError",
+    "AsyncSession",
+    "AsyncSourceTable",
+    "BackendError",
+    "BuildAlreadyRunningError",
+    "CatalogError",
+    "IndexInfo",
+    "IndexNotFoundError",
+    "IndexStatus",
+    "InvalidArgumentError",
+    "InvalidMetadataError",
+    "InvalidSchemaError",
+    "Maintenance",
+    "MaintenanceObject",
+    "ParqDBError",
+    "ParquetPageCacheStats",
+    "QueryQueueFullError",
+    "QueryQueueTimeoutError",
+    "ServiceUnavailableError",
+    "Session",
+    "SessionConfig",
+    "SourceTable",
+    "StorageError",
+    "StreamExecutionError",
+    "Table",
+    "TableIdentifier",
+    "UnsupportedOperationError",
+    "VectorQuery",
+    "WriteOptions",
+    "__version__",
+    "connect",
+    "connect_async",
+    "datafusion",
+    "datasets",
+]

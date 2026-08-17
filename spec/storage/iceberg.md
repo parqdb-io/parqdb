@@ -4,17 +4,17 @@
 
 This profile represents source and index tables as Apache Iceberg tables.
 An Iceberg catalog resolves table metadata, and a host engine reads the
-resolved tables and executes queries. Relify does not implement an Iceberg
+resolved tables and executes queries. ParqDB does not implement an Iceberg
 table reader.
 
-The Relify index catalog tracks index metadata. Iceberg catalogs independently
+The ParqDB index catalog tracks index metadata. Iceberg catalogs independently
 resolve the data tables referenced by an index snapshot. At runtime, each
 Iceberg catalog is registered under the logical name stored in its relation
 references.
 
 ## Type System
 
-Iceberg table schemas use Relify's canonical Iceberg types directly. The
+Iceberg table schemas use ParqDB's canonical Iceberg types directly. The
 reader verifies type, nullability, and collection-element requirements through
 the host engine.
 
@@ -44,7 +44,7 @@ uses `catalog` unchanged to select its runtime catalog registration. A host
 engine used by that reader must expose the same catalog under the same name.
 
 `table-uuid` is the lowercase textual Iceberg table UUID. `snapshot-id` is
-the exact table snapshot used by the Relify index snapshot.
+the exact table snapshot used by the ParqDB index snapshot.
 
 The resolution context for this profile is a registry from logical catalog
 names to Iceberg catalog implementations. A reader resolves each reference
@@ -67,15 +67,15 @@ the logical index identity.
 ## Publication and Consistency
 
 The writer completes and validates all referenced snapshots before committing
-new Relify metadata. The metadata commit is the publication point.
+new ParqDB metadata. The metadata commit is the publication point.
 
-No transaction is required across the source table, index tables, and Relify
+No transaction is required across the source table, index tables, and ParqDB
 catalog. Consistency comes from publishing immutable table UUID and snapshot
 references in one metadata file. Failed commits may leave orphan metadata or
 Iceberg snapshots.
 
 Iceberg remains authoritative for each referenced table's UUID, schema,
-partition specification, snapshots, manifests, and files. Relify metadata does
+partition specification, snapshots, manifests, and files. ParqDB metadata does
 not duplicate those fields; it records only the exact relation references that
 compose one logical index snapshot.
 

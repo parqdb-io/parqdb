@@ -1,5 +1,5 @@
 [package]
-name = "relify-python"
+name = "parqdb-python"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -20,12 +20,12 @@ datafusion-python.workspace = true
 futures.workspace = true
 pyo3 = { workspace = true, features = ["abi3-py310", "extension-module"] }
 pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
-relify-catalog = { version = "0.1.0-rc.2", path = "../rust/relify-catalog" }
-relify-core = { version = "0.1.0-rc.2", path = "../rust/relify-core" }
-relify-index = { version = "0.1.0-rc.2", path = "../rust/relify-index" }
-relify-local = { version = "0.1.0-rc.2", path = "../rust/relify-local" }
-relify-meta = { version = "0.1.0-rc.2", path = "../rust/relify-meta" }
-relify-storage = { version = "0.1.0-rc.2", path = "../rust/relify-storage" }
+parqdb-catalog = { version = "0.2.0-rc.1", path = "../rust/parqdb-catalog" }
+parqdb-core = { version = "0.2.0-rc.1", path = "../rust/parqdb-core" }
+parqdb-index = { version = "0.2.0-rc.1", path = "../rust/parqdb-index" }
+parqdb-local = { version = "0.2.0-rc.1", path = "../rust/parqdb-local" }
+parqdb-meta = { version = "0.2.0-rc.1", path = "../rust/parqdb-meta" }
+parqdb-storage = { version = "0.2.0-rc.1", path = "../rust/parqdb-storage" }
 serde_json.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

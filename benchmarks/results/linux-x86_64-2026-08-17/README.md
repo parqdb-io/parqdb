@@ -16,7 +16,7 @@ Recall@10 under the stated resource limit, not a complete recall curve.
 - Query resources: one physical core with two SMT threads, 4 GiB memory
 - Query I/O: Linux Direct I/O for local index data, 640 MiB decompressed Page Cache
 - Queries: 100 distinct BigANN queries after 10 warmup queries
-- Software: Python 3.12.2, PyArrow 25.0.0, Relify 0.1.0rc2
+- Software: Python 3.12.2, PyArrow 25.0.0, ParqDB 0.1.0rc2
 
 The index files were evicted from the host page cache before starting the query
 container. Parquet metadata remained on the buffered path; index data ranges

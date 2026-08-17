@@ -3,15 +3,15 @@
   "benchmark_revision": "0355b29dd4df0511050a851e7f54899e25363b9b",
   "dataset": {
     "dimension": 128,
-    "ground_truth": "/storage_ssd/relify-benchmarks/datasets/sift1b/gt1000.bin",
+    "ground_truth": "/storage_ssd/parqdb-benchmarks/datasets/sift1b/gt1000.bin",
     "id_column": "id",
     "kind": "sift1b-bigann",
     "queries": 100,
-    "query_file": "/storage_ssd/relify-benchmarks/datasets/sift1b/queries.fbin",
+    "query_file": "/storage_ssd/parqdb-benchmarks/datasets/sift1b/queries.fbin",
     "query_source_id_range": null,
     "revision": null,
     "rows": 1000000000,
-    "source_parquet": "/storage_ssd/relify-benchmarks/datasets/sift1b/source",
+    "source_parquet": "/storage_ssd/parqdb-benchmarks/datasets/sift1b/source",
     "source_parquet_bytes": 124888648321,
     "split": null,
     "vector_column": "embedding"
@@ -26,9 +26,9 @@
       32
     ],
     "encoding": "lvq8",
-    "implementation": "relify",
+    "implementation": "parqdb",
     "index_io": "direct",
-    "index_root": "/storage_ssd/relify-benchmarks/indexes/sift1b-lvq8-65536",
+    "index_root": "/storage_ssd/parqdb-benchmarks/indexes/sift1b-lvq8-65536",
     "k": 10,
     "max_temp_directory_size_bytes": null,
     "nlist": 65536,
@@ -50,7 +50,7 @@
     {
       "cache_kind": "bounded decompressed Parquet page cache",
       "encoding": "lvq8",
-      "implementation": "relify",
+      "implementation": "parqdb",
       "index_bytes": 142760085867,
       "page_cache": {
         "admissions": 46304,
@@ -219,7 +219,7 @@
     "platform": "Linux-6.8.0-114-generic-x86_64-with-glibc2.36",
     "pyarrow": "25.0.0",
     "python": "3.12.2",
-    "relify": "0.1.0rc2",
+    "parqdb": "0.1.0rc2",
     "rustc": null
   }
 }

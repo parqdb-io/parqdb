@@ -11,8 +11,8 @@ from typing import Any
 
 WIDTH = 1280
 HEIGHT = 720
-COLORS = {"relify": "#0f766e", "faiss": "#f59e0b"}
-LABELS = {"relify": "Relify", "faiss": "Faiss"}
+COLORS = {"parqdb": "#0f766e", "faiss": "#f59e0b"}
+LABELS = {"parqdb": "ParqDB", "faiss": "Faiss"}
 
 
 def implementation_label(implementation: str, result: dict[str, Any]) -> str:
@@ -60,8 +60,8 @@ def validate(run: dict[str, Any], k_values: tuple[int, ...]) -> None:
     if run.get("schema_version") != 1:
         raise ValueError("benchmark result schema_version must be 1")
     implementations = results_by_implementation(run)
-    if not {"relify", "faiss"} <= set(implementations):
-        raise ValueError("search chart requires Relify and Faiss results")
+    if not {"parqdb", "faiss"} <= set(implementations):
+        raise ValueError("search chart requires ParqDB and Faiss results")
     if not set(implementations) <= set(COLORS):
         raise ValueError("search chart contains an unsupported implementation")
     expected_nprobes = None

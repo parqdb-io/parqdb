@@ -39,7 +39,7 @@
         28.701374790864065
       ],
       "cache_kind": "decoded Arrow buffers",
-      "implementation": "relify",
+      "implementation": "parqdb",
       "index_load_seconds": 0.11313779093325138,
       "index_resident_bytes": 558384768,
       "kmeans_max_iterations": 20,
@@ -7066,7 +7066,7 @@
     "processor": "arm",
     "pyarrow": "25.0.0",
     "python": "3.12.13",
-    "relify": "0.1.0",
+    "parqdb": "0.1.0",
     "rustc": "rustc 1.96.0 (ac68faa20 2026-05-25)",
     "total_memory_bytes": 17179869184
   }

@@ -1,6 +1,6 @@
 # Format Version 1 Fixtures
 
-These non-normative fixtures exercise Relify metadata and IVF schema version
+These non-normative fixtures exercise ParqDB metadata and IVF schema version
 1. The specification remains authoritative.
 
 `valid/` contains a source-encoded IVF fixture. It includes logical index
@@ -29,7 +29,7 @@ invariant it violates. Harnesses should consume the manifest instead of
 maintaining a separate list.
 
 The DuckDB interoperability test reproduces source-encoded query results
-without importing Relify:
+without importing ParqDB:
 
 ```bash
 make test-interop

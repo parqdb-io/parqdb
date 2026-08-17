@@ -1,5 +1,5 @@
 name: Bug report
-description: Report reproducible incorrect behavior in Relify.
+description: Report reproducible incorrect behavior in ParqDB.
 title: "[Bug] "
 labels:
   - bug
@@ -7,12 +7,12 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for helping improve Relify. Please provide a minimal reproduction whenever possible.
+        Thanks for helping improve ParqDB. Please provide a minimal reproduction whenever possible.
 
   - type: input
     id: version
     attributes:
-      label: Relify version
+      label: ParqDB version
       description: Package version, commit SHA, or branch.
       placeholder: Package version or commit SHA
     validations:

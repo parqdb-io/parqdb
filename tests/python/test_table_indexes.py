@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import parqdb
 import pytest
-import relify
 from _support import build_index, load_table_index, register_source, write_vectors
 
 
@@ -12,7 +12,7 @@ def test_table_lists_only_indexes_for_its_exact_source(tmp_path: Path) -> None:
     second_source = tmp_path / "second.parquet"
     write_vectors(first_source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
     write_vectors(second_source, [2, 3], [[2.0, 0.0], [3.0, 0.0]])
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     first = register_source(session, first_source, "first")
     second = register_source(session, second_source, "second")
     build_index(first, "first_embedding", nlist=1)
@@ -22,7 +22,7 @@ def test_table_lists_only_indexes_for_its_exact_source(tmp_path: Path) -> None:
     ][0]
 
     assert first.list_indexes() == [
-        relify.IndexInfo(
+        parqdb.IndexInfo(
             name="first_embedding",
             column="embedding",
             family="ivf",
@@ -45,13 +45,13 @@ def test_table_drop_is_source_scoped_and_preserves_catalog_consistency(
     second_source = tmp_path / "second.parquet"
     write_vectors(first_source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
     write_vectors(second_source, [2, 3], [[2.0, 0.0], [3.0, 0.0]])
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     first = register_source(session, first_source, "first")
     second = register_source(session, second_source, "second")
     build_index(first, "first_embedding", nlist=1)
     build_index(second, "second_embedding", nlist=1)
 
-    with pytest.raises(relify.IndexNotFoundError):
+    with pytest.raises(parqdb.IndexNotFoundError):
         first.drop_index("second_embedding")
     assert [index.name for index in first.list_indexes()] == ["first_embedding"]
     assert [index.name for index in second.list_indexes()] == ["second_embedding"]
@@ -67,7 +67,7 @@ def test_tables_can_publish_the_same_logical_index_name(tmp_path: Path) -> None:
     second_source = tmp_path / "second.parquet"
     write_vectors(first_source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
     write_vectors(second_source, [2, 3], [[20.0, 0.0], [30.0, 0.0]])
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     first = register_source(session, first_source, "first")
     second = register_source(session, second_source, "second")
 

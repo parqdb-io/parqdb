@@ -9,7 +9,7 @@ import numpy as np
 from benchmarks.tools.harness import SearchFunction
 
 if TYPE_CHECKING:
-    import relify
+    import parqdb
 
 
 def _datafusion_memory_size(size_bytes: int) -> str:
@@ -17,8 +17,8 @@ def _datafusion_memory_size(size_bytes: int) -> str:
     return f"{kibibytes}K"
 
 
-def configure_relify_session(
-    session: relify.Session,
+def configure_parqdb_session(
+    session: parqdb.Session,
     threads: int,
     *,
     max_temp_directory_size_bytes: int | None = None,
@@ -33,9 +33,9 @@ def configure_relify_session(
         ).collect()
 
 
-def relify_search(
-    session: relify.Session,
-    table: relify.SourceTable,
+def parqdb_search(
+    session: parqdb.Session,
+    table: parqdb.SourceTable,
     *,
     id_column: str = "id",
     vector_column: str = "embedding",

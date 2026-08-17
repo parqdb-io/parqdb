@@ -3,13 +3,13 @@
 ## Overview
 
 This profile represents source and index tables as Parquet files resolved by
-the host engine. Relify does not parse Parquet.
+the host engine. ParqDB does not parse Parquet.
 
 The resolution context for this profile supplies host-engine access to the URI
 schemes used by the selected index snapshot.
 
 Parquet provides no table UUID, snapshot identity, or portable multi-file
-transaction. Relify metadata that references Parquet is still published through
+transaction. ParqDB metadata that references Parquet is still published through
 a catalog. The publisher is responsible for source consistency, complete
 table contents, and reader-writer coordination.
 

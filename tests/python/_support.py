@@ -7,10 +7,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
+import parqdb
 import pyarrow as pa
 import pyarrow.parquet as pq
-import relify
-from relify.runtime.catalog import CatalogEntry
+from parqdb.runtime.catalog import CatalogEntry
 
 WAIT = timedelta(seconds=30)
 
@@ -47,39 +47,39 @@ def write_vectors(
 
 
 def build_index(
-    table: relify.SourceTable,
+    table: parqdb.SourceTable,
     name: str = "vectors_embedding",
     *,
     column: str = "embedding",
     key: list[str] | None = None,
     nlist: int = 2,
     encoding: str = "source",
-    writer_options: relify.WriteOptions | None = None,
+    writer_options: parqdb.WriteOptions | None = None,
 ) -> None:
     table.create_index(
         name,
         column=column,
         key=key if key is not None else ["id"],
-        config=relify.IVF(nlist=nlist, encoding=encoding),
+        config=parqdb.IVF(nlist=nlist, encoding=encoding),
         writer_options=writer_options,
         wait_timeout=WAIT,
     )
 
 
 def register_source(
-    session: relify.Session,
+    session: parqdb.Session,
     source: str | Path,
     name: str = "vectors",
-) -> relify.SourceTable:
+) -> parqdb.SourceTable:
     session.register_parquet(name, source)
     table = session.table(name)
-    assert isinstance(table, relify.SourceTable)
+    assert isinstance(table, parqdb.SourceTable)
     return table
 
 
 def load_table_index(
-    session: relify.Session,
-    table: relify.SourceTable,
+    session: parqdb.Session,
+    table: parqdb.SourceTable,
     index: str,
 ) -> CatalogEntry:
     return session._indexes.load(
@@ -89,8 +89,8 @@ def load_table_index(
 
 
 def register_table_index(
-    session: relify.Session,
-    table: relify.SourceTable,
+    session: parqdb.Session,
+    table: parqdb.SourceTable,
     index: str,
     metadata_location: str,
 ) -> None:
@@ -102,8 +102,8 @@ def register_table_index(
 
 
 def drop_table_index_entry(
-    session: relify.Session,
-    table: relify.SourceTable,
+    session: parqdb.Session,
+    table: parqdb.SourceTable,
     index: str,
 ) -> None:
     session._indexes.drop(

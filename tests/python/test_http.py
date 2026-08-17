@@ -8,20 +8,20 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import parqdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-import relify
 import uvicorn
 from _support import WAIT, build_index, register_source, write_vectors
-from relify.facade import AsyncSession
-from relify.runtime.service import SessionService
-from relify.server.app import create_http_app, create_http_app_for_service
-from relify.server.openapi import openapi_document
-from relify.server.source_policy import SourceUriPolicy
-from relify.transport.base import InProcessTransport
-from relify.transport.http import HttpTransport
-from relify.transport.models import (
+from parqdb.facade import AsyncSession
+from parqdb.runtime.service import SessionService
+from parqdb.server.app import create_http_app, create_http_app_for_service
+from parqdb.server.openapi import openapi_document
+from parqdb.server.source_policy import SourceUriPolicy
+from parqdb.transport.base import InProcessTransport
+from parqdb.transport.http import HttpTransport
+from parqdb.transport.models import (
     decode_identifier_path,
     encode_identifier_path,
     identifier_from_json,
@@ -56,14 +56,14 @@ class _FailingBatchStream:
 
 
 class _FailingService(SessionService):
-    async def stream(self, query: relify.VectorQuery | str) -> _FailingBatchStream:
+    async def stream(self, query: parqdb.VectorQuery | str) -> _FailingBatchStream:
         return _FailingBatchStream()
 
 
 def test_http_wire_models_round_trip_portable_values() -> None:
-    identifier = relify.TableIdentifier("catalog", ("space name", "a/b"), "x$y")
+    identifier = parqdb.TableIdentifier("catalog", ("space name", "a/b"), "x$y")
     path, delimiter = encode_identifier_path(identifier, delimiter="~")
-    query = relify.VectorQuery(
+    query = parqdb.VectorQuery(
         source=identifier,
         query=(1.0, 2.0),
         column="embedding",
@@ -83,16 +83,16 @@ def test_http_wire_models_round_trip_portable_values() -> None:
     assert identifier_from_json(identifier_to_json(identifier)) == identifier
     assert vector_query_from_json(vector_query_to_json(query)) == query
 
-    options = relify.WriteOptions(
+    options = parqdb.WriteOptions(
         partitions=2,
         compression="zstd(3)",
         target_file_size=1024,
         max_row_group_rows=64,
         write_batch_rows=32,
     )
-    config = relify.IVF(nlist=8, encoding="lvq4", metric="cosine")
-    status = relify.IndexStatus("building", 0.5, "posting", 1, 2, None, None)
-    info = relify.IndexInfo("embedding", "vector", "ivf", "cosine", {"nlist": "8"}, 3)
+    config = parqdb.IVF(nlist=8, encoding="lvq4", metric="cosine")
+    status = parqdb.IndexStatus("building", 0.5, "posting", 1, 2, None, None)
+    info = parqdb.IndexInfo("embedding", "vector", "ivf", "cosine", {"nlist": "8"}, 3)
     registration = registration_to_json(
         "documents",
         "/data/documents/*.parquet",
@@ -186,13 +186,13 @@ def test_http_wire_models_reject_invalid_queries(body: object) -> None:
 
 def test_http_transport_matches_embedded_query_surface(tmp_path: Path) -> None:
     source = tmp_path / "vectors.parquet"
-    root = tmp_path / "relify-data"
+    root = tmp_path / "parqdb-data"
     write_vectors(
         source,
         [0, 1, 2, 3],
         [[0.0, 0.0], [1.0, 0.0], [10.0, 0.0], [11.0, 0.0]],
     )
-    embedded = relify.connect(root)
+    embedded = parqdb.connect(root)
     vectors = register_source(embedded, source)
     build_index(vectors)
     expected = embedded.collect(vectors.search([0.0, 0.0]).limit(2))
@@ -210,9 +210,9 @@ def test_http_transport_matches_embedded_query_surface(tmp_path: Path) -> None:
         app = create_http_app_for_service(service)
         client = httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app),
-            base_url="http://relify.test/",
+            base_url="http://parqdb.test/",
         )
-        transport = await HttpTransport.open("http://relify.test", client=client)
+        transport = await HttpTransport.open("http://parqdb.test", client=client)
         session = AsyncSession(transport)
         try:
             identifiers = await session.list_tables()
@@ -233,10 +233,10 @@ def test_http_transport_matches_embedded_query_surface(tmp_path: Path) -> None:
             query = remote_vectors.search([0.0, 0.0]).limit(2)
             assert "ORDER BY" in await session.to_sql(query)
             assert "physical_plan" in await session.explain(query)
-            with pytest.raises(relify.UnsupportedOperationError):
+            with pytest.raises(parqdb.UnsupportedOperationError):
                 session.datafusion_context()
 
-            with pytest.raises(relify.InvalidArgumentError, match="read-only"):
+            with pytest.raises(parqdb.InvalidArgumentError, match="read-only"):
                 await session.sql("CREATE TABLE forbidden (value BIGINT)")
         finally:
             await session.close()
@@ -249,7 +249,7 @@ def test_http_transport_matches_embedded_query_surface(tmp_path: Path) -> None:
 @pytest.mark.parametrize("mode", ["embedded", "http"])
 def test_transport_lifecycle_conformance(tmp_path: Path, mode: str) -> None:
     source = tmp_path / "vectors.parquet"
-    root = tmp_path / "relify-data"
+    root = tmp_path / "parqdb-data"
     write_vectors(
         source,
         [0, 1, 2, 3],
@@ -275,20 +275,20 @@ def test_transport_lifecycle_conformance(tmp_path: Path, mode: str) -> None:
             )
             client = httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app),
-                base_url="http://relify.test/",
+                base_url="http://parqdb.test/",
             )
-            transport = await HttpTransport.open("http://relify.test", client=client)
+            transport = await HttpTransport.open("http://parqdb.test", client=client)
         session = AsyncSession(transport)
         try:
             source_schema = pq.read_schema(source)
             await session.register_parquet("vectors", source, schema=source_schema)
             vectors = await session.table("vectors")
-            with pytest.raises(relify.InvalidSchemaError, match="key column not found"):
+            with pytest.raises(parqdb.InvalidSchemaError, match="key column not found"):
                 await vectors.create_index(
                     "invalid_embedding",
                     column="embedding",
                     key=["missing"],
-                    config=relify.IVF(nlist=2),
+                    config=parqdb.IVF(nlist=2),
                     wait_timeout=WAIT,
                 )
             failed = await vectors.index_status("invalid_embedding")
@@ -298,7 +298,7 @@ def test_transport_lifecycle_conformance(tmp_path: Path, mode: str) -> None:
                 "vectors_embedding",
                 column="embedding",
                 key=["id"],
-                config=relify.IVF(nlist=2, encoding="lvq8"),
+                config=parqdb.IVF(nlist=2, encoding="lvq8"),
                 wait_timeout=WAIT,
             )
             status = await vectors.index_status("vectors_embedding")
@@ -313,7 +313,7 @@ def test_transport_lifecycle_conformance(tmp_path: Path, mode: str) -> None:
                 "vectors_embedding",
                 column="embedding",
                 key=["id"],
-                config=relify.IVF(nlist=1),
+                config=parqdb.IVF(nlist=1),
                 wait_timeout=WAIT,
             )
             assert [index.name for index in await other.list_indexes()] == [
@@ -321,10 +321,10 @@ def test_transport_lifecycle_conformance(tmp_path: Path, mode: str) -> None:
             ]
 
             published = status.current_snapshot_id
-            with pytest.raises(relify.RelifyError):
+            with pytest.raises(parqdb.ParqDBError):
                 await vectors.refresh_index(
                     "vectors_embedding",
-                    config=relify.IVF(nlist=8, encoding="lvq8"),
+                    config=parqdb.IVF(nlist=8, encoding="lvq8"),
                     wait_timeout=WAIT,
                 )
             failed_refresh = await vectors.index_status("vectors_embedding")
@@ -367,7 +367,7 @@ def test_http_server_denies_unconfigured_source_roots(tmp_path: Path) -> None:
 
     async def exercise() -> None:
         service = await SessionService.open(
-            tmp_path / "relify-data",
+            tmp_path / "parqdb-data",
             warehouse=None,
             storage_options=None,
             iceberg=None,
@@ -377,9 +377,9 @@ def test_http_server_denies_unconfigured_source_roots(tmp_path: Path) -> None:
         app = create_http_app_for_service(service)
         client = httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app),
-            base_url="http://relify.test/",
+            base_url="http://parqdb.test/",
         )
-        transport = await HttpTransport.open("http://relify.test", client=client)
+        transport = await HttpTransport.open("http://parqdb.test", client=client)
         session = AsyncSession(transport)
         try:
             with pytest.raises(PermissionError, match="allowed file roots"):
@@ -396,7 +396,7 @@ def test_http_server_denies_unconfigured_source_roots(tmp_path: Path) -> None:
 def test_http_server_validates_routes_and_publishes_openapi(tmp_path: Path) -> None:
     async def exercise() -> None:
         service = await SessionService.open(
-            tmp_path / "relify-data",
+            tmp_path / "parqdb-data",
             warehouse=None,
             storage_options=None,
             iceberg=None,
@@ -406,7 +406,7 @@ def test_http_server_validates_routes_and_publishes_openapi(tmp_path: Path) -> N
         app = create_http_app_for_service(service)
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app),
-            base_url="http://relify.test/",
+            base_url="http://parqdb.test/",
         ) as client:
             openapi = await client.get("openapi.json")
             assert openapi.status_code == 200
@@ -427,8 +427,8 @@ def test_http_server_validates_routes_and_publishes_openapi(tmp_path: Path) -> N
             ]
             assert set(vector_properties) == set(
                 vector_query_to_json(
-                    relify.VectorQuery(
-                        relify.TableIdentifier("c", (), "t"),
+                    parqdb.VectorQuery(
+                        parqdb.TableIdentifier("c", (), "t"),
                         (1.0,),
                     )
                 )
@@ -462,12 +462,12 @@ def test_http_client_classifies_failure_after_response_headers() -> None:
         app = create_http_app_for_service(service)
         client = httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
-            base_url="http://relify.test/",
+            base_url="http://parqdb.test/",
         )
-        transport = await HttpTransport.open("http://relify.test", client=client)
+        transport = await HttpTransport.open("http://parqdb.test", client=client)
         session = AsyncSession(transport)
         try:
-            with pytest.raises(relify.StreamExecutionError) as captured:
+            with pytest.raises(parqdb.StreamExecutionError) as captured:
                 await session.stream("SELECT 1")
             assert captured.value.request_id
         finally:
@@ -481,23 +481,23 @@ def test_public_http_connection_survives_restart_and_releases_cancelled_query(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "vectors.parquet"
-    root = tmp_path / "relify-data"
+    root = tmp_path / "parqdb-data"
     write_vectors(source, [1, 2], [[1.0, 0.0], [2.0, 0.0]])
-    embedded = relify.connect(root)
+    embedded = parqdb.connect(root)
     register_source(embedded, source)
     embedded.close()
     config = (
-        relify.SessionConfig()
-        .set("relify.execution.query_concurrency", "1")
-        .set("relify.execution.query_queue_capacity", "1")
-        .set("relify.execution.query_queue_timeout", "100ms")
+        parqdb.SessionConfig()
+        .set("parqdb.execution.query_concurrency", "1")
+        .set("parqdb.execution.query_queue_capacity", "1")
+        .set("parqdb.execution.query_queue_timeout", "100ms")
     )
 
     async def exercise() -> None:
         for verify_cancellation in (True, False):
             app = create_http_app(root, config=config)
             async with _serve(app) as url:
-                session = await relify.connect_async(url)
+                session = await parqdb.connect_async(url)
                 try:
                     assert (await session.sql("SELECT id FROM vectors ORDER BY id"))[
                         "id"
@@ -505,13 +505,13 @@ def test_public_http_connection_survives_restart_and_releases_cancelled_query(
                     assert await asyncio.to_thread(_sync_count, url) == 2
                     if verify_cancellation:
                         stream = await session.stream("SELECT * FROM range(1000000000)")
-                        native = app.state.relify_service.host._native
+                        native = app.state.parqdb_service.host._native
                         await _wait_for_admission(native, (1, 0))
                         queued = asyncio.create_task(session.sql("SELECT 1"))
                         await _wait_for_admission(native, (1, 1))
-                        with pytest.raises(relify.QueryQueueFullError):
+                        with pytest.raises(parqdb.QueryQueueFullError):
                             await session.sql("SELECT 2")
-                        with pytest.raises(relify.QueryQueueTimeoutError):
+                        with pytest.raises(parqdb.QueryQueueTimeoutError):
                             await queued
                         await _wait_for_admission(native, (1, 0))
                         await stream.aclose()
@@ -526,7 +526,7 @@ def test_public_http_connection_survives_restart_and_releases_cancelled_query(
 
 def test_http_lifecycle_survives_server_restart(tmp_path: Path) -> None:
     source = tmp_path / "vectors.parquet"
-    root = tmp_path / "relify-data"
+    root = tmp_path / "parqdb-data"
     write_vectors(source, [1, 2], [[1.0, 0.0], [2.0, 0.0]])
 
     async def exercise() -> None:
@@ -536,7 +536,7 @@ def test_http_lifecycle_survives_server_restart(tmp_path: Path) -> None:
                 allowed_source_prefixes=[tmp_path],
             )
             async with _serve(app) as url:
-                session = await relify.connect_async(url)
+                session = await parqdb.connect_async(url)
                 try:
                     if initialize:
                         await session.register_parquet("vectors", source)
@@ -545,7 +545,7 @@ def test_http_lifecycle_survives_server_restart(tmp_path: Path) -> None:
                             "vectors_embedding",
                             column="embedding",
                             key=["id"],
-                            config=relify.IVF(nlist=1),
+                            config=parqdb.IVF(nlist=1),
                             wait_timeout=WAIT,
                         )
                     vectors = await session.table("vectors")
@@ -563,9 +563,9 @@ def test_http_lifecycle_survives_server_restart(tmp_path: Path) -> None:
 
 def test_http_transport_reports_unavailable_server() -> None:
     async def exercise() -> None:
-        session = await relify.connect_async("http://127.0.0.1:1", timeout=0.1)
+        session = await parqdb.connect_async("http://127.0.0.1:1", timeout=0.1)
         try:
-            with pytest.raises(relify.ServiceUnavailableError):
+            with pytest.raises(parqdb.ServiceUnavailableError):
                 await session.sql("SELECT 1")
         finally:
             await session.close()
@@ -592,7 +592,7 @@ async def _serve(app: Any) -> AsyncIterator[str]:
                 await task
             await asyncio.sleep(0.01)
         else:
-            raise AssertionError("Relify test server did not start")
+            raise AssertionError("ParqDB test server did not start")
         yield f"http://127.0.0.1:{port}"
     finally:
         server.should_exit = True
@@ -611,11 +611,11 @@ async def _wait_for_admission(native: Any, expected: tuple[int, int]) -> None:
 
 
 def _sync_count(url: str) -> int:
-    with relify.connect(url) as session:
+    with parqdb.connect(url) as session:
         return session.sql("SELECT COUNT(*) AS count FROM vectors")["count"][0].as_py()
 
 
 def _open_and_close_sync_stream(url: str) -> None:
-    with relify.connect(url) as session:
+    with parqdb.connect(url) as session:
         reader = session.stream("SELECT * FROM range(1000000000)")
         reader.close()

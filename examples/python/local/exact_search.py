@@ -6,7 +6,7 @@ from examples.python._common import open_documents
 
 
 def main() -> None:
-    with TemporaryDirectory(prefix="relify-exact-") as workspace:
+    with TemporaryDirectory(prefix="parqdb-exact-") as workspace:
         session, documents, _ = open_documents(workspace)
 
         query = (

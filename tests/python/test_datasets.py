@@ -5,26 +5,26 @@ import sys
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+import parqdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-import relify
-from relify.datafusion import col, functions
+from parqdb.datafusion import col, functions
 
 REPOSITORY = Path(__file__).parents[2]
-PACKAGED_DATASETS = REPOSITORY / "python" / "relify" / "datasets"
+PACKAGED_DATASETS = REPOSITORY / "python" / "parqdb" / "datasets"
 
 
 def test_packaged_dataset_names_are_validated() -> None:
     with pytest.raises(TypeError, match="dataset name must be a string"):
-        relify.datasets.uri(42)  # type: ignore[arg-type]
+        parqdb.datasets.uri(42)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="available datasets"):
-        relify.datasets.uri("missing")
+        parqdb.datasets.uri("missing")
 
 
 @pytest.mark.parametrize("name", ["documents", "document_stats"])
 def test_packaged_dataset_uri_resolves_to_readable_parquet(name: str) -> None:
-    uri = relify.datasets.uri(name)
+    uri = parqdb.datasets.uri(name)
     parsed = urlsplit(uri)
     assert parsed.scheme == "file"
     path = Path(unquote(parsed.path))
@@ -51,15 +51,15 @@ def test_packaged_datasets_are_reproducible(tmp_path: Path) -> None:
 
 
 def test_packaged_datasets_support_the_readme_workflow(tmp_path: Path) -> None:
-    session = relify.connect(tmp_path / "relify-data")
-    session.register_parquet("documents", relify.datasets.uri("documents"))
+    session = parqdb.connect(tmp_path / "parqdb-data")
+    session.register_parquet("documents", parqdb.datasets.uri("documents"))
     documents = session.table("documents")
-    assert isinstance(documents, relify.SourceTable)
+    assert isinstance(documents, parqdb.SourceTable)
     documents.create_index(
         "documents_embedding",
         column="embedding",
         key=["document_id"],
-        config=relify.IVF(nlist=3),
+        config=parqdb.IVF(nlist=3),
     )
     documents.wait_for_index("documents_embedding")
 
@@ -78,7 +78,7 @@ def test_packaged_datasets_support_the_readme_workflow(tmp_path: Path) -> None:
     analysis = (
         context.table("vector_hits")
         .join(
-            context.read_parquet(relify.datasets.uri("document_stats")),
+            context.read_parquet(parqdb.datasets.uri("document_stats")),
             on="document_id",
         )
         .aggregate(

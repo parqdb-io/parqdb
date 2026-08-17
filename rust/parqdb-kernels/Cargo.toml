@@ -1,0 +1,20 @@
+[package]
+name = "parqdb-kernels"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Shared numerical kernels for ParqDB construction and query execution"
+repository.workspace = true
+publish = false
+
+[lib]
+name = "parqdb_kernels"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+matrixmultiply.workspace = true
+thiserror.workspace = true

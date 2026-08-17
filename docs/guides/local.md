@@ -1,6 +1,6 @@
 # Local DataFusion and Parquet
 
-The embedded runtime runs in the Python process and is the stable Relify 0.1
+The embedded runtime runs in the Python process and is the stable ParqDB 0.1
 path. It uses DataFusion for relational execution, native Rust code for index
 construction and distance kernels, SQLite for catalog state, and Parquet for
 the index relations.
@@ -11,7 +11,7 @@ applications that already expose Parquet data to an embedded query engine.
 ## Install
 
 ```bash
-python -m pip install relify
+python -m pip install parqdb
 ```
 
 See [getting started](../getting-started.md) for the supported Python and
@@ -22,9 +22,9 @@ platform matrix and a complete first query.
 The shortest configuration keeps the catalog and index data together:
 
 ```python
-import relify
+import parqdb
 
-session = relify.connect("./relify-data")
+session = parqdb.connect("./parqdb-data")
 ```
 
 The directory contains the SQLite catalog, immutable metadata documents, and
@@ -35,9 +35,9 @@ Store index relations on shared storage while keeping the local session state
 under one directory:
 
 ```python
-session = relify.connect(
-    "/var/lib/relify",
-    warehouse="s3://lakehouse-indexes/relify",
+session = parqdb.connect(
+    "/var/lib/parqdb",
+    warehouse="s3://lakehouse-indexes/parqdb",
     storage_options={"aws_region": "us-east-1"},
 )
 ```
@@ -58,7 +58,7 @@ documents = session.table("documents")
 ```
 
 The registration is durable. A new session opened on the same catalog can call
-`session.table("documents")` without registering it again. Relify stores the
+`session.table("documents")` without registering it again. ParqDB stores the
 location pattern rather than a one-time list of matching files.
 
 Use `session.deregister_table("documents")` before rebinding the same logical
@@ -73,7 +73,7 @@ documents.create_index(
     "documents_embedding",
     column="embedding",
     key=["document_id"],
-    config=relify.IVF(nlist=4096),
+    config=parqdb.IVF(nlist=4096),
 )
 documents.wait_for_index(
     "documents_embedding",
@@ -95,8 +95,8 @@ documents.create_index(
     "documents_embedding",
     column="embedding",
     key=["document_id"],
-    config=relify.IVF(nlist=4096, encoding="lvq8"),
-    writer_options=relify.WriteOptions(
+    config=parqdb.IVF(nlist=4096, encoding="lvq8"),
+    writer_options=parqdb.WriteOptions(
         compression="zstd(3)",
         target_file_size=512 * 1024 * 1024,
     ),
@@ -154,7 +154,7 @@ session.clear_parquet_page_cache()
 ```
 
 The cache is capacity-bounded and shared by Parquet index and source scans in
-the session. Configure it with `relify.parquet.page_cache.capacity`.
+the session. Configure it with `parqdb.parquet.page_cache.capacity`.
 
 ## Refresh and Remove
 

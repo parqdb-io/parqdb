@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import parqdb
 import pyarrow
-import relify
 from _support import (
     WAIT,
     drop_table_index_entry,
@@ -22,13 +22,13 @@ def test_python_api_build_search_and_compose_example(tmp_path: Path) -> None:
         [[0.0, 0.0], [1.0, 0.0], [10.0, 0.0], [11.0, 0.0]],
     )
 
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     documents = register_source(session, source, "documents")
     documents.create_index(
         "documents_embedding",
         column="embedding",
         key=["id"],
-        config=relify.IVF(nlist=2),
+        config=parqdb.IVF(nlist=2),
         wait_timeout=WAIT,
     )
 
@@ -71,7 +71,7 @@ def test_python_api_build_search_and_compose_example(tmp_path: Path) -> None:
     optimized = analysis.optimized_logical_plan().display_indent()
     assert "Aggregate:" in optimized
     assert "Inner Join" in optimized
-    assert "relify_squared_l2" in optimized
+    assert "parqdb_squared_l2" in optimized
 
     query = documents.search([0.0, 0.0]).limit(2).select(["id"])
     query_result = session.collect(query)
@@ -98,13 +98,13 @@ def test_python_api_build_search_and_compose_example(tmp_path: Path) -> None:
 def test_python_api_catalog_recovery_example(tmp_path: Path) -> None:
     source = tmp_path / "documents.parquet"
     write_vectors(source, [0], [[0.0, 0.0]])
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     documents = register_source(session, source, "documents")
     documents.create_index(
         "documents_embedding",
         column="embedding",
         key=["id"],
-        config=relify.IVF(nlist=1),
+        config=parqdb.IVF(nlist=1),
         wait_timeout=WAIT,
     )
 

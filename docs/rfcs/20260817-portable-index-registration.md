@@ -2,11 +2,11 @@
 
 ## Problem
 
-Relify metadata currently binds an index snapshot to physical source and index
+ParqDB metadata currently binds an index snapshot to physical source and index
 relation URIs. A copied index cannot be attached to a catalog at a new location
 without preserving the original paths or rewriting immutable metadata.
 
-Relify needs one explicit operation that registers an existing index without
+ParqDB needs one explicit operation that registers an existing index without
 training centroids, rebuilding postings, copying files, or rewriting metadata.
 The catalog should own the association between a registered source table and
 the index. Index metadata should describe only the index.
@@ -101,12 +101,12 @@ artifact root, index UUID, and status. Neither association nor physical
 location is duplicated in index metadata.
 
 Reusable centroid records remain catalog records. Their fingerprint identifies
-and validates the centroid artifact within Relify; it is not a source identity
+and validates the centroid artifact within ParqDB; it is not a source identity
 or a source-content check. Centroid reuse is scoped by the catalog's source
 table association so the same fingerprint is not used to infer that two source
 tables contain the same data.
 
-Relify does not add `register_existing_index` to the catalog. The existing
+ParqDB does not add `register_existing_index` to the catalog. The existing
 `IndexCatalog::register` already accepts loaded and validated metadata and
 atomically publishes the logical index mapping. Its registration input is
 extended with the source-table association and artifact root required by the
@@ -234,7 +234,7 @@ naming contract that publishers and recipients must coordinate.
 
 Registration is an explicit administrative operation. Content hashing adds
 cost and identity semantics that are not needed for the intended workflow.
-Relify deliberately checks only the referenced fields and `indexed-rows`.
+ParqDB deliberately checks only the referenced fields and `indexed-rows`.
 
 ### Copy the complete source schema into index metadata
 

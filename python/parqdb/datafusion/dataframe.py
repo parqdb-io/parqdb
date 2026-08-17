@@ -1,0 +1,1922 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+""":py:class:`DataFrame` — lazy, chainable query representation.
+
+A :py:class:`DataFrame` is a logical plan over one or more data sources.
+Methods that reshape the plan (:py:meth:`DataFrame.select`,
+:py:meth:`DataFrame.filter`, :py:meth:`DataFrame.aggregate`,
+:py:meth:`DataFrame.sort`, :py:meth:`DataFrame.join`,
+:py:meth:`DataFrame.limit`, the set-operation methods, ...) return a new
+:py:class:`DataFrame` and do no work until a terminal method such as
+:py:meth:`DataFrame.collect`, :py:meth:`DataFrame.to_pydict`,
+:py:meth:`DataFrame.show`, or one of the ``write_*`` methods is called.
+
+DataFrames are produced from a
+:py:class:`~datafusion.context.SessionContext`, typically via
+:py:meth:`~datafusion.context.SessionContext.sql`,
+:py:meth:`~datafusion.context.SessionContext.read_csv`,
+:py:meth:`~datafusion.context.SessionContext.read_parquet`, or
+:py:meth:`~datafusion.context.SessionContext.from_pydict`.
+
+Examples:
+    >>> ctx = dfn.SessionContext()
+    >>> df = ctx.from_pydict({"a": [1, 2, 3], "b": [10, 20, 30]})
+    >>> df.filter(col("a") > 1).select("b").to_pydict()
+    {'b': [20, 30]}
+
+See :ref:`user_guide_concepts` in the online documentation for a high-level
+overview of the execution model.
+"""
+
+from __future__ import annotations
+
+import warnings
+from collections.abc import AsyncIterator, Iterable, Iterator, Sequence
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Literal,
+    overload,
+)
+
+try:
+    from warnings import deprecated  # Python 3.13+
+except ImportError:
+    from typing_extensions import deprecated  # Python 3.12
+
+from parqdb.datafusion._internal import DataFrame as DataFrameInternal
+from parqdb.datafusion._internal import DataFrameWriteOptions as DataFrameWriteOptionsInternal
+from parqdb.datafusion._internal import InsertOp as InsertOpInternal
+from parqdb.datafusion._internal import ParquetColumnOptions as ParquetColumnOptionsInternal
+from parqdb.datafusion._internal import ParquetWriterOptions as ParquetWriterOptionsInternal
+from parqdb.datafusion.expr import (
+    Expr,
+    SortExpr,
+    SortKey,
+    _to_raw_expr,
+    ensure_expr,
+    ensure_expr_list,
+    expr_list_to_raw_expr_list,
+    sort_list_to_raw_sort_list,
+)
+from parqdb.datafusion.plan import ExecutionPlan, LogicalPlan
+from parqdb.datafusion.record_batch import RecordBatch, RecordBatchStream
+
+if TYPE_CHECKING:
+    import pathlib
+    from collections.abc import Callable
+
+    import pandas as pd
+    import polars as pl
+    import pyarrow as pa
+
+    from parqdb.datafusion.catalog import Table
+
+from enum import Enum
+
+
+class ExplainFormat(Enum):
+    """Output format for explain plans.
+
+    Controls how the query plan is rendered in :py:meth:`DataFrame.explain`.
+    """
+
+    INDENT = "indent"
+    """Default indented text format."""
+
+    TREE = "tree"
+    """Tree-style visual format with box-drawing characters."""
+
+    PGJSON = "pgjson"
+    """PostgreSQL-compatible JSON format for use with visualization tools."""
+
+    GRAPHVIZ = "graphviz"
+    """Graphviz DOT format for graph rendering."""
+
+
+# excerpt from deltalake
+# https://github.com/apache/datafusion-python/pull/981#discussion_r1905619163
+class Compression(Enum):
+    """Enum representing the available compression types for Parquet files."""
+
+    UNCOMPRESSED = "uncompressed"
+    SNAPPY = "snappy"
+    GZIP = "gzip"
+    BROTLI = "brotli"
+    LZ4 = "lz4"
+    # lzo is not implemented yet
+    # https://github.com/apache/arrow-rs/issues/6970
+    # LZO = "lzo"  # noqa: ERA001
+    ZSTD = "zstd"
+    LZ4_RAW = "lz4_raw"
+
+    @classmethod
+    def from_str(cls: type[Compression], value: str) -> Compression:
+        """Convert a string to a Compression enum value.
+
+        Args:
+            value: The string representation of the compression type.
+
+        Returns:
+            The Compression enum lowercase value.
+
+        Raises:
+            ValueError: If the string does not match any Compression enum value.
+        """
+        try:
+            return cls(value.lower())
+        except ValueError as err:
+            valid_values = str([item.value for item in Compression])
+            error_msg = f"""
+                {value} is not a valid Compression.
+                Valid values are: {valid_values}
+                """
+            raise ValueError(error_msg) from err
+
+    def get_default_level(self) -> int | None:
+        """Get the default compression level for the compression type.
+
+        Returns:
+            The default compression level for the compression type.
+        """
+        # GZIP, BROTLI default values from deltalake repo
+        # https://github.com/apache/datafusion-python/pull/981#discussion_r1905619163
+        # ZSTD default value from delta-rs
+        # https://github.com/apache/datafusion-python/pull/981#discussion_r1904789223
+        if self == Compression.GZIP:
+            return 6
+        if self == Compression.BROTLI:
+            return 1
+        if self == Compression.ZSTD:
+            return 4
+        return None
+
+
+class ParquetWriterOptions:
+    """Advanced parquet writer options.
+
+    Allows settings the writer options that apply to the entire file. Some options can
+    also be set on a column by column basis, with the field ``column_specific_options``
+    (see ``ParquetColumnOptions``).
+    """
+
+    def __init__(
+        self,
+        data_pagesize_limit: int = 1024 * 1024,
+        write_batch_size: int = 1024,
+        writer_version: str = "1.0",
+        skip_arrow_metadata: bool = False,
+        compression: str | None = "zstd(3)",
+        compression_level: int | None = None,
+        dictionary_enabled: bool | None = True,
+        dictionary_page_size_limit: int = 1024 * 1024,
+        statistics_enabled: str | None = "page",
+        max_row_group_size: int = 1024 * 1024,
+        created_by: str = "datafusion-python",
+        column_index_truncate_length: int | None = 64,
+        statistics_truncate_length: int | None = None,
+        data_page_row_count_limit: int = 20_000,
+        encoding: str | None = None,
+        bloom_filter_on_write: bool = False,
+        bloom_filter_fpp: float | None = None,
+        bloom_filter_ndv: int | None = None,
+        allow_single_file_parallelism: bool = True,
+        maximum_parallel_row_group_writers: int = 1,
+        maximum_buffered_record_batches_per_stream: int = 2,
+        column_specific_options: dict[str, ParquetColumnOptions] | None = None,
+    ) -> None:
+        """Initialize the ParquetWriterOptions.
+
+        Args:
+            data_pagesize_limit: Sets best effort maximum size of data page in bytes.
+            write_batch_size: Sets write_batch_size in bytes.
+            writer_version: Sets parquet writer version. Valid values are ``1.0`` and
+                ``2.0``.
+            skip_arrow_metadata: Skip encoding the embedded arrow metadata in the
+                KV_meta.
+            compression: Compression type to use. Default is ``zstd(3)``.
+                Available compression types are
+
+                - ``uncompressed``: No compression.
+                - ``snappy``: Snappy compression.
+                - ``gzip(n)``: Gzip compression with level n.
+                - ``brotli(n)``: Brotli compression with level n.
+                - ``lz4``: LZ4 compression.
+                - ``lz4_raw``: LZ4_RAW compression.
+                - ``zstd(n)``: Zstandard compression with level n.
+            compression_level: Compression level to set.
+            dictionary_enabled: Sets if dictionary encoding is enabled. If ``None``,
+                uses the default parquet writer setting.
+            dictionary_page_size_limit: Sets best effort maximum dictionary page size,
+                in bytes.
+            statistics_enabled: Sets if statistics are enabled for any column Valid
+                values are ``none``, ``chunk``, and ``page``. If ``None``, uses the
+                default parquet writer setting.
+            max_row_group_size: Target maximum number of rows in each row group
+                (defaults to 1M rows). Writing larger row groups requires more memory
+                to write, but can get better compression and be faster to read.
+            created_by: Sets "created by" property.
+            column_index_truncate_length: Sets column index truncate length.
+            statistics_truncate_length: Sets statistics truncate length. If ``None``,
+                uses the default parquet writer setting.
+            data_page_row_count_limit: Sets best effort maximum number of rows in a data
+                page.
+            encoding: Sets default encoding for any column. Valid values are ``plain``,
+                ``plain_dictionary``, ``rle``, ``bit_packed``, ``delta_binary_packed``,
+                ``delta_length_byte_array``, ``delta_byte_array``, ``rle_dictionary``,
+                and ``byte_stream_split``. If ``None``, uses the default parquet writer
+                setting.
+            bloom_filter_on_write: Write bloom filters for all columns when creating
+                parquet files.
+            bloom_filter_fpp: Sets bloom filter false positive probability. If ``None``,
+                uses the default parquet writer setting
+            bloom_filter_ndv: Sets bloom filter number of distinct values. If ``None``,
+                uses the default parquet writer setting.
+            allow_single_file_parallelism: Controls whether DataFusion will attempt to
+                speed up writing parquet files by serializing them in parallel. Each
+                column in each row group in each output file are serialized in parallel
+                leveraging a maximum possible core count of
+                ``n_files * n_row_groups * n_columns``.
+            maximum_parallel_row_group_writers: By default parallel parquet writer is
+                tuned for minimum memory usage in a streaming execution plan. You may
+                see a performance benefit when writing large parquet files by increasing
+                ``maximum_parallel_row_group_writers`` and
+                ``maximum_buffered_record_batches_per_stream`` if your system has idle
+                cores and can tolerate additional memory usage. Boosting these values is
+                likely worthwhile when writing out already in-memory data, such as from
+                a cached data frame.
+            maximum_buffered_record_batches_per_stream: See
+                ``maximum_parallel_row_group_writers``.
+            column_specific_options: Overrides options for specific columns. If a column
+                is not a part of this dictionary, it will use the parameters provided
+                here.
+        """
+        self.data_pagesize_limit = data_pagesize_limit
+        self.write_batch_size = write_batch_size
+        self.writer_version = writer_version
+        self.skip_arrow_metadata = skip_arrow_metadata
+        if compression_level is not None:
+            self.compression = f"{compression}({compression_level})"
+        else:
+            self.compression = compression
+        self.dictionary_enabled = dictionary_enabled
+        self.dictionary_page_size_limit = dictionary_page_size_limit
+        self.statistics_enabled = statistics_enabled
+        self.max_row_group_size = max_row_group_size
+        self.created_by = created_by
+        self.column_index_truncate_length = column_index_truncate_length
+        self.statistics_truncate_length = statistics_truncate_length
+        self.data_page_row_count_limit = data_page_row_count_limit
+        self.encoding = encoding
+        self.bloom_filter_on_write = bloom_filter_on_write
+        self.bloom_filter_fpp = bloom_filter_fpp
+        self.bloom_filter_ndv = bloom_filter_ndv
+        self.allow_single_file_parallelism = allow_single_file_parallelism
+        self.maximum_parallel_row_group_writers = maximum_parallel_row_group_writers
+        self.maximum_buffered_record_batches_per_stream = (
+            maximum_buffered_record_batches_per_stream
+        )
+        self.column_specific_options = column_specific_options
+
+
+class ParquetColumnOptions:
+    """Parquet options for individual columns.
+
+    Contains the available options that can be applied for an individual Parquet column,
+    replacing the global options in ``ParquetWriterOptions``.
+    """
+
+    def __init__(
+        self,
+        encoding: str | None = None,
+        dictionary_enabled: bool | None = None,
+        compression: str | None = None,
+        statistics_enabled: str | None = None,
+        bloom_filter_enabled: bool | None = None,
+        bloom_filter_fpp: float | None = None,
+        bloom_filter_ndv: int | None = None,
+    ) -> None:
+        """Initialize the ParquetColumnOptions.
+
+        Args:
+            encoding: Sets encoding for the column path. Valid values are: ``plain``,
+                ``plain_dictionary``, ``rle``, ``bit_packed``, ``delta_binary_packed``,
+                ``delta_length_byte_array``, ``delta_byte_array``, ``rle_dictionary``,
+                and ``byte_stream_split``. These values are not case-sensitive. If
+                ``None``, uses the default parquet options
+            dictionary_enabled: Sets if dictionary encoding is enabled for the column
+                path. If `None`, uses the default parquet options
+            compression: Sets default parquet compression codec for the column path.
+                Valid values are ``uncompressed``, ``snappy``, ``gzip(level)``, ``lzo``,
+                ``brotli(level)``, ``lz4``, ``zstd(level)``, and ``lz4_raw``. These
+                values are not case-sensitive. If ``None``, uses the default parquet
+                options.
+            statistics_enabled: Sets if statistics are enabled for the column Valid
+                values are: ``none``, ``chunk``, and ``page`` These values are not case
+                sensitive. If ``None``, uses the default parquet options.
+            bloom_filter_enabled: Sets if bloom filter is enabled for the column path.
+                If ``None``, uses the default parquet options.
+            bloom_filter_fpp: Sets bloom filter false positive probability for the
+                column path. If ``None``, uses the default parquet options.
+            bloom_filter_ndv: Sets bloom filter number of distinct values. If ``None``,
+                uses the default parquet options.
+        """
+        self.encoding = encoding
+        self.dictionary_enabled = dictionary_enabled
+        self.compression = compression
+        self.statistics_enabled = statistics_enabled
+        self.bloom_filter_enabled = bloom_filter_enabled
+        self.bloom_filter_fpp = bloom_filter_fpp
+        self.bloom_filter_ndv = bloom_filter_ndv
+
+
+class DataFrame:
+    """Two dimensional table representation of data.
+
+    DataFrame objects are iterable; iterating over a DataFrame yields
+    :class:`datafusion.RecordBatch` instances lazily.
+
+    See :ref:`user_guide_concepts` in the online documentation for more information.
+    """
+
+    def __init__(self, df: DataFrameInternal) -> None:
+        """This constructor is not to be used by the end user.
+
+        See :py:class:`~datafusion.context.SessionContext` for methods to
+        create a :py:class:`DataFrame`.
+        """
+        self.df = df
+
+    def into_view(self, temporary: bool = False) -> Table:
+        """Convert ``DataFrame`` into a :class:`~datafusion.Table`.
+
+        Examples:
+            >>> from parqdb.datafusion import SessionContext
+            >>> ctx = SessionContext()
+            >>> df = ctx.sql("SELECT 1 AS value")
+            >>> view = df.into_view()
+            >>> ctx.register_table("values_view", view)
+            >>> result = ctx.sql("SELECT value FROM values_view").collect()
+            >>> result[0].column("value").to_pylist()
+            [1]
+        """
+        from parqdb.datafusion.catalog import Table as _Table  # noqa: PLC0415
+
+        return _Table(self.df.into_view(temporary))
+
+    def __getitem__(self, key: str | list[str]) -> DataFrame:
+        """Return a new :py:class:`DataFrame` with the specified column or columns.
+
+        Args:
+            key: Column name or list of column names to select.
+
+        Returns:
+            DataFrame with the specified column or columns.
+        """
+        return DataFrame(self.df.__getitem__(key))
+
+    def __repr__(self) -> str:
+        """Return a string representation of the DataFrame.
+
+        Returns:
+            String representation of the DataFrame.
+        """
+        return self.df.__repr__()
+
+    def _repr_html_(self) -> str:
+        return self.df._repr_html_()
+
+    @staticmethod
+    def default_str_repr(
+        batches: list[pa.RecordBatch],
+        schema: pa.Schema,
+        has_more: bool,
+        table_uuid: str | None = None,
+    ) -> str:
+        """Return the default string representation of a DataFrame.
+
+        This method is used by the default formatter and implemented in Rust for
+        performance reasons.
+        """
+        return DataFrameInternal.default_str_repr(batches, schema, has_more, table_uuid)
+
+    def describe(self) -> DataFrame:
+        """Return the statistics for this DataFrame.
+
+        Only summarized numeric datatypes at the moments and returns nulls
+        for non-numeric datatypes.
+
+        The output format is modeled after pandas.
+
+        Returns:
+            A summary DataFrame containing statistics.
+        """
+        return DataFrame(self.df.describe())
+
+    def schema(self) -> pa.Schema:
+        """Return the :py:class:`pyarrow.Schema` of this DataFrame.
+
+        The output schema contains information on the name, data type, and
+        nullability for each column.
+
+        Returns:
+            Describing schema of the DataFrame
+        """
+        return self.df.schema()
+
+    def column(self, name: str) -> Expr:
+        """Return a fully qualified column expression for ``name``.
+
+        Resolves an unqualified column name against this DataFrame's schema
+        and returns an :py:class:`Expr` whose underlying column reference
+        includes the table qualifier. This is especially useful after joins,
+        where the same column name may appear in multiple relations.
+
+        Args:
+            name: Unqualified column name to look up.
+
+        Returns:
+            A fully qualified column expression.
+
+        Raises:
+            Exception: If the column is not found or is ambiguous (exists in
+                multiple relations).
+
+        Examples:
+            Resolve a column from a simple DataFrame:
+
+            >>> ctx = dfn.SessionContext()
+            >>> df = ctx.from_pydict({"a": [1, 2], "b": [3, 4]})
+            >>> expr = df.column("a")
+            >>> df.select(expr).to_pydict()
+            {'a': [1, 2]}
+
+            Resolve qualified columns after a join:
+
+            >>> left = ctx.from_pydict({"id": [1, 2], "x": [10, 20]})
+            >>> right = ctx.from_pydict({"id": [1, 2], "y": [30, 40]})
+            >>> joined = left.join(right, on="id", how="inner")
+            >>> expr = joined.column("y")
+            >>> joined.select("id", expr).sort("id").to_pydict()
+            {'id': [1, 2], 'y': [30, 40]}
+        """
+        return self.find_qualified_columns(name)[0]
+
+    def col(self, name: str) -> Expr:
+        """Alias for :py:meth:`column`.
+
+        See Also:
+            :py:meth:`column`
+        """
+        return self.column(name)
+
+    def find_qualified_columns(self, *names: str) -> list[Expr]:
+        """Return fully qualified column expressions for the given names.
+
+        This is a batch version of :py:meth:`column` — it resolves each
+        unqualified name against the DataFrame's schema and returns a list
+        of qualified column expressions.
+
+        Args:
+            names: Unqualified column names to look up.
+
+        Returns:
+            List of fully qualified column expressions, one per name.
+
+        Raises:
+            Exception: If any column is not found or is ambiguous.
+
+        Examples:
+            Resolve multiple columns at once:
+
+            >>> ctx = dfn.SessionContext()
+            >>> df = ctx.from_pydict({"a": [1, 2], "b": [3, 4], "c": [5, 6]})
+            >>> exprs = df.find_qualified_columns("a", "c")
+            >>> df.select(*exprs).to_pydict()
+            {'a': [1, 2], 'c': [5, 6]}
+        """
+        raw_exprs = self.df.find_qualified_columns(list(names))
+        return [Expr(e) for e in raw_exprs]
+
+    def select_exprs(self, *args: str) -> DataFrame:
+        """Project arbitrary list of expression strings into a new DataFrame.
+
+        This method will parse string expressions into logical plan expressions.
+        The output DataFrame has one column for each expression.
+
+        Returns:
+            DataFrame only containing the specified columns.
+        """
+        return self.df.select_exprs(*args)
+
+    def alias(self, alias: str) -> DataFrame:
+        """Assign a table alias to this :py:class:`DataFrame`.
+
+        Replaces the qualifiers of the output columns with ``alias``. Useful for
+        self-joins and any situation that needs an unambiguous table-style
+        qualifier (``alias.col``) for downstream references.
+
+        Args:
+            alias: Table alias to apply to the DataFrame's columns.
+
+        Returns:
+            DataFrame with columns re-qualified under ``alias``.
+
+        Example:
+            >>> from parqdb.datafusion import col
+            >>> ctx = dfn.SessionContext()
+            >>> df = ctx.from_pydict({"id": [1, 2], "val": [10, 20]})
+            >>> left = df.alias("l")
+            >>> right = df.alias("r")
+            >>> left.join(right, left_on="id", right_on="id").select(
+            ...     "id", col("l.val").alias("lval"), col("r.val").alias("rval")
+            ... ).sort("id").to_pydict()
+            {'id': [1, 2], 'lval': [10, 20], 'rval': [10, 20]}
+        """
+        return DataFrame(self.df.alias(alias))
+
+    def select(self, *exprs: Expr | str) -> DataFrame:
+        """Project arbitrary expressions into a new :py:class:`DataFrame`.
+
+        String arguments are treated as column names; :py:class:`~datafusion.expr.Expr`
+        arguments can reshape, rename, or compute new columns.
+
+        Args:
+            exprs: Either column names or :py:class:`~datafusion.expr.Expr` to select.
+
+        Returns:
+            DataFrame after projection. It has one column for each expression.
+
+        Examples:
+            Select columns by name:
+
+            >>> ctx = dfn.SessionContext()
+            >>> df = ctx.from_pydict({"a": [1, 2, 3], "b": [10, 20, 30]})
+            >>> df.select("a").to_pydict()
+            {'a': [1, 2, 3]}
+
+            Mix column names, expressions, and aliases. The string ``"a"`` selects
+            column ``a`` directly; ``col("a").alias("alternate_a")`` returns a
+            duplicate under a new name:
+
+            >>> df.select("a", col("b"), col("a").alias("alternate_a")).to_pydict()
+            {'a': [1, 2, 3], 'b': [10, 20, 30], 'alternate_a': [1, 2, 3]}
+        """
+        exprs_internal = expr_list_to_raw_expr_list(exprs)
+        return DataFrame(self.df.select(*exprs_internal))
+
+    def drop(self, *columns: str) -> DataFrame:
+        """Drop arbitrary amount of columns.
+
+        Column names are case-sensitive and require double quotes to be dropped
+        if the original name is not strictly lower case.
+
+        Args:
+            columns: Column names to drop from the dataframe.
+
+        Returns:
+            DataFrame with those columns removed in the projection.
+
+        Examples:
+            To drop a lower-cased column 'a'
+
+            >>> ctx = dfn.SessionContext()
+            >>> df = ctx.from_pydict({"a": [1, 2], "b": [3, 4]})
+            >>> df.drop("a").schema().names
+            ['b']
+
+            Or to drop an upper-cased column 'A'
+
+            >>> ctx = dfn.SessionContext()
+            >>> df = ctx.from_pydict({"A": [1, 2], "b": [3, 4]})
+            >>> df.drop('"A"').schema().names
+            ['b']
+        """
+        return DataFrame(self.df.drop(*columns))
+
+    def window(self, *exprs: Expr) -> DataFrame:
+        """Add window function columns to the DataFrame.
+
+        Applies the given window function expressions and appends the results
+        as new columns.
+
+        Args:
+            exprs: Window function expressions to evaluate.
+
+        Returns:
+            DataFrame with new window function columns appended.
+
+        Examples:
+            Add a row number within each group:
+
+            >>> import parqdb.datafusion.functions as f
+            >>> from parqdb.datafusion import col
+            >>> ctx = dfn.SessionContext()
+            >>> df = ctx.from_pydict({"a": [1, 2, 3], "b": ["x", "x", "y"]})
+            >>> df = df.window(
+            ...     f.row_number(
+            ...         partition_by=[col("b")], order_by=[col("a")]
+            ...     ).alias("rn")
+            ... )
+            >>> "rn" in df.schema().names
+            True
+        """
+        raw = expr_list_to_raw_expr_list(exprs)
+        return DataFrame(self.df.window(*raw))
+
+    def filter(self, *predicates: Expr | str) -> DataFrame:
+        """Return a DataFrame for which ``predicate`` evaluates to ``True``.
+
+        Rows for which ``predicate`` evaluates to ``False`` or ``None`` are filtered
+        out. If more than one predicate is provided, these predicates will be
+        combined as a logical AND. Each ``predicate`` can be an
+        :class:`~datafusion.expr.Expr` created using helper functions such as
+        :func:`datafusion.col` or :func:`datafusion.lit`, or a SQL expression string
+        that will be parsed against the DataFrame schema. If more complex logic is
+        required, see the logical operations in :py:mod:`~datafusion.functions`.
+
+        Examples:
+            >>> ctx = dfn.SessionContext()
+            >>> df = ctx.from_pydict({"a": [1, 2, 3]})
+            >>> df.filter(col("a") > lit(1)).to_pydict()
+            {'a': [2, 3]}
+            >>> df.filter("a > 1").to_pydict()
+            {'a': [2, 3]}
+
+        Args:
+            predicates: Predicate expression(s) or SQL strings to filter the DataFrame.
+
+        Returns:
+            DataFrame after filtering.
+        """
+        df = self.df
+        for predicate in predicates:
+            expr = (
+                self.parse_sql_expr(predicate)
+                if isinstance(predicate, str)
+                else predicate
+            )
+            df = df.filter(ensure_expr(expr))
+        return DataFrame(df)
+
+    def parse_sql_expr(self, expr: str) -> Expr:
+        """Creates logical expression from a SQL query text.
+
+        The expression is created and processed against the current schema.
+
+        Examples:
+            >>> ctx = dfn.SessionContext()
+            >>> df = ctx.from_pydict({"a": [1, 2, 3]})
+            >>> expr = df.parse_sql_expr("a > 1")
+            >>> df.filter(expr).to_pydict()
+            {'a': [2, 3]}
+
+        Args:
+            expr: Expression string to be converted to datafusion expression
+
+        Returns:
+            Logical expression .
+        """
+        return Expr(self.df.parse_sql_expr(expr))
+
+    def with_column(self, name: str, expr: Expr | str) -> DataFrame:
+        """Add an additional column to the DataFrame.
+
+        The ``expr`` must be an :class:`~datafusion.expr.Expr` constructed with
+        :func:`datafusion.col` or :func:`datafusion.lit`, or a SQL expression
+        string that will be parsed against the DataFrame schema.
+
+        Examples:
+            >>> ctx = dfn.SessionContext()
+            >>> df = ctx.from_pydict({"a": [1, 2]})
+            >>> df.with_column("b", col("a") + lit(10)).to_pydict()
+            {'a': [1, 2], 'b': [11, 12]}
+
+        Args:
+            name: Name of the column to add.
+            expr: Expression to compute the column.
+
+        Returns:
+            DataFrame with the new column.
+        """
+        expr = self.parse_sql_expr(expr) if isinstance(expr, str) else expr
+
+        return DataFrame(self.df.with_column(name, ensure_expr(expr)))
+
+    def with_columns(
+        self, *exprs: Expr | str | Iterable[Expr | str], **named_exprs: Expr | str
+    ) -> DataFrame:
+        """Add columns to the DataFrame.
+
+        By passing expressions, iterables of expressions, string SQL expressions,
+        or named expressions.
+        All expressions must be :class:`~datafusion.expr.Expr` objects created via
+        :func:`datafusion.col` or :func:`datafusion.lit`, or SQL expression strings.
+        To pass named expressions use the form ``name=Expr``.
+
+        Example usage: The following will add 4 columns labeled ``a``, ``b``, ``c``,
+        and ``d``::
+
+            from parqdb.datafusion import col, lit
+            df = df.with_columns(
+                col("x").alias("a"),
+                [lit(1).alias("b"), col("y").alias("c")],
+                d=lit(3)
+            )
+
+            Equivalent example using just SQL strings:
+
+            df = df.with_columns(
+                "x as a",
+                ["1 as b", "y as c"],
+                d="3"
+            )
+
+        Args:
+            exprs: Either a single expression, an iterable of expressions to add or
+                   SQL expression strings.
+            named_exprs: Named expressions in the form of ``name=expr``
+
+        Returns:
+            DataFrame with the new columns added.
+        """
+        expressions = []
+        for expr in exprs:
+            if isinstance(expr, str):
+                expressions.append(self.parse_sql_expr(expr).expr)
+            elif isinstance(expr, Iterable) and not isinstance(
+                expr, Expr | str | bytes | bytearray
+            ):
+                expressions.extend(
+                    [
+                        self.parse_sql_expr(e).expr
+                        if isinstance(e, str)
+                        else ensure_expr(e)
+                        for e in expr
+                    ]
+                )
+            else:
+                expressions.append(ensure_expr(expr))
+
+        for alias, expr in named_exprs.items():
+            e = self.parse_sql_expr(expr) if isinstance(expr, str) else expr
+            ensure_expr(e)
+            expressions.append(e.alias(alias).expr)
+
+        return DataFrame(self.df.with_columns(expressions))
+
+    def with_column_renamed(self, old_name: str, new_name: str) -> DataFrame:
+        r"""Rename one column by applying a new projection.
+
+        This is a no-op if the column to be renamed does not exist.
+
+        The method supports case sensitive rename with wrapping column name
+        into one the following symbols (" or ' or \`).
+
+        Args:
+            old_name: Old column name.
+            new_name: New column name.
+
+        Returns:
+            DataFrame with the column renamed.
+        """
+        return DataFrame(self.df.with_column_renamed(old_name, new_name))
+
+    def aggregate(
+        self,
+        group_by: Sequence[Expr | str] | Expr | str | None,
+        aggs: Sequence[Expr] | Expr,
+    ) -> DataFrame:
+        """Aggregates the rows of the current DataFrame.
+
+        By default each unique combination of the ``group_by`` columns
+        produces one row. To get multiple levels of subtotals in a
+        single pass, pass a
+        :py:class:`~datafusion.expr.GroupingSet` expression
+        (created via
+        :py:meth:`~datafusion.expr.GroupingSet.rollup`,
+        :py:meth:`~datafusion.expr.GroupingSet.cube`, or
+        :py:meth:`~datafusion.expr.GroupingSet.grouping_sets`)
+        as the ``group_by`` argument.  See the
+        :ref:`aggregation` user guide for detailed examples.
+
+        Args:
+            group_by: Sequence of expressions or column names to group
+                by, or ``None`` for aggregation over the whole DataFrame.
+                A :py:class:`~datafusion.expr.GroupingSet` expression may
+                be included to produce multiple grouping levels (rollup,
+                cube, or explicit grouping sets).
+            aggs: Sequence of expressions to aggregate.
+
+        Returns:
+            DataFrame after aggregation.
+
+        Examples:
+            Aggregate without grouping — ``None`` or an empty ``group_by``
+            produces a single row:
+
+            >>> ctx = dfn.SessionContext()
+            >>> df = ctx.from_pydict(
+            ...     {"team": ["x", "x", "y"], "score": [1, 2, 5]}
+            ... )
+            >>> df.aggregate(None, [F.sum(col("score")).alias("total")]).to_pydict()
+            {'total': [8]}
+
+            Group by a column and produce one row per group:
+
+            >>> df.aggregate(
+            ...     ["team"], [F.sum(col("score")).alias("total")]
+            ... ).sort("team").to_pydict()
+            {'team': ['x', 'y'], 'total': [3, 5]}
+        """
+        if group_by is None:
+            group_by_list = []
+        else:
+            group_by_list = (
+                list(group_by)
+                if isinstance(group_by, Sequence)
+                and not isinstance(group_by, Expr | str)
+                else [group_by]
+            )
+        aggs_list = (
+            list(aggs)
+            if isinstance(aggs, Sequence) and not isinstance(aggs, Expr)
+            else [aggs]
+        )
+
+        group_by_exprs = expr_list_to_raw_expr_list(group_by_list)
+        aggs_exprs = ensure_expr_list(aggs_list)
+        return DataFrame(self.df.aggregate(group_by_exprs, aggs_exprs))
+
+    def sort(self, *exprs: SortKey) -> DataFrame:
+        """Sort the DataFrame by the specified sorting expressions or column names.
+
+        Note that any expression can be turned into a sort expression by
+        calling its ``sort`` method. For ascending-only sorts, the shorter
+        :py:meth:`sort_by` is usually more convenient.
+
+        Args:
+            exprs: Sort expressions or column names, applied in order.
+
+        Returns:
+            DataFrame after sorting.
+
+        Examples:
+            Sort ascending by a column name:
+
+            >>> ctx = dfn.SessionContext()
+            >>> df = ctx.from_pydict({"a": [3, 1, 2], "b": [10, 20, 30]})
+            >>> df.sort("a").to_pydict()
+            {'a': [1, 2, 3], 'b': [20, 30, 10]}
+
+            Sort descending using :py:meth:`Expr.sort`:
+
+            >>> df.sort(col("a").sort(ascending=False)).to_pydict()
+            {'a': [3, 2, 1], 'b': [10, 30, 20]}
+        """
+        exprs_raw = sort_list_to_raw_sort_list(exprs)
+        return DataFrame(self.df.sort(*exprs_raw))
+
+    def cast(self, mapping: dict[str, pa.DataType[Any]]) -> DataFrame:
+        """Cast one or more columns to a different data type.
+
+        Args:
+            mapping: Mapped with column as key and column dtype as value.
+
+        Returns:
+            DataFrame after casting columns
+        """
+        exprs = [Expr.column(col).cast(dtype) for col, dtype in mapping.items()]
+        return self.with_columns(exprs)
+
+    def limit(self, count: int, offset: int = 0) -> DataFrame:
+        """Return a new :py:class:`DataFrame` with a limited number of rows.
+
+        Results are returned in unspecified order unless the DataFrame is
+        explicitly sorted first via :py:meth:`sort` or :py:meth:`sort_by`.
+
+        Args:
+            count: Number of rows to limit the DataFrame to.
+            offset: Number of rows to skip.
+
+        Returns:
+            DataFrame after limiting.
+
+        Examples:
+            Take the first two rows:
+
+            >>> ctx = dfn.SessionContext()
+            >>> df = ctx.from_pydict({"a": [1, 2, 3, 4]}).sort("a")
+            >>> df.limit(2).to_pydict()
+            {'a': [1, 2]}
+
+            Skip the first row then take two (paging):
+
+            >>> df.limit(2, offset=1).to_pydict()
+            {'a': [2, 3]}
+        """
+        return DataFrame(self.df.limit(count, offset))
+
+    def head(self, n: int = 5) -> DataFrame:
+        """Return a new :py:class:`DataFrame` with a limited number of rows.
+
+        Args:
+            n: Number of rows to take from the head of the DataFrame.
+
+        Returns:
+            DataFrame after limiting.
+        """
+        return DataFrame(self.df.limit(n, 0))
+
+    def tail(self, n: int = 5) -> DataFrame:
+        """Return a new :py:class:`DataFrame` with a limited number of rows.
+
+        Be aware this could be potentially expensive since the row size needs to be
+        determined of the dataframe. This is done by collecting it.
+
+        Args:
+            n: Number of rows to take from the tail of the DataFrame.
+
+        Returns:
+            DataFrame after limiting.
+        """
+        return DataFrame(self.df.limit(n, max(0, self.count() - n)))
+
+    def collect(self) -> list[pa.RecordBatch]:
+        """Execute this :py:class:`DataFrame` and collect results into memory.
+
+        Prior to calling ``collect``, modifying a DataFrame simply updates a plan
+        (no actual computation is performed). Calling ``collect`` triggers the
+        computation.
+
+        Returns:
+            List of :py:class:`pyarrow.RecordBatch` collected from the DataFrame.
+        """
+        return self.df.collect()
+
+    def collect_column(self, column_name: str) -> pa.Array | pa.ChunkedArray:
+        """Executes this :py:class:`DataFrame` for a single column."""
+        return self.df.collect_column(column_name)
+
+    def cache(self) -> DataFrame:
+        """Cache the DataFrame as a memory table.
+
+        Returns:
+            Cached DataFrame.
+        """
+        return DataFrame(self.df.cache())
+
+    def collect_partitioned(self) -> list[list[pa.RecordBatch]]:
+        """Execute this DataFrame and collect all partitioned results.
+
+        This operation returns :py:class:`pyarrow.RecordBatch` maintaining the input
+        partitioning.
+
+        Returns:
+            List of list of :py:class:`RecordBatch` collected from the
+                DataFrame.
+        """
+        return self.df.collect_partitioned()
+
+    def show(self, num: int = 20) -> None:
+        """Execute the DataFrame and print the result to the console.
+
+        Args:
+            num: Number of lines to show.
+        """
+        self.df.show(num)
+
+    def distinct(self) -> DataFrame:
+        """Return a new :py:class:`DataFrame` with all duplicated rows removed.
+
+        Returns:
+            DataFrame after removing duplicates.
+        """
+        return DataFrame(self.df.distinct())
+
+    @overload
+    def join(
+        self,
+        right: DataFrame,
+        on: str | Sequence[str],
+        how: Literal["inner", "left", "right", "full", "semi", "anti"] = "inner",
+        *,
+        left_on: None = None,
+        right_on: None = None,
+        join_keys: None = None,
+        coalesce_duplicate_keys: bool = True,
+    ) -> DataFrame: ...
+
+    @overload
+    def join(
+        self,
+        right: DataFrame,
+        on: None = None,
+        how: Literal["inner", "left", "right", "full", "semi", "anti"] = "inner",
+        *,
+        left_on: str | Sequence[str],
+        right_on: str | Sequence[str],
+        join_keys: tuple[list[str], list[str]] | None = None,
+        coalesce_duplicate_keys: bool = True,
+    ) -> DataFrame: ...
+
+    @overload
+    def join(
+        self,
+        right: DataFrame,
+        on: None = None,
+        how: Literal["inner", "left", "right", "full", "semi", "anti"] = "inner",
+        *,
+        join_keys: tuple[list[str], list[str]],
+        left_on: None = None,
+        right_on: None = None,
+        coalesce_duplicate_keys: bool = True,
+    ) -> DataFrame: ...
+
+    def join(
+        self,
+        right: DataFrame,
+        on: str | Sequence[str] | tuple[list[str], list[str]] | None = None,
+        how: Literal["inner", "left", "right", "full", "semi", "anti"] = "inner",
+        *,
+        left_on: str | Sequence[str] | None = None,
+        right_on: str | Sequence[str] | None = None,
+        join_keys: tuple[list[str], list[str]] | None = None,
+        coalesce_duplicate_keys: bool = True,
+    ) -> DataFrame:
+        """Join this :py:class:`DataFrame` with another :py:class:`DataFrame`.
+
+        ``on`` has to be provided or both ``left_on`` and ``right_on`` in
+        conjunction.
+
+        When non-key columns share the same name in both DataFrames, use
+        :py:meth:`DataFrame.col` on each DataFrame **before** the join to
+        obtain fully qualified column references that can disambiguate them.
+        See :py:meth:`join_on` for an example.
+
+        Args:
+            right: Other DataFrame to join with.
+            on: Column names to join on in both dataframes.
+            how: Type of join to perform. Supported types are "inner", "left",
+                "right", "full", "semi", "anti".
+            left_on: Join column of the left dataframe.
+            right_on: Join column of the right dataframe.
+            coalesce_duplicate_keys: When True, coalesce the columns
+                from the right DataFrame and left DataFrame
+                that have identical names in the ``on`` fields.
+            join_keys: Tuple of two lists of column names to join on. [Deprecated]
+
+        Returns:
+            DataFrame after join.
+
+        Examples:
+            Inner-join two DataFrames on a shared column:
+
+            >>> ctx = dfn.SessionContext()
+            >>> left = ctx.from_pydict({"id": [1, 2, 3], "val": [10, 20, 30]})
+            >>> right = ctx.from_pydict({"id": [2, 3, 4], "label": ["b", "c", "d"]})
+            >>> left.join(right, on="id").sort("id").to_pydict()
+            {'id': [2, 3], 'val': [20, 30], 'label': ['b', 'c']}
+
+            Left join to keep all rows from the left side:
+
+            >>> left.join(right, on="id", how="left").sort("id").to_pydict()
+            {'id': [1, 2, 3], 'val': [10, 20, 30], 'label': [None, 'b', 'c']}
+
+            Use ``left_on`` / ``right_on`` when the key columns differ in name:
+
+            >>> right2 = ctx.from_pydict({"rid": [2, 3], "label": ["b", "c"]})
+            >>> left.join(
+            ...     right2, left_on="id", right_on="rid"
+            ... ).sort("id").to_pydict()
+            {'id': [2, 3], 'val': [20, 30], 'rid': [2, 3], 'label': ['b', 'c']}
+        """
+        if join_keys is not None:
+            warnings.warn(
+                "`join_keys` is deprecated, use `on` or `left_on` with `right_on`",
+                category=DeprecationWarning,
+                stacklevel=2,
+            )
+            left_on = join_keys[0]
+            right_on = join_keys[1]
+
+        # This check is to prevent breaking API changes where users prior to
+        # DF 43.0.0 would  pass the join_keys as a positional argument instead
+        # of a keyword argument.
+        if (
+            isinstance(on, tuple)
+            and len(on) == 2  # noqa: PLR2004
+            and isinstance(on[0], list)
+            and isinstance(on[1], list)
+        ):
+            # We know this is safe because we've checked the types
+            left_on = on[0]
+            right_on = on[1]
+            on = None
+
+        if on is not None:
+            if left_on is not None or right_on is not None:
+                error_msg = "`left_on` or `right_on` should not provided with `on`"
+                raise ValueError(error_msg)
+            left_on = on
+            right_on = on
+        elif left_on is not None or right_on is not None:
+            if left_on is None or right_on is None:
+                error_msg = "`left_on` and `right_on` should both be provided."
+                raise ValueError(error_msg)
+        else:
+            error_msg = "either `on` or `left_on` and `right_on` should be provided."
+            raise ValueError(error_msg)
+        if isinstance(left_on, str):
+            left_on = [left_on]
+        if isinstance(right_on, str):
+            right_on = [right_on]
+
+        return DataFrame(
+            self.df.join(right.df, how, left_on, right_on, coalesce_duplicate_keys)
+        )
+
+    def join_on(
+        self,
+        right: DataFrame,
+        *on_exprs: Expr,
+        how: Literal["inner", "left", "right", "full", "semi", "anti"] = "inner",
+    ) -> DataFrame:
+        """Join two :py:class:`DataFrame` using the specified expressions.
+
+        Join predicates must be :class:`~datafusion.expr.Expr` objects, typically
+        built with :func:`datafusion.col`. On expressions are used to support
+        in-equality predicates. Equality predicates are correctly optimized.
+
+        Use :py:meth:`DataFrame.col` on each DataFrame **before** the join to
+        obtain fully qualified column references. These qualified references
+        can then be used in the join predicate and to disambiguate columns
+        with the same name when selecting from the result.
+
+        Examples:
+            Join with unique column names:
+
+            >>> ctx = dfn.SessionContext()
+            >>> left = ctx.from_pydict({"a": [1, 2], "x": ["a", "b"]})
+            >>> right = ctx.from_pydict({"b": [1, 2], "y": ["c", "d"]})
+            >>> left.join_on(
+            ...     right, col("a") == col("b")
+            ... ).sort(col("x")).to_pydict()
+            {'a': [1, 2], 'x': ['a', 'b'], 'b': [1, 2], 'y': ['c', 'd']}
+
+            Use :py:meth:`col` to disambiguate shared column names:
+
+            >>> left = ctx.from_pydict({"id": [1, 2], "val": [10, 20]})
+            >>> right = ctx.from_pydict({"id": [1, 2], "val": [30, 40]})
+            >>> joined = left.join_on(
+            ...     right, left.col("id") == right.col("id"), how="inner"
+            ... )
+            >>> joined.select(
+            ...     left.col("id"), left.col("val"), right.col("val").alias("rval")
+            ... ).sort(left.col("id")).to_pydict()
+            {'id': [1, 2], 'val': [10, 20], 'rval': [30, 40]}
+
+        Args:
+            right: Other DataFrame to join with.
+            on_exprs: single or multiple (in)-equality predicates.
+            how: Type of join to perform. Supported types are "inner", "left",
+                "right", "full", "semi", "anti".
+
+        Returns:
+            DataFrame after join.
+        """
+        exprs = [ensure_expr(expr) for expr in on_exprs]
+        return DataFrame(self.df.join_on(right.df, exprs, how))
+
+    def explain(
+        self,
+        verbose: bool = False,
+        analyze: bool = False,
+        format: ExplainFormat | None = None,
+    ) -> None:
+        """Print an explanation of the DataFrame's plan so far.
+
+        If ``analyze`` is specified, runs the plan and reports metrics.
+
+        Args:
+            verbose: If ``True``, more details will be included.
+            analyze: If ``True``, the plan will run and metrics reported.
+            format: Output format for the plan. Defaults to
+                :py:attr:`ExplainFormat.INDENT`.
+
+        Examples:
+            Show the plan in tree format:
+
+            >>> from parqdb.datafusion import ExplainFormat
+            >>> ctx = dfn.SessionContext()
+            >>> df = ctx.from_pydict({"a": [1, 2, 3]})
+            >>> df.explain(format=ExplainFormat.TREE)  # doctest: +SKIP
+
+            Show plan with runtime metrics:
+
+            >>> df.explain(analyze=True)  # doctest: +SKIP
+        """
+        fmt = format.value if format is not None else None
+        self.df.explain(verbose, analyze, fmt)
+
+    def logical_plan(self) -> LogicalPlan:
+        """Return the unoptimized ``LogicalPlan``.
+
+        Returns:
+            Unoptimized logical plan.
+        """
+        return LogicalPlan(self.df.logical_plan())
+
+    def optimized_logical_plan(self) -> LogicalPlan:
+        """Return the optimized ``LogicalPlan``.
+
+        Returns:
+            Optimized logical plan.
+        """
+        return LogicalPlan(self.df.optimized_logical_plan())
+
+    def execution_plan(self) -> ExecutionPlan:
+        """Return the execution/physical plan.
+
+        Returns:
+            Execution plan.
+        """
+        return ExecutionPlan(self.df.execution_plan())
+
+    def repartition(self, num: int) -> DataFrame:
+        """Repartition a DataFrame into ``num`` partitions.
+
+        The batches allocation uses a round-robin algorithm.
+
+        Args:
+            num: Number of partitions to repartition the DataFrame into.
+
+        Returns:
+            Repartitioned DataFrame.
+        """
+        return DataFrame(self.df.repartition(num))
+
+    def repartition_by_hash(self, *exprs: Expr | str, num: int) -> DataFrame:
+        """Repartition a DataFrame using a hash partitioning scheme.
+
+        Args:
+            exprs: Expressions or a SQL expression string to evaluate
+                   and perform hashing on.
+            num: Number of partitions to repartition the DataFrame into.
+
+        Returns:
+            Repartitioned DataFrame.
+        """
+        exprs = [self.parse_sql_expr(e) if isinstance(e, str) else e for e in exprs]
+        exprs = expr_list_to_raw_expr_list(exprs)
+
+        return DataFrame(self.df.repartition_by_hash(*exprs, num=num))
+
+    def union(self, other: DataFrame, distinct: bool = False) -> DataFrame:
+        """Calculate the union of two :py:class:`DataFrame`.
+
+        The two :py:class:`DataFrame` must have exactly the same schema.
+
+        Args:
+            other: DataFrame to union with.
+            distinct: If ``True``, duplicate rows will be removed.
+
+        Returns:
+            DataFrame after union.
+
+        Examples:
+            Stack rows from both DataFrames, preserving duplicates:
+
+            >>> ctx = dfn.SessionContext()
+            >>> df1 = ctx.from_pydict({"a": [1, 2]})
+            >>> df2 = ctx.from_pydict({"a": [2, 3]})
+            >>> df1.union(df2).sort("a").to_pydict()
+            {'a': [1, 2, 2, 3]}
+
+            Deduplicate the combined result with ``distinct=True``:
+
+            >>> df1.union(df2, distinct=True).sort("a").to_pydict()
+            {'a': [1, 2, 3]}
+        """
+        return DataFrame(self.df.union(other.df, distinct))
+
+    @deprecated(
+        "union_distinct() is deprecated. Use union(other, distinct=True) instead."
+    )
+    def union_distinct(self, other: DataFrame) -> DataFrame:
+        """Calculate the distinct union of two :py:class:`DataFrame`.
+
+        See Also:
+            :py:meth:`union`
+        """
+        return self.union(other, distinct=True)
+
+    def intersect(self, other: DataFrame, distinct: bool = False) -> DataFrame:
+        """Calculate the intersection of two :py:class:`DataFrame`.
+
+        The two :py:class:`DataFrame` must have exactly the same schema.
+
+        Args:
+            other: DataFrame to intersect with.
+            distinct: If ``True``, duplicate rows are removed from the result.
+
+        Returns:
+            DataFrame after intersection.
+
+        Examples:
+            Find rows common to both DataFrames:
+
+            >>> ctx = dfn.SessionContext()
+            >>> df1 = ctx.from_pydict({"a": [1, 2, 3], "b": [10, 20, 30]})
+            >>> df2 = ctx.from_pydict({"a": [1, 4], "b": [10, 40]})
+            >>> df1.intersect(df2).to_pydict()
+            {'a': [1], 'b': [10]}
+
+            Intersect with deduplication:
+
+            >>> df1 = ctx.from_pydict({"a": [1, 1, 2], "b": [10, 10, 20]})
+            >>> df2 = ctx.from_pydict({"a": [1, 1], "b": [10, 10]})
+            >>> df1.intersect(df2, distinct=True).to_pydict()
+            {'a': [1], 'b': [10]}
+        """
+        return DataFrame(self.df.intersect(other.df, distinct))
+
+    def except_all(self, other: DataFrame, distinct: bool = False) -> DataFrame:
+        """Calculate the set difference of two :py:class:`DataFrame`.
+
+        Returns rows that are in this DataFrame but not in ``other``.
+
+        The two :py:class:`DataFrame` must have exactly the same schema.
+
+        Args:
+            other: DataFrame to calculate exception with.
+            distinct: If ``True``, duplicate rows are removed from the result.
+
+        Returns:
+            DataFrame after set difference.
+
+        Examples:
+            Remove rows present in ``df2``:
+
+            >>> ctx = dfn.SessionContext()
+            >>> df1 = ctx.from_pydict({"a": [1, 2, 3], "b": [10, 20, 30]})
+            >>> df2 = ctx.from_pydict({"a": [1, 2], "b": [10, 20]})
+            >>> df1.except_all(df2).sort("a").to_pydict()
+            {'a': [3], 'b': [30]}
+
+            Remove rows present in ``df2`` and deduplicate:
+
+            >>> df1.except_all(df2, distinct=True).sort("a").to_pydict()
+            {'a': [3], 'b': [30]}
+        """
+        return DataFrame(self.df.except_all(other.df, distinct))
+
+    def union_by_name(self, other: DataFrame, distinct: bool = False) -> DataFrame:
+        """Union two :py:class:`DataFrame` matching columns by name.
+
+        Unlike :py:meth:`union` which matches columns by position, this method
+        matches columns by their names, allowing DataFrames with different
+        column orders to be combined.
+
+        Args:
+            other: DataFrame to union with.
+            distinct: If ``True``, duplicate rows are removed from the result.
+
+        Returns:
+            DataFrame after union by name.
+
+        Examples:
+            Combine DataFrames with different column orders:
+
+            >>> ctx = dfn.SessionContext()
+            >>> df1 = ctx.from_pydict({"a": [1], "b": [10]})
+            >>> df2 = ctx.from_pydict({"b": [20], "a": [2]})
+            >>> df1.union_by_name(df2).sort("a").to_pydict()
+            {'a': [1, 2], 'b': [10, 20]}
+
+            Union by name with deduplication:
+
+            >>> df1 = ctx.from_pydict({"a": [1, 1], "b": [10, 10]})
+            >>> df2 = ctx.from_pydict({"b": [10], "a": [1]})
+            >>> df1.union_by_name(df2, distinct=True).to_pydict()
+            {'a': [1], 'b': [10]}
+        """
+        return DataFrame(self.df.union_by_name(other.df, distinct))
+
+    def distinct_on(
+        self,
+        on_expr: list[Expr],
+        select_expr: list[Expr],
+        sort_expr: list[SortKey] | None = None,
+    ) -> DataFrame:
+        """Deduplicate rows based on specific columns.
+
+        Returns a new DataFrame with one row per unique combination of the
+        ``on_expr`` columns, keeping the first row per group as determined by
+        ``sort_expr``.
+
+        Args:
+            on_expr: Expressions that determine uniqueness.
+            select_expr: Expressions to include in the output.
+            sort_expr: Optional sort expressions to determine which row to keep.
+
+        Returns:
+            DataFrame after deduplication.
+
+        Examples:
+            Keep the row with the smallest ``b`` for each unique ``a``:
+
+            >>> from parqdb.datafusion import col
+            >>> ctx = dfn.SessionContext()
+            >>> df = ctx.from_pydict({"a": [1, 1, 2, 2], "b": [10, 20, 30, 40]})
+            >>> df.distinct_on(
+            ...     [col("a")],
+            ...     [col("a"), col("b")],
+            ...     [col("a").sort(ascending=True), col("b").sort(ascending=True)],
+            ... ).sort("a").to_pydict()
+            {'a': [1, 2], 'b': [10, 30]}
+        """
+        on_raw = expr_list_to_raw_expr_list(on_expr)
+        select_raw = expr_list_to_raw_expr_list(select_expr)
+        sort_raw = sort_list_to_raw_sort_list(sort_expr) if sort_expr else None
+        return DataFrame(self.df.distinct_on(on_raw, select_raw, sort_raw))
+
+    def sort_by(self, *exprs: Expr | str) -> DataFrame:
+        """Sort the DataFrame by column expressions in ascending order.
+
+        This is a convenience method that sorts the DataFrame by the given
+        expressions in ascending order with nulls last. For more control over
+        sort direction and null ordering, use :py:meth:`sort` instead.
+
+        Args:
+            exprs: Expressions or column names to sort by.
+
+        Returns:
+            DataFrame after sorting.
+
+        Examples:
+            Sort by a single column:
+
+            >>> ctx = dfn.SessionContext()
+            >>> df = ctx.from_pydict({"a": [3, 1, 2]})
+            >>> df.sort_by("a").to_pydict()
+            {'a': [1, 2, 3]}
+        """
+        raw = [_to_raw_expr(e) for e in exprs]
+        return DataFrame(self.df.sort_by(raw))
+
+    def write_csv(
+        self,
+        path: str | pathlib.Path,
+        with_header: bool = False,
+        write_options: DataFrameWriteOptions | None = None,
+    ) -> None:
+        """Execute the :py:class:`DataFrame`  and write the results to a CSV file.
+
+        Args:
+            path: Path of the CSV file to write.
+            with_header: If true, output the CSV header row.
+            write_options: Options that impact how the DataFrame is written.
+        """
+        raw_write_options = (
+            write_options._raw_write_options if write_options is not None else None
+        )
+        self.df.write_csv(str(path), with_header, raw_write_options)
+
+    @overload
+    def write_parquet(
+        self,
+        path: str | pathlib.Path,
+        compression: str,
+        compression_level: int | None = None,
+        write_options: DataFrameWriteOptions | None = None,
+    ) -> None: ...
+
+    @overload
+    def write_parquet(
+        self,
+        path: str | pathlib.Path,
+        compression: Compression = Compression.ZSTD,
+        compression_level: int | None = None,
+        write_options: DataFrameWriteOptions | None = None,
+    ) -> None: ...
+
+    @overload
+    def write_parquet(
+        self,
+        path: str | pathlib.Path,
+        compression: ParquetWriterOptions,
+        compression_level: None = None,
+        write_options: DataFrameWriteOptions | None = None,
+    ) -> None: ...
+
+    def write_parquet(
+        self,
+        path: str | pathlib.Path,
+        compression: str | Compression | ParquetWriterOptions = Compression.ZSTD,
+        compression_level: int | None = None,
+        write_options: DataFrameWriteOptions | None = None,
+    ) -> None:
+        """Execute the :py:class:`DataFrame` and write the results to a Parquet file.
+
+        Available compression types are:
+
+        - "uncompressed": No compression.
+        - "snappy": Snappy compression.
+        - "gzip": Gzip compression.
+        - "brotli": Brotli compression.
+        - "lz4": LZ4 compression.
+        - "lz4_raw": LZ4_RAW compression.
+        - "zstd": Zstandard compression.
+
+        LZO compression is not yet implemented in arrow-rs and is therefore
+        excluded.
+
+        Args:
+            path: Path of the Parquet file to write.
+            compression: Compression type to use. Default is "ZSTD".
+            compression_level: Compression level to use. For ZSTD, the
+                recommended range is 1 to 22, with the default being 4. Higher levels
+                provide better compression but slower speed.
+            write_options: Options that impact how the DataFrame is written.
+        """
+        if isinstance(compression, ParquetWriterOptions):
+            if compression_level is not None:
+                msg = "compression_level should be None when using ParquetWriterOptions"
+                raise ValueError(msg)
+            self.write_parquet_with_options(path, compression)
+            return
+
+        if isinstance(compression, str):
+            compression = Compression.from_str(compression)
+
+        if (
+            compression in {Compression.GZIP, Compression.BROTLI, Compression.ZSTD}
+            and compression_level is None
+        ):
+            compression_level = compression.get_default_level()
+
+        raw_write_options = (
+            write_options._raw_write_options if write_options is not None else None
+        )
+        self.df.write_parquet(
+            str(path),
+            compression.value,
+            compression_level,
+            raw_write_options,
+        )
+
+    def write_parquet_with_options(
+        self,
+        path: str | pathlib.Path,
+        options: ParquetWriterOptions,
+        write_options: DataFrameWriteOptions | None = None,
+    ) -> None:
+        """Execute the :py:class:`DataFrame` and write the results to a Parquet file.
+
+        Allows advanced writer options to be set with `ParquetWriterOptions`.
+
+        Args:
+            path: Path of the Parquet file to write.
+            options: Sets the writer parquet options (see `ParquetWriterOptions`).
+            write_options: Options that impact how the DataFrame is written.
+        """
+        options_internal = ParquetWriterOptionsInternal(
+            options.data_pagesize_limit,
+            options.write_batch_size,
+            options.writer_version,
+            options.skip_arrow_metadata,
+            options.compression,
+            options.dictionary_enabled,
+            options.dictionary_page_size_limit,
+            options.statistics_enabled,
+            options.max_row_group_size,
+            options.created_by,
+            options.column_index_truncate_length,
+            options.statistics_truncate_length,
+            options.data_page_row_count_limit,
+            options.encoding,
+            options.bloom_filter_on_write,
+            options.bloom_filter_fpp,
+            options.bloom_filter_ndv,
+            options.allow_single_file_parallelism,
+            options.maximum_parallel_row_group_writers,
+            options.maximum_buffered_record_batches_per_stream,
+        )
+
+        column_specific_options_internal = {}
+        for column, opts in (options.column_specific_options or {}).items():
+            column_specific_options_internal[column] = ParquetColumnOptionsInternal(
+                bloom_filter_enabled=opts.bloom_filter_enabled,
+                encoding=opts.encoding,
+                dictionary_enabled=opts.dictionary_enabled,
+                compression=opts.compression,
+                statistics_enabled=opts.statistics_enabled,
+                bloom_filter_fpp=opts.bloom_filter_fpp,
+                bloom_filter_ndv=opts.bloom_filter_ndv,
+            )
+
+        raw_write_options = (
+            write_options._raw_write_options if write_options is not None else None
+        )
+        self.df.write_parquet_with_options(
+            str(path),
+            options_internal,
+            column_specific_options_internal,
+            raw_write_options,
+        )
+
+    def write_json(
+        self,
+        path: str | pathlib.Path,
+        write_options: DataFrameWriteOptions | None = None,
+    ) -> None:
+        """Execute the :py:class:`DataFrame` and write the results to a JSON file.
+
+        Args:
+            path: Path of the JSON file to write.
+            write_options: Options that impact how the DataFrame is written.
+        """
+        raw_write_options = (
+            write_options._raw_write_options if write_options is not None else None
+        )
+        self.df.write_json(str(path), write_options=raw_write_options)
+
+    def write_table(
+        self, table_name: str, write_options: DataFrameWriteOptions | None = None
+    ) -> None:
+        """Execute the :py:class:`DataFrame` and write the results to a table.
+
+        The table must be registered with the session to perform this operation.
+        Not all table providers support writing operations. See the individual
+        implementations for details.
+        """
+        raw_write_options = (
+            write_options._raw_write_options if write_options is not None else None
+        )
+        self.df.write_table(table_name, raw_write_options)
+
+    def to_arrow_table(self) -> pa.Table:
+        """Execute the :py:class:`DataFrame` and convert it into an Arrow Table.
+
+        Returns:
+            Arrow Table.
+        """
+        return self.df.to_arrow_table()
+
+    def execute_stream(self) -> RecordBatchStream:
+        """Executes this DataFrame and returns a stream over a single partition.
+
+        Returns:
+            Record Batch Stream over a single partition.
+        """
+        return RecordBatchStream(self.df.execute_stream())
+
+    def execute_stream_partitioned(self) -> list[RecordBatchStream]:
+        """Executes this DataFrame and returns a stream for each partition.
+
+        Returns:
+            One record batch stream per partition.
+        """
+        streams = self.df.execute_stream_partitioned()
+        return [RecordBatchStream(rbs) for rbs in streams]
+
+    def to_pandas(self) -> pd.DataFrame:
+        """Execute the :py:class:`DataFrame` and convert it into a Pandas DataFrame.
+
+        Returns:
+            Pandas DataFrame.
+        """
+        return self.df.to_pandas()
+
+    def to_pylist(self) -> list[dict[str, Any]]:
+        """Execute the :py:class:`DataFrame` and convert it into a list of dictionaries.
+
+        Returns:
+            List of dictionaries.
+        """
+        return self.df.to_pylist()
+
+    def to_pydict(self) -> dict[str, list[Any]]:
+        """Execute the :py:class:`DataFrame` and convert it into a dictionary of lists.
+
+        Returns:
+            Dictionary of lists.
+        """
+        return self.df.to_pydict()
+
+    def to_polars(self) -> pl.DataFrame:
+        """Execute the :py:class:`DataFrame` and convert it into a Polars DataFrame.
+
+        Returns:
+            Polars DataFrame.
+        """
+        return self.df.to_polars()
+
+    def count(self) -> int:
+        """Return the total number of rows in this :py:class:`DataFrame`.
+
+        Note that this method will actually run a plan to calculate the
+        count, which may be slow for large or complicated DataFrames.
+
+        Returns:
+            Number of rows in the DataFrame.
+        """
+        return self.df.count()
+
+    def unnest_columns(
+        self,
+        *columns: str,
+        preserve_nulls: bool = True,
+        recursions: list[tuple[str, str, int]] | None = None,
+    ) -> DataFrame:
+        """Expand columns of arrays into a single row per array element.
+
+        Args:
+            columns: Column names to perform unnest operation on.
+            preserve_nulls: If False, rows with null entries will not be
+                returned.
+            recursions: Optional list of ``(input_column, output_column, depth)``
+                tuples that control how deeply nested columns are unnested. Any
+                column not mentioned here is unnested with depth 1.
+
+        Returns:
+            A DataFrame with the columns expanded.
+
+        Examples:
+            Unnest an array column:
+
+            >>> ctx = dfn.SessionContext()
+            >>> df = ctx.from_pydict({"a": [[1, 2], [3]], "b": ["x", "y"]})
+            >>> df.unnest_columns("a").to_pydict()
+            {'a': [1, 2, 3], 'b': ['x', 'x', 'y']}
+
+            With explicit recursion depth:
+
+            >>> df.unnest_columns("a", recursions=[("a", "a", 1)]).to_pydict()
+            {'a': [1, 2, 3], 'b': ['x', 'x', 'y']}
+        """
+        columns = list(columns)
+        return DataFrame(
+            self.df.unnest_columns(
+                columns, preserve_nulls=preserve_nulls, recursions=recursions
+            )
+        )
+
+    def __arrow_c_stream__(self, requested_schema: object | None = None) -> object:
+        """Export the DataFrame as an Arrow C Stream.
+
+        The DataFrame is executed using DataFusion's streaming APIs and exposed via
+        Arrow's C Stream interface. Record batches are produced incrementally, so the
+        full result set is never materialized in memory.
+
+        When ``requested_schema`` is provided, DataFusion applies only simple
+        projections such as selecting a subset of existing columns or reordering
+        them. Column renaming, computed expressions, or type coercion are not
+        supported through this interface.
+
+        Args:
+            requested_schema: Either a :py:class:`pyarrow.Schema` or an Arrow C
+                Schema capsule (``PyCapsule``) produced by
+                ``schema._export_to_c_capsule()``. The DataFrame will attempt to
+                align its output with the fields and order specified by this schema.
+
+        Returns:
+            Arrow ``PyCapsule`` object representing an ``ArrowArrayStream``.
+
+        For practical usage patterns, see the Apache Arrow streaming
+        documentation: https://arrow.apache.org/docs/python/ipc.html#streaming.
+
+        For details on DataFusion's Arrow integration and DataFrame streaming,
+        see the user guide (user-guide/io/arrow and user-guide/dataframe/index).
+
+        Notes:
+            The Arrow C Data Interface PyCapsule details are documented by Apache
+            Arrow and can be found at:
+            https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
+        """
+        # ``DataFrame.__arrow_c_stream__`` in the Rust extension leverages
+        # ``execute_stream_partitioned`` under the hood to stream batches while
+        # preserving the original partition order.
+        return self.df.__arrow_c_stream__(requested_schema)
+
+    def __iter__(self) -> Iterator[RecordBatch]:
+        """Return an iterator over this DataFrame's record batches."""
+        return iter(self.execute_stream())
+
+    def __aiter__(self) -> AsyncIterator[RecordBatch]:
+        """Return an async iterator over this DataFrame's record batches.
+
+        We're using __aiter__ because we support Python < 3.10 where aiter() is not
+        available.
+        """
+        return self.execute_stream().__aiter__()
+
+    def transform(self, func: Callable[..., DataFrame], *args: Any) -> DataFrame:
+        """Apply a function to the current DataFrame which returns another DataFrame.
+
+        This is useful for chaining together multiple functions.
+
+        Examples:
+            >>> ctx = dfn.SessionContext()
+            >>> df = ctx.from_pydict({"a": [1, 2, 3]})
+            >>> def add_3(df):
+            ...     return df.with_column("modified", dfn.lit(3))
+            >>> def within_limit(df: DataFrame, limit: int) -> DataFrame:
+            ...     return df.filter(col("a") < lit(limit)).distinct()
+            >>> df.transform(add_3).transform(within_limit, 4).sort("a").to_pydict()
+            {'a': [1, 2, 3], 'modified': [3, 3, 3]}
+
+        Args:
+            func: A callable function that takes a DataFrame as it's first argument
+            args: Zero or more arguments to pass to `func`
+
+        Returns:
+            DataFrame: After applying func to the original dataframe.
+        """
+        return func(self, *args)
+
+    def fill_null(self, value: Any, subset: list[str] | None = None) -> DataFrame:
+        """Fill null values in specified columns with a value.
+
+        Args:
+            value: Value to replace nulls with. Will be cast to match column type.
+            subset: Optional list of column names to fill. If None, fills all columns.
+
+        Returns:
+            DataFrame with null values replaced where type casting is possible
+
+        Examples:
+            >>> from parqdb.datafusion import SessionContext, col
+            >>> ctx = SessionContext()
+            >>> df = ctx.from_pydict({"a": [1, None, 3], "b": [None, 5, 6]})
+            >>> filled = df.fill_null(0)
+            >>> filled.sort(col("a")).collect()[0].column("a").to_pylist()
+            [0, 1, 3]
+
+        Notes:
+            - Only fills nulls in columns where the value can be cast to the column type
+            - For columns where casting fails, the original column is kept unchanged
+            - For columns not in subset, the original column is kept unchanged
+        """
+        return DataFrame(self.df.fill_null(value, subset))
+
+
+class InsertOp(Enum):
+    """Insert operation mode.
+
+    These modes are used by the table writing feature to define how record
+    batches should be written to a table.
+    """
+
+    APPEND = InsertOpInternal.APPEND
+    """Appends new rows to the existing table without modifying any existing rows."""
+
+    REPLACE = InsertOpInternal.REPLACE
+    """Replace existing rows that collide with the inserted rows.
+
+    Replacement is typically based on a unique key or primary key.
+    """
+
+    OVERWRITE = InsertOpInternal.OVERWRITE
+    """Overwrites all existing rows in the table with the new rows."""
+
+
+class DataFrameWriteOptions:
+    """Writer options for DataFrame.
+
+    There is no guarantee the table provider supports all writer options.
+    See the individual implementation and documentation for details.
+    """
+
+    def __init__(
+        self,
+        insert_operation: InsertOp | None = None,
+        single_file_output: bool = False,
+        partition_by: str | Sequence[str] | None = None,
+        sort_by: Expr | SortExpr | Sequence[Expr] | Sequence[SortExpr] | None = None,
+    ) -> None:
+        """Instantiate writer options for DataFrame."""
+        if isinstance(partition_by, str):
+            partition_by = [partition_by]
+
+        sort_by_raw = sort_list_to_raw_sort_list(sort_by)
+        insert_op = insert_operation.value if insert_operation is not None else None
+
+        self._raw_write_options = DataFrameWriteOptionsInternal(
+            insert_op, single_file_output, partition_by, sort_by_raw
+        )

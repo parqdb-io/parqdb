@@ -1,6 +1,6 @@
 # Code of Conduct
 
-Relify is committed to an open, welcoming, and professional community for
+ParqDB is committed to an open, welcoming, and professional community for
 everyone who participates, regardless of background, identity, experience, or
 ability.
 
@@ -21,7 +21,7 @@ permission are not acceptable.
 ## Scope
 
 This policy applies to project repositories, issue trackers, reviews, community
-channels, events, and public interactions made while representing Relify.
+channels, events, and public interactions made while representing ParqDB.
 
 ## Reporting and Enforcement
 

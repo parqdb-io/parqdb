@@ -6,25 +6,25 @@ exclude = [
 ]
 members = [
     "rust/parallite",
-    "rust/relify-catalog",
-    "rust/relify-core",
-    "rust/relify-kmeans",
-    "rust/relify-kernels",
-    "rust/relify-iceberg",
-    "rust/relify-local",
-    "rust/relify-meta",
-    "rust/relify-index",
-    "rust/relify-storage",
+    "rust/parqdb-catalog",
+    "rust/parqdb-core",
+    "rust/parqdb-kmeans",
+    "rust/parqdb-kernels",
+    "rust/parqdb-iceberg",
+    "rust/parqdb-local",
+    "rust/parqdb-meta",
+    "rust/parqdb-index",
+    "rust/parqdb-storage",
     "python",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0-rc.2"
+version = "0.2.0-rc.1"
 edition = "2024"
 rust-version = "1.96"
 license = "MIT"
-repository = "https://github.com/petrizhang/relify"
+repository = "https://github.com/parqdb-io/parqdb"
 
 [workspace.dependencies]
 arrow = "58.3.0"

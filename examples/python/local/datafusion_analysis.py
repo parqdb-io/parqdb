@@ -3,20 +3,20 @@
 import os
 from tempfile import TemporaryDirectory
 
-import relify
+import parqdb
 
 from examples.python._common import build_index, write_documents
 
 
 def main() -> None:
-    with TemporaryDirectory(prefix="relify-datafusion-") as workspace:
+    with TemporaryDirectory(prefix="parqdb-datafusion-") as workspace:
         source = os.path.join(workspace, "documents.parquet")
         write_documents(source)
 
-        session = relify.connect(os.path.join(workspace, "relify-data"))
+        session = parqdb.connect(os.path.join(workspace, "parqdb-data"))
         session.register_parquet("documents", source)
         documents = session.table("documents")
-        assert isinstance(documents, relify.SourceTable)
+        assert isinstance(documents, parqdb.SourceTable)
         build_index(documents)
 
         query = (

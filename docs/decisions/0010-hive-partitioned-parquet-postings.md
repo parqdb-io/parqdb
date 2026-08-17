@@ -27,7 +27,7 @@ Static `cid` predicates select files directly from that manifest before
 DataFusion constructs the Parquet scan. Manifests use a bounded planning cache
 and stable SQL registrations resolve them lazily instead of retaining them. The
 scan still uses DataFusion's standard Parquet reader, projection, page cache,
-and runtime-filter path; Relify does not cache decoded postings.
+and runtime-filter path; ParqDB does not cache decoded postings.
 
 ## Consequences
 

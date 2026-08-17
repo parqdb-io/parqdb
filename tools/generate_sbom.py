@@ -142,7 +142,7 @@ def generate(repository: Path) -> dict[str, Any]:
             },
             "properties": [
                 {
-                    "name": "relify:cargo-lock-sha256",
+                    "name": "parqdb:cargo-lock-sha256",
                     "value": lock_digest,
                 }
             ],
@@ -162,7 +162,7 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument(
         "--output",
         type=Path,
-        default=Path("sboms/relify-python.cyclonedx.json"),
+        default=Path("sboms/parqdb-python.cyclonedx.json"),
     )
     return command
 

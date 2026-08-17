@@ -1,0 +1,32 @@
+[package]
+name = "parqdb-index"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Backend-neutral ParqDB index repository and publication"
+repository.workspace = true
+publish = false
+
+[lib]
+name = "parqdb_index"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+bytes.workspace = true
+parqdb-catalog = { version = "0.2.0-rc.1", path = "../parqdb-catalog", default-features = false }
+parqdb-core = { version = "0.2.0-rc.1", path = "../parqdb-core" }
+parqdb-meta = { version = "0.2.0-rc.1", path = "../parqdb-meta" }
+parqdb-storage = { version = "0.2.0-rc.1", path = "../parqdb-storage" }
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+parqdb-catalog = { version = "0.2.0-rc.1", path = "../parqdb-catalog" }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros"] }
+url.workspace = true

@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-Relify's original source code is licensed under the MIT License. The Python
+ParqDB's original source code is licensed under the MIT License. The Python
 distribution also contains modified source and compiled code from
 [Apache DataFusion Python](https://github.com/apache/datafusion-python), version
 54.0.0; the Apache Arrow Rust `parquet` crate, version 58.4.0; and the Apache
@@ -40,7 +40,7 @@ The complete Apache License 2.0 text is distributed in
 `vendor/datafusion-python/LICENSE.txt`,
 `vendor/arrow-rs/parquet/LICENSE.txt`, and
 `vendor/datafusion/datasource-parquet/LICENSE.txt`, and in every wheel's
-standard `.dist-info/licenses/` directory. Relify's maintained patches are
+standard `.dist-info/licenses/` directory. ParqDB's maintained patches are
 documented under the corresponding vendor directories.
 
 Every wheel contains a CycloneDX SBOM under `.dist-info/sboms/` with the locked

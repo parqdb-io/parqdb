@@ -41,5 +41,5 @@ describe behavior that is not yet exposed by a released runtime.
 - Distributed engine adapters are not bundled.
 - Build submission is process-local. Published metadata and index snapshots
   are durable, but in-progress jobs do not survive process restart.
-- Relify does not provide replication, a highly available catalog, tenant
+- ParqDB does not provide replication, a highly available catalog, tenant
   isolation, authentication, or a managed service control plane.

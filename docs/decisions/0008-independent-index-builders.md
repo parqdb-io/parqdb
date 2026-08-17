@@ -6,7 +6,7 @@
 
 ## Context
 
-Relify originally attached construction to concrete query sessions. Local
+ParqDB originally attached construction to concrete query sessions. Local
 tables accepted only `Local`, Spark tables constructed only through their own
 Spark session, and StarRocks tables exposed no construction API. This made a
 query engine appear to own index construction even though builders produce
@@ -19,8 +19,8 @@ remain queryable by Spark, StarRocks, or DataFusion.
 ## Decision
 
 Query backends and index builders are independent extension boundaries.
-`relify.backends.v1` reports query, terminal, and maintenance capabilities.
-`relify.builders.v1` defines builder identity, build profiles, pinned build
+`parqdb.backends.v1` reports query, terminal, and maintenance capabilities.
+`parqdb.builders.v1` defines builder identity, build profiles, pinned build
 requests, portable build output, and the builder protocol.
 
 Every concrete table reuses one table-centered lifecycle:
@@ -28,7 +28,7 @@ Every concrete table reuses one table-centered lifecycle:
 `drop_index`, and `search`. A session-owned `BuildCoordinator` resolves and
 pins the source relation at submission, validates the selected builder
 profile, owns asynchronous state, publishes returned artifacts through the
-Relify index repository, and discards unpublished output after publication
+ParqDB index repository, and discards unpublished output after publication
 failure.
 
 Builder objects own construction compute and physical writes:

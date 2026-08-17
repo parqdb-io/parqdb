@@ -1,13 +1,13 @@
 # Getting Started
 
-This guide installs Relify, builds an IVF index over a Parquet source, and
+This guide installs ParqDB, builds an IVF index over a Parquet source, and
 runs a filtered vector query through the embedded DataFusion runtime. It uses
 the small dataset included in the wheel, so no service or external data is
 required.
 
 ## Requirements
 
-Relify 0.1 supports standard CPython 3.11 through 3.14 on:
+ParqDB 0.1 supports standard CPython 3.11 through 3.14 on:
 
 - Linux x86_64 with glibc 2.28 or later; and
 - macOS arm64 11 or later.
@@ -20,22 +20,22 @@ are outside the initial binary release scope.
 Install the local DataFusion and Parquet path:
 
 ```bash
-python -m pip install relify
+python -m pip install parqdb
 ```
 
 With uv:
 
 ```bash
-uv add relify
+uv add parqdb
 ```
 
 Install Iceberg support separately when needed:
 
 ```bash
-python -m pip install "relify[iceberg]"
+python -m pip install "parqdb[iceberg]"
 ```
 
-Use `python -m pip install --pre relify` when explicitly opting into a future
+Use `python -m pip install --pre parqdb` when explicitly opting into a future
 pre-release while a stable release is also available.
 
 ## Build an Index
@@ -43,10 +43,10 @@ pre-release while a stable release is also available.
 Create `quickstart.py`:
 
 ```python
-import relify
+import parqdb
 
-session = relify.connect("./relify-data")
-source = relify.datasets.uri("documents")
+session = parqdb.connect("./parqdb-data")
+source = parqdb.datasets.uri("documents")
 
 session.register_parquet("documents", source)
 documents = session.table("documents")
@@ -55,13 +55,13 @@ documents.create_index(
     "documents_embedding",
     column="embedding",
     key=["document_id"],
-    config=relify.IVF(nlist=3),
+    config=parqdb.IVF(nlist=3),
 )
 documents.wait_for_index("documents_embedding")
 ```
 
-The source table remains in its original Parquet dataset. Relify writes the
-index and its metadata below `./relify-data`; it does not copy the source rows
+The source table remains in its original Parquet dataset. ParqDB writes the
+index and its metadata below `./parqdb-data`; it does not copy the source rows
 into another database.
 
 ## Search
@@ -87,7 +87,7 @@ Run it:
 python quickstart.py
 ```
 
-`documents.search(...)` creates an immutable query description. Relify compiles
+`documents.search(...)` creates an immutable query description. ParqDB compiles
 it only when a terminal such as `to_arrow`, `collect`, or `stream` is called.
 Results include the requested source columns and a
 `_distance` column containing squared L2 distance; smaller values rank first.

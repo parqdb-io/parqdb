@@ -17,7 +17,7 @@ metadata implicitly Parquet-specific.
 
 ## Decision
 
-`relify-publish` owns immutable metadata storage and catalog publication. It
+`parqdb-publish` owns immutable metadata storage and catalog publication. It
 accepts a complete `RelationReference`, backend identity, and backend-produced
 `IndexArtifacts`. It has no dependency on DataFusion, Arrow, Parquet, or a
 construction engine.

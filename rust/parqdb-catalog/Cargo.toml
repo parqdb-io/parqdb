@@ -1,0 +1,28 @@
+[package]
+name = "parqdb-catalog"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "ParqDB catalog abstraction, identifiers, and SQLite implementation"
+repository.workspace = true
+publish = false
+
+[features]
+default = ["sqlite"]
+sqlite = ["dep:rusqlite", "dep:serde_json"]
+
+[lints]
+workspace = true
+
+[dependencies]
+parqdb-meta = { version = "0.2.0-rc.1", path = "../parqdb-meta" }
+rusqlite = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+url.workspace = true
+uuid.workspace = true

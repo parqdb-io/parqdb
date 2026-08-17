@@ -1,4 +1,4 @@
-//! `PyO3` bindings for the Relify Python package.
+//! `PyO3` bindings for the `ParqDB` Python package.
 
 mod datafusion;
 mod errors;

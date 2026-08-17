@@ -6,8 +6,8 @@
     ]
   },
   "locations": {
-    "base": "s3://relify-fixtures/v1/catalog/metadata-v1.json",
-    "next": "s3://relify-fixtures/v1/catalog/metadata-next.json"
+    "base": "s3://parqdb-fixtures/v1/catalog/metadata-v1.json",
+    "next": "s3://parqdb-fixtures/v1/catalog/metadata-next.json"
   },
   "metadata": {
     "base": "valid/metadata.json",

@@ -5,24 +5,24 @@
 
 ## Context
 
-Relify uses SQLite for its embedded catalog. Earlier prerelease revisions used
+ParqDB uses SQLite for its embedded catalog. Earlier prerelease revisions used
 internal schema generations 1 through 4. The current layout names reusable
 centroid coordination explicitly and is generation 5.
 
 Resetting the generation to 1 would be unsafe: an old prerelease database could
 then be mistaken for the current layout. A schema number also cannot establish
-that an arbitrary SQLite database belongs to Relify.
+that an arbitrary SQLite database belongs to ParqDB.
 
 The catalog schema generation is an implementation detail. It is independent
-of the public Relify index schema stored in open index metadata.
+of the public ParqDB index schema stored in open index metadata.
 
 ## Decision
 
-Relify SQLite catalogs use both SQLite header fields:
+ParqDB SQLite catalogs use both SQLite header fields:
 
 | Field | Current value | Purpose |
 | --- | ---: | --- |
-| `application_id` | `0x524c4659` (`RLFY`) | Identifies a Relify catalog |
+| `application_id` | `0x524c4659` (`RLFY`) | Identifies a ParqDB catalog |
 | `user_version` | `5` | Identifies the current internal table layout |
 
 A new empty database is initialized with both values and the complete current
@@ -30,7 +30,7 @@ schema. An existing database opens only when both values match. Catalogs with
 prerelease schema generations 1 through 4, unversioned existing schemas, and
 unrelated application IDs are rejected before catalog tables are accessed.
 
-Relify does not provide catalog migrations or backward-compatibility guarantees
+ParqDB does not provide catalog migrations or backward-compatibility guarantees
 before a stable release. Users must recreate incompatible prerelease catalogs
 and rebuild or republish their indexes. The numeric value 5 prevents format
 collisions; it does not imply support for generations 1 through 4.

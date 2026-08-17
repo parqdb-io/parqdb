@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import parqdb
 import pyarrow.parquet as pq
 import pytest
-import relify
 from _support import (
     build_index,
     load_table_index,
@@ -48,7 +48,7 @@ def test_parquet_source_reference_forms(
         if source.is_dir():
             reference += "/"
 
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, reference)
     build_index(vectors)
 
@@ -69,11 +69,11 @@ def test_zstd_writer_options_reach_every_index_relation(tmp_path: Path) -> None:
         [0, 1, 2, 3],
         [[0.0, 0.0], [1.0, 0.0], [10.0, 0.0], [11.0, 0.0]],
     )
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
     build_index(
         vectors,
-        writer_options=relify.WriteOptions(
+        writer_options=parqdb.WriteOptions(
             max_row_group_rows=1,
             write_batch_rows=1,
             partitions=2,
@@ -108,7 +108,7 @@ def test_postings_row_groups_default_to_bounded_average_cluster_size(
         list(range(row_count)),
         [[float(row % 97), float(row % 89)] for row in range(row_count)],
     )
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
     build_index(vectors, nlist=2)
 
@@ -139,12 +139,12 @@ def test_postings_use_one_hive_partitioned_file_per_cluster(tmp_path: Path) -> N
             list(range(start, end)),
             [[float(row % 32), float(row // 32)] for row in range(start, end)],
         )
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
     build_index(
         vectors,
         nlist=16,
-        writer_options=relify.WriteOptions(
+        writer_options=parqdb.WriteOptions(
             partitions=4,
             target_file_size=1024 * 1024,
             max_row_group_rows=64,

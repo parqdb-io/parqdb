@@ -3,10 +3,10 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+import parqdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-import relify
 from _support import (
     WAIT,
     build_index,
@@ -233,30 +233,30 @@ def invalid_source(case: str) -> tuple[pa.Table, str, list[str], int]:
 @pytest.mark.parametrize(
     ("case", "error_type", "message"),
     [
-        ("missing-vector", relify.InvalidSchemaError, "vector column not found"),
-        ("scalar-vector", relify.InvalidSchemaError, "list<float>"),
+        ("missing-vector", parqdb.InvalidSchemaError, "vector column not found"),
+        ("scalar-vector", parqdb.InvalidSchemaError, "list<float>"),
         (
             "nullable-vector",
-            relify.InvalidSchemaError,
+            parqdb.InvalidSchemaError,
             "must not contain nulls",
         ),
         (
             "nullable-elements",
-            relify.InvalidSchemaError,
+            parqdb.InvalidSchemaError,
             "finite, non-null",
         ),
         (
             "inconsistent-dimension",
-            relify.InvalidSchemaError,
+            parqdb.InvalidSchemaError,
             "same positive dimension",
         ),
-        ("non-finite-vector", relify.InvalidSchemaError, "finite"),
-        ("nullable-key", relify.BackendError, "must not contain nulls"),
-        ("unsupported-key", relify.InvalidSchemaError, "unsupported source key type"),
-        ("missing-key", relify.InvalidSchemaError, "key column not found"),
-        ("reserved-distance", relify.InvalidSchemaError, "reserved column"),
-        ("empty-source", relify.InvalidSchemaError, "at least one"),
-        ("nlist-exceeds-rows", relify.InvalidArgumentError, "must not exceed ntotal"),
+        ("non-finite-vector", parqdb.InvalidSchemaError, "finite"),
+        ("nullable-key", parqdb.BackendError, "must not contain nulls"),
+        ("unsupported-key", parqdb.InvalidSchemaError, "unsupported source key type"),
+        ("missing-key", parqdb.InvalidSchemaError, "key column not found"),
+        ("reserved-distance", parqdb.InvalidSchemaError, "reserved column"),
+        ("empty-source", parqdb.InvalidSchemaError, "at least one"),
+        ("nlist-exceeds-rows", parqdb.InvalidArgumentError, "must not exceed ntotal"),
     ],
 )
 def test_invalid_sources_fail_without_publication(
@@ -268,7 +268,7 @@ def test_invalid_sources_fail_without_publication(
     source = tmp_path / f"{case}.parquet"
     table, column, key, nlist = invalid_source(case)
     pq.write_table(table, source)
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
 
     with pytest.raises(error_type, match=message):
@@ -299,7 +299,7 @@ def test_nullable_source_schema_accepts_non_null_values(tmp_path: Path) -> None:
         ),
         source,
     )
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
 
     build_index(vectors, nlist=1)
@@ -337,14 +337,14 @@ def test_duplicate_source_key_is_a_caller_contract(tmp_path: Path) -> None:
         ),
         source,
     )
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     documents = register_source(session, source, "documents")
 
     documents.create_index(
         "duplicate_key_index",
         column="embedding",
         key=["document_id"],
-        config=relify.IVF(nlist=1),
+        config=parqdb.IVF(nlist=1),
         wait_timeout=WAIT,
     )
 
@@ -394,7 +394,7 @@ def test_supported_source_key_types_round_trip_through_postings(
         ),
         source,
     )
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
     build_index(vectors, key=keys)
 

@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import timedelta
 from pathlib import Path
 
+import parqdb
 import pytest
-import relify
 from _support import (
     drop_table_index_entry,
     load_table_index,
@@ -13,7 +13,7 @@ from _support import (
     relation_files,
     write_vectors,
 )
-from relify.runtime.catalog import open_index_catalog
+from parqdb.runtime.catalog import open_index_catalog
 
 
 def test_catalog_lifecycle_survives_session_reopen(tmp_path: Path) -> None:
@@ -23,14 +23,14 @@ def test_catalog_lifecycle_survives_session_reopen(tmp_path: Path) -> None:
         [0, 1, 2, 3],
         [[0.0, 0.0], [1.0, 0.0], [10.0, 0.0], [11.0, 0.0]],
     )
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     assert session._indexes is not None
     vectors = register_source(session, source)
     vectors.create_index(
         "vectors_embedding",
         column="embedding",
         key=["id"],
-        config=relify.IVF(nlist=2),
+        config=parqdb.IVF(nlist=2),
     )
 
     assert vectors.index_status("vectors_embedding").state in {
@@ -55,7 +55,7 @@ def test_catalog_lifecycle_survives_session_reopen(tmp_path: Path) -> None:
     }
     source_reference = entry.metadata["snapshots"][0]["source"]
     assert session._indexes.list_for(source_reference, namespace=namespace) == [
-        relify.IndexInfo(
+        parqdb.IndexInfo(
             name="vectors_embedding",
             column="embedding",
             family="ivf",
@@ -70,9 +70,9 @@ def test_catalog_lifecycle_survives_session_reopen(tmp_path: Path) -> None:
     with pytest.raises(TypeError):
         entry.metadata["snapshots"][0]["metric"] = "other"
 
-    reopened = relify.connect(tmp_path / "relify-data")
+    reopened = parqdb.connect(tmp_path / "parqdb-data")
     reopened_vectors = reopened.table("vectors")
-    assert isinstance(reopened_vectors, relify.SourceTable)
+    assert isinstance(reopened_vectors, parqdb.SourceTable)
     assert reopened._indexes.list(namespace=namespace) == ["vectors_embedding"]
     assert load_table_index(reopened, reopened_vectors, "vectors_embedding") == entry
 
@@ -85,7 +85,7 @@ def test_internal_index_catalog_can_be_opened_without_an_execution_session(
     catalog_path = root / "catalog.sqlite"
     metadata_root = (tmp_path / "metadata").as_uri()
     write_vectors(source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
-    session = relify.connect(
+    session = parqdb.connect(
         root,
         warehouse=metadata_root,
     )
@@ -94,7 +94,7 @@ def test_internal_index_catalog_can_be_opened_without_an_execution_session(
         "vectors_embedding",
         column="embedding",
         key=["id"],
-        config=relify.IVF(nlist=1),
+        config=parqdb.IVF(nlist=1),
         wait_timeout=timedelta(seconds=30),
     )
     expected = load_table_index(session, vectors, "vectors_embedding")
@@ -114,9 +114,9 @@ def test_internal_index_catalog_can_be_opened_without_an_execution_session(
 
 
 def test_catalog_load_reports_a_missing_index(tmp_path: Path) -> None:
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
 
-    with pytest.raises(relify.IndexNotFoundError):
+    with pytest.raises(parqdb.IndexNotFoundError):
         session._indexes.load("missing")
 
 
@@ -125,13 +125,13 @@ def test_catalog_drop_and_register_recover_an_existing_index(
 ) -> None:
     source = tmp_path / "vectors.parquet"
     write_vectors(source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
     vectors.create_index(
         "vectors_embedding",
         column="embedding",
         key=["id"],
-        config=relify.IVF(nlist=1),
+        config=parqdb.IVF(nlist=1),
         wait_timeout=timedelta(seconds=30),
     )
     entry = load_table_index(session, vectors, "vectors_embedding")
@@ -145,9 +145,9 @@ def test_catalog_drop_and_register_recover_an_existing_index(
 
     assert session._indexes.list(namespace=vectors.identifier.index_namespace) == []
     assert all(path.exists() for path in index_files)
-    with pytest.raises(relify.IndexNotFoundError):
+    with pytest.raises(parqdb.IndexNotFoundError):
         vectors.index_status("vectors_embedding")
-    with pytest.raises(relify.IndexNotFoundError):
+    with pytest.raises(parqdb.IndexNotFoundError):
         load_table_index(session, vectors, "vectors_embedding")
 
     register_table_index(
@@ -161,7 +161,7 @@ def test_catalog_drop_and_register_recover_an_existing_index(
     recovered = vectors.index_status("vectors_embedding")
     assert recovered.state == "ready"
     assert recovered.current_snapshot_id == entry.metadata["current-snapshot-id"]
-    with pytest.raises(relify.AlreadyExistsError):
+    with pytest.raises(parqdb.AlreadyExistsError):
         register_table_index(
             session,
             vectors,
@@ -175,21 +175,21 @@ def test_index_status_and_wait_are_scoped_to_the_source(tmp_path: Path) -> None:
     second_source = tmp_path / "second.parquet"
     write_vectors(first_source, [0], [[0.0, 0.0]])
     write_vectors(second_source, [0], [[1.0, 0.0]])
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     first = register_source(session, first_source, "first")
     second = register_source(session, second_source, "second")
     first.create_index(
         "vectors_embedding",
         column="embedding",
         key=["id"],
-        config=relify.IVF(nlist=1),
+        config=parqdb.IVF(nlist=1),
         wait_timeout=timedelta(seconds=30),
     )
 
     assert first.index_status("vectors_embedding").state == "ready"
-    with pytest.raises(relify.IndexNotFoundError):
+    with pytest.raises(parqdb.IndexNotFoundError):
         second.index_status("vectors_embedding")
-    with pytest.raises(relify.IndexNotFoundError):
+    with pytest.raises(parqdb.IndexNotFoundError):
         second.wait_for_index(
             "vectors_embedding",
             timeout=timedelta(seconds=1),

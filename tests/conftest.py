@@ -12,7 +12,7 @@ pytest_plugins = ("support.fixtures",)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    group = parser.getgroup("relify test environment")
+    group = parser.getgroup("parqdb test environment")
     group.addoption(
         "--test-env",
         dest="test_env",

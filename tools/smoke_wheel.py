@@ -6,8 +6,8 @@ from importlib.metadata import version
 from importlib.util import find_spec
 from tempfile import TemporaryDirectory
 
+import parqdb
 import pyarrow
-import relify
 
 
 def main() -> None:
@@ -19,9 +19,9 @@ def main() -> None:
     for module in ("pyiceberg",):
         import_module(module)
 
-    with TemporaryDirectory(prefix="relify-wheel-smoke-") as directory:
-        session = relify.connect(os.path.join(directory, "relify-data"))
-        session.register_parquet("documents", relify.datasets.uri("documents"))
+    with TemporaryDirectory(prefix="parqdb-wheel-smoke-") as directory:
+        session = parqdb.connect(os.path.join(directory, "parqdb-data"))
+        session.register_parquet("documents", parqdb.datasets.uri("documents"))
         result = session.sql("SELECT document_id FROM documents LIMIT 1")
         if not isinstance(result, pyarrow.Table) or result.to_pydict() != {
             "document_id": [1]
@@ -32,7 +32,7 @@ def main() -> None:
             "smoke",
             column="embedding",
             key=["document_id"],
-            config=relify.IVF(nlist=3),
+            config=parqdb.IVF(nlist=3),
         )
         table.wait_for_index("smoke")
         query = (
@@ -47,7 +47,7 @@ def main() -> None:
             row["_distance"] < 0 for row in hits
         ):
             raise RuntimeError(f"unexpected installed-wheel search result: {hits}")
-    print(f"installed relify {version('relify')} wheel build/search smoke passed")
+    print(f"installed parqdb {version('parqdb')} wheel build/search smoke passed")
 
 
 if __name__ == "__main__":

@@ -78,7 +78,7 @@ valid only while the resolved file set and every file's bytes remain unchanged.
 Appending, deleting, or overwriting a file, including changing a wildcard
 expansion, makes reuse invalid. Changed data must be published at a different
 canonical URI, which produces a different fingerprint. A URI change also
-produces a different source state even when the bytes are identical. Relify
+produces a different source state even when the bytes are identical. ParqDB
 cannot detect an overwrite behind the same URI; such a mutation violates the
 source contract.
 

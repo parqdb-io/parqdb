@@ -2,14 +2,14 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use pyo3::prelude::*;
-use relify_catalog::{Error as CatalogError, IndexIdentifier, SqliteCatalog};
-use relify_core::{IndexArtifacts, IndexFormat};
-use relify_index::{
+use parqdb_catalog::{Error as CatalogError, IndexIdentifier, SqliteCatalog};
+use parqdb_core::{IndexArtifacts, IndexFormat};
+use parqdb_index::{
     IndexRepository, InitialIndex, MetadataStore, new_snapshot_id, publish_initial,
 };
-use relify_meta::{DistanceMetric, IndexMetadata, RelationReference};
-use relify_storage::{StorageRegistry, Warehouse};
+use parqdb_meta::{DistanceMetric, IndexMetadata, RelationReference};
+use parqdb_storage::{StorageRegistry, Warehouse};
+use pyo3::prelude::*;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
@@ -80,7 +80,7 @@ impl PyNativeIndexRepository {
                 .into_iter()
                 .map(|identifier| identifier.name().to_owned())
                 .collect()),
-            Err(relify_index::Error::Catalog(CatalogError::NamespaceNotFound(_))) => Ok(Vec::new()),
+            Err(parqdb_index::Error::Catalog(CatalogError::NamespaceNotFound(_))) => Ok(Vec::new()),
             Err(error) => Err(index_error(&error)),
         }
     }
@@ -183,7 +183,7 @@ impl PyNativeIndexRepository {
                         .await?;
                     let snapshot = loaded.metadata.current_snapshot()?;
                     repository.load_snapshot_ivf_centroids(snapshot).await?;
-                    Ok::<_, relify_index::Error>(loaded)
+                    Ok::<_, parqdb_index::Error>(loaded)
                 })
             })
             .map_err(|error| index_error(&error))?;
@@ -260,7 +260,7 @@ fn relation(value: &str) -> PyResult<RelationReference> {
     Ok(reference)
 }
 
-fn loaded_json(loaded: relify_index::LoadedIndex) -> PyResult<(String, String)> {
+fn loaded_json(loaded: parqdb_index::LoadedIndex) -> PyResult<(String, String)> {
     Ok((
         loaded.entry.metadata_location,
         metadata_json(&loaded.metadata)?,

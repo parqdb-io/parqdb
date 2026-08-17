@@ -80,7 +80,7 @@ def encode(vector: list[float], bits: int) -> tuple[float, float, bytes]:
 
 
 def descriptor(encoding: str) -> dict[str, object]:
-    root = f"s3://relify-fixtures/v1/valid/{encoding}"
+    root = f"s3://parqdb-fixtures/v1/valid/{encoding}"
     return {
         "source": {"profile": "parquet", "uri": f"{root}/source/"},
         "vector-field": "embedding",
@@ -94,12 +94,12 @@ def descriptor(encoding: str) -> dict[str, object]:
 def metadata(encoding: str) -> dict[str, object]:
     index_uuid = INDEX_UUIDS[encoding]
     centroid_uuid = IVF_CENTROIDS_UUIDS[encoding]
-    root = f"s3://relify-fixtures/v1/valid/{encoding}"
+    root = f"s3://parqdb-fixtures/v1/valid/{encoding}"
     centroid_descriptor = descriptor(encoding)
     return {
         "format-version": 1,
         "index-uuid": index_uuid,
-        "location": f"s3://relify-fixtures/v1/metadata/{index_uuid}/",
+        "location": f"s3://parqdb-fixtures/v1/metadata/{index_uuid}/",
         "last-updated-ms": 1_750_000_000_000,
         "last-sequence-number": 1,
         "current-snapshot-id": SNAPSHOT_ID,
@@ -149,7 +149,7 @@ def metadata(encoding: str) -> dict[str, object]:
 def ivf_centroids_metadata(encoding: str) -> dict[str, object]:
     centroid_descriptor = descriptor(encoding)
     centroid_uuid = IVF_CENTROIDS_UUIDS[encoding]
-    root = f"s3://relify-fixtures/v1/valid/{encoding}"
+    root = f"s3://parqdb-fixtures/v1/valid/{encoding}"
     return {
         "format-version": 1,
         "artifact-uuid": centroid_uuid,
