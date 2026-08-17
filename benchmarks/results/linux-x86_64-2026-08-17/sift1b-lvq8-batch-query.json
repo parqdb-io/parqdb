@@ -1,0 +1,160 @@
+{
+  "schema_version": 1,
+  "benchmark": "sift1b-batch-query",
+  "generated_at_utc": "2026-08-17T02:52:49.119629+00:00",
+  "implementation_revision": "4367671e607c6c8f27f30da60ab27c6a6bcbbdf1",
+  "dataset": {
+    "kind": "sift1b-bigann",
+    "rows": 1000000000,
+    "dimension": 128,
+    "queries": 10000
+  },
+  "parameters": {
+    "encoding": "lvq8",
+    "nlist": 65536,
+    "nprobe": 32,
+    "k": 10,
+    "index_io": "direct",
+    "page_cache_capacity_bytes": 536870912,
+    "threads": 2,
+    "warmup_queries": 0
+  },
+  "resources": {
+    "cpus": 2,
+    "memory_limit_bytes": 4294967296
+  },
+  "scenarios": [
+    {
+      "mode": "sequential",
+      "batch_size": null,
+      "status": "completed",
+      "queries": 10000,
+      "total_seconds": 650.5539563000202,
+      "milliseconds_per_query": 65.05539563000202,
+      "queries_per_second": 15.371515157442582,
+      "recall_at_10": 0.90094,
+      "page_cache": {
+        "capacity": 536870912,
+        "resident_bytes": 536835808,
+        "retired_bytes": 0,
+        "page_count": 2482,
+        "hits": 15502,
+        "misses": 5860473,
+        "admissions": 3827165,
+        "evictions": 3824683,
+        "capacity_bypasses": 0,
+        "oversized_bypasses": 0
+      },
+      "resource_usage": {
+        "wall_seconds": 650.5547166485339,
+        "cpu_seconds": 781.354348,
+        "peak_rss_bytes": 1637093376,
+        "minor_page_faults": 732344,
+        "major_page_faults": 0,
+        "read_bytes": 910080655360,
+        "write_bytes": 1638404096,
+        "cgroup_peak_memory_current_bytes": 4294967296,
+        "cgroup_memory_current_bytes": 4294561792,
+        "cgroup_memory_peak_bytes": 4294967296,
+        "cgroup_memory_anon_bytes": 1505652736,
+        "cgroup_memory_file_bytes": 2782011392,
+        "cgroup_swap_current_bytes": 0
+      }
+    },
+    {
+      "mode": "batch",
+      "batch_size": 512,
+      "status": "completed",
+      "queries": 10000,
+      "total_seconds": 574.1100883428007,
+      "milliseconds_per_query": 57.411008834280075,
+      "queries_per_second": 17.418262112177008,
+      "recall_at_10": 0.90094,
+      "page_cache": {
+        "capacity": 536870912,
+        "resident_bytes": 535627038,
+        "retired_bytes": 0,
+        "page_count": 2576,
+        "hits": 0,
+        "misses": 4969021,
+        "admissions": 3243927,
+        "evictions": 3241351,
+        "capacity_bypasses": 0,
+        "oversized_bypasses": 0
+      },
+      "resource_usage": {
+        "wall_seconds": 574.1108875572681,
+        "cpu_seconds": 695.9579119999999,
+        "peak_rss_bytes": 2794713088,
+        "minor_page_faults": 1226127,
+        "major_page_faults": 0,
+        "read_bytes": 793469165568,
+        "write_bytes": 655360,
+        "cgroup_peak_memory_current_bytes": 4295061504,
+        "cgroup_memory_current_bytes": 4294778880,
+        "cgroup_memory_peak_bytes": 4294967296,
+        "cgroup_memory_anon_bytes": 2666582016,
+        "cgroup_memory_file_bytes": 1618223104,
+        "cgroup_swap_current_bytes": 0
+      }
+    },
+    {
+      "mode": "batch",
+      "batch_size": 1024,
+      "status": "completed",
+      "queries": 10000,
+      "total_seconds": 500.93433030322194,
+      "milliseconds_per_query": 50.093433030322196,
+      "queries_per_second": 19.962696495460538,
+      "recall_at_10": 0.90099,
+      "page_cache": {
+        "capacity": 536870912,
+        "resident_bytes": 536229722,
+        "retired_bytes": 0,
+        "page_count": 2571,
+        "hits": 0,
+        "misses": 4308485,
+        "admissions": 2812167,
+        "evictions": 2809596,
+        "capacity_bypasses": 0,
+        "oversized_bypasses": 0
+      },
+      "resource_usage": {
+        "wall_seconds": 500.9351432342082,
+        "cpu_seconds": 640.6136520000001,
+        "peak_rss_bytes": 3291123712,
+        "minor_page_faults": 1140782,
+        "major_page_faults": 0,
+        "read_bytes": 693604380672,
+        "write_bytes": 327680,
+        "cgroup_peak_memory_current_bytes": 4295127040,
+        "cgroup_memory_current_bytes": 4294160384,
+        "cgroup_memory_peak_bytes": 4294967296,
+        "cgroup_memory_anon_bytes": 3154243584,
+        "cgroup_memory_file_bytes": 1131044864,
+        "cgroup_swap_current_bytes": 0
+      }
+    },
+    {
+      "mode": "batch",
+      "batch_size": 2048,
+      "status": "oom",
+      "completed_queries": 4096,
+      "exit_code": 137
+    },
+    {
+      "mode": "batch",
+      "batch_size": 4096,
+      "status": "oom",
+      "completed_queries": 0,
+      "exit_code": 137
+    },
+    {
+      "mode": "batch",
+      "batch_size": 8192,
+      "status": "oom",
+      "completed_queries": 0,
+      "exit_code": 137
+    }
+  ]
+}

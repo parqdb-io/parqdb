@@ -14,8 +14,11 @@ Recall@10 under the stated resource limit, not a complete recall curve.
 - Training: 16,777,216 sampled vectors, seed 42
 - Build resources: 64 vCPU, 128 GiB memory, 300 GiB spill limit
 - Query resources: one physical core with two SMT threads, 4 GiB memory
-- Query I/O: Linux Direct I/O for local index data, 640 MiB decompressed Page Cache
-- Queries: 100 distinct BigANN queries after 10 warmup queries
+- Query I/O: Linux Direct I/O for local index data
+- Latency workload: 100 distinct BigANN queries after 10 warmup queries,
+  640 MiB decompressed Page Cache
+- Batch workload: 10,000 distinct BigANN queries without warmup, 512 MiB
+  decompressed Page Cache
 - Software: Python 3.12.2, PyArrow 25.0.0, Relify 0.1.0rc2
 
 The index files were evicted from the host page cache before starting the query
@@ -23,7 +26,7 @@ container. Parquet metadata remained on the buffered path; index data ranges
 bypassed the host page cache. Query latency excludes index loading, query
 loading, and warmup.
 
-## Results
+## Build and single-query latency
 
 | Metric | Result |
 | --- | ---: |
@@ -43,10 +46,35 @@ loading, and warmup.
 The query cgroup peaked at 3.57 GiB without swapping. The published index was
 33 times larger than the query memory limit.
 
+## Batch throughput
+
+Each scenario ran in a fresh 2 vCPU / 4 GiB container. The sequential path
+submitted one query at a time. The batch path scanned the union of selected IVF
+clusters once per batch and maintained an independent Top-K for each query.
+
+| Mode | Batch size | Time | QPS | Recall@10 | Direct reads | Speedup |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Sequential | - | 650.6 s | 15.37 | 0.90094 | 847.6 GiB | 1.00x |
+| Batch | 512 | 574.1 s | 17.42 | 0.90094 | 739.0 GiB | 1.13x |
+| Batch | 1,024 | 500.9 s | 19.96 | 0.90099 | 646.0 GiB | 1.30x |
+
+Batch sizes 2,048, 4,096, and 8,192 exceeded the 4 GiB cgroup limit. The 2,048
+run completed two batches before it was killed; the larger sizes were killed
+before returning their first batch. These are memory-bound failures, not
+latency measurements. They show that the current union-cluster scan needs
+stronger execution-state bounds before larger batches are practical under this
+resource limit.
+
+SIFT contains many tied distances. The query contract orders by distance but
+does not define a secondary key, so parallel Top-K may choose different tied
+candidates. The observed Recall@10 difference is 5 matches out of 100,000
+returned rows.
+
 ## Raw Data
 
 - [`sift1b-lvq8-build.json`](sift1b-lvq8-build.json)
 - [`sift1b-lvq8-query.json`](sift1b-lvq8-query.json)
+- [`sift1b-lvq8-batch-query.json`](sift1b-lvq8-batch-query.json)
 
 Dataset preparation and benchmark commands are documented in
 [`benchmarks/README.md`](../../README.md).
