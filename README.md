@@ -27,7 +27,7 @@
 ---
 
 ParqDB is an embedded vector database for larger-than-memory search and analytics
-on billion-scale multimodal data, directly on Parquet.
+on billion-scale multimodal data, with Parquet storage and Arrow-native execution.
 
 **Key Features**
 
