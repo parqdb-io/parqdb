@@ -3,7 +3,7 @@
 // DataFusion query integration tests.
 
 use std::collections::BTreeMap;
-use std::fs::{copy, create_dir_all, read_dir};
+use std::fs::{copy, create_dir_all};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -81,15 +81,18 @@ fn shared_query_fixture() -> (TempDir, ParquetStore, IndexMetadata) {
     .unwrap();
     let postings_source = fixture_source.join("ivf_postings");
     let postings_destination = temporary.path().join("v1/valid/ivf_postings");
-    for partition in read_dir(postings_source).unwrap() {
-        let partition = partition.unwrap();
-        let destination = postings_destination.join(partition.file_name());
-        create_dir_all(&destination).unwrap();
-        for file in read_dir(partition.path()).unwrap() {
-            let file = file.unwrap();
-            copy(file.path(), destination.join(file.file_name())).unwrap();
-        }
-    }
+    let bucket = "cid_bucket=000000";
+    create_dir_all(postings_destination.join(bucket)).unwrap();
+    copy(
+        postings_source.join("manifest.json"),
+        postings_destination.join("manifest.json"),
+    )
+    .unwrap();
+    copy(
+        postings_source.join(bucket).join("part-00000.parquet"),
+        postings_destination.join(bucket).join("part-00000.parquet"),
+    )
+    .unwrap();
     let registry = StorageRegistry::default();
     registry
         .register_store(
@@ -433,10 +436,7 @@ async fn datafusion_execution_matches_the_shared_query_fixtures() {
     let postings_uri = format!("{fixture_root}{}", snapshot.index_relations["ivf_postings"]);
     let centroids = parquet.read(&centroids_uri, None).await.unwrap();
     let source = parquet.read(&source_uri, None).await.unwrap();
-    let postings = parquet
-        .partitioned_dataframe(&postings_uri, vec![("cid".into(), DataType::Int32)])
-        .await
-        .unwrap();
+    let postings = parquet.dataframe(&postings_uri).await.unwrap();
     let postings_schema = Arc::clone(postings.schema().inner());
     let postings = concat_batches(&postings_schema, &postings.collect().await.unwrap()).unwrap();
     let context = SessionContext::new();

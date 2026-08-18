@@ -145,6 +145,7 @@ def test_local_build_publish_and_search(tmp_path: Path) -> None:
     ) == pa.schema(
         [
             pa.field("cid", pa.int32(), nullable=False),
+            pa.field("cid_bucket", pa.int32(), nullable=False),
             pa.field("centroid", required_vector, nullable=False),
         ]
     )
@@ -152,6 +153,7 @@ def test_local_build_publish_and_search(tmp_path: Path) -> None:
         relation_path(snapshot["index-relations"]["ivf_postings"], session.warehouse)
     ) == pa.schema(
         [
+            pa.field("cid", pa.int32(), nullable=False),
             pa.field("key_1", pa.string(), nullable=False),
         ]
     )
@@ -166,8 +168,8 @@ def test_local_build_publish_and_search(tmp_path: Path) -> None:
             assert metadata.num_rows <= 2
             assert metadata.column(0).compression == "UNCOMPRESSED"
             assert metadata.column(0).statistics is not None
-        assert file.parent.name.startswith("cid=")
-        assert "cid" not in parquet_file.schema_arrow.names
+        assert file.parent.name.startswith("cid_bucket=")
+        assert "cid" in parquet_file.schema_arrow.names
     assert load_metadata_file(entry.metadata_location) == thaw_json(entry.metadata)
 
     reopened = parqdb.connect(tmp_path / "parqdb-data")
@@ -203,6 +205,7 @@ def test_local_lvq_build_and_search(tmp_path: Path) -> None:
         assert posting_files
         assert pq.read_schema(posting_files[0]) == pa.schema(
             [
+                pa.field("cid", pa.int32(), nullable=False),
                 pa.field("key_1", pa.string(), nullable=False),
                 pa.field("offset", pa.float32(), nullable=False),
                 pa.field("scale", pa.float32(), nullable=False),
@@ -518,6 +521,7 @@ def test_composite_keys_are_stored_directly_in_postings(tmp_path: Path) -> None:
         relation_path(snapshot["index-relations"]["ivf_postings"], session.warehouse)
     ) == pa.schema(
         [
+            pa.field("cid", pa.int32(), nullable=False),
             pa.field("key_1", pa.string(), nullable=False),
             pa.field("key_2", pa.int64(), nullable=False),
         ]
@@ -545,6 +549,7 @@ def test_vectors_can_be_omitted_from_postings(tmp_path: Path) -> None:
         relation_path(snapshot["index-relations"]["ivf_postings"], session.warehouse)
     ) == pa.schema(
         [
+            pa.field("cid", pa.int32(), nullable=False),
             pa.field("key_1", pa.string(), nullable=False),
         ]
     )

@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 ROOT = Path(__file__).parent
@@ -85,7 +86,6 @@ def descriptor(encoding: str) -> dict[str, object]:
 def metadata(encoding: str) -> dict[str, object]:
     index_uuid = INDEX_UUIDS[encoding]
     centroid_uuid = IVF_CENTROIDS_UUIDS[encoding]
-    root = f"s3://parqdb-fixtures/v1/valid/{encoding}"
     centroid_descriptor = descriptor(encoding)
     return {
         "format-version": 1,
@@ -140,6 +140,7 @@ def ivf_centroids_metadata(encoding: str) -> dict[str, object]:
         "created-at-ms": 1_750_000_000_000,
         "descriptor": centroid_descriptor,
         "centroids": "ivf_centroids.parquet",
+        "roots": "ivf_roots.parquet",
     }
 
 
@@ -166,11 +167,29 @@ def write_fixture(encoding: str) -> None:
     centroids = pa.Table.from_arrays(
         [
             pa.array([0, 1], type=pa.int32()),
+            pa.array([0, 0], type=pa.int32()),
             pa.array([[1.0, 1.0, 1.0], [10.0, 11.0, 12.0]], type=vector_type),
         ],
         schema=pa.schema(
             [
                 pa.field("cid", pa.int32(), nullable=False),
+                pa.field("cid_bucket", pa.int32(), nullable=False),
+                pa.field("centroid", vector_type, nullable=False),
+            ]
+        ),
+    )
+    roots = pa.Table.from_arrays(
+        [
+            pa.array([0], type=pa.int32()),
+            pa.array([0], type=pa.int32()),
+            pa.array([2], type=pa.int32()),
+            pa.array([[5.5, 6.0, 6.5]], type=vector_type),
+        ],
+        schema=pa.schema(
+            [
+                pa.field("cid_bucket", pa.int32(), nullable=False),
+                pa.field("cid_begin", pa.int32(), nullable=False),
+                pa.field("cid_end", pa.int32(), nullable=False),
                 pa.field("centroid", vector_type, nullable=False),
             ]
         ),
@@ -198,12 +217,34 @@ def write_fixture(encoding: str) -> None:
 
     pq.write_table(source, directory / "source.parquet", compression="NONE")
     pq.write_table(centroids, directory / "ivf_centroids.parquet", compression="NONE")
-    pq.write_to_dataset(
-        postings,
-        root_path=postings_root,
-        partition_cols=["cid"],
-        basename_template="part-{i}.parquet",
-        compression="NONE",
+    pq.write_table(roots, directory / "ivf_roots.parquet", compression="NONE")
+    bucket = postings_root / "cid_bucket=000000"
+    bucket.mkdir(parents=True)
+    path = bucket / "part-00000.parquet"
+    writer = pq.ParquetWriter(path, postings.schema, compression="NONE")
+    for cid in range(2):
+        rows = postings.filter(pc.equal(postings["cid"], cid))
+        if rows.num_rows:
+            writer.write_table(rows, row_group_size=rows.num_rows)
+    writer.close()
+    write_json(
+        postings_root / "manifest.json",
+        {
+            "format-version": 1,
+            "nlist": 2,
+            "ntotal": postings.num_rows,
+            "cid-offsets": [0, 2],
+            "files": [
+                {
+                    "path": "cid_bucket=000000/part-00000.parquet",
+                    "cid-bucket": 0,
+                    "min-cid": 0,
+                    "max-cid": 1,
+                    "rows": postings.num_rows,
+                    "size": path.stat().st_size,
+                }
+            ],
+        },
     )
     write_json(directory / "metadata.json", metadata(encoding))
     write_json(

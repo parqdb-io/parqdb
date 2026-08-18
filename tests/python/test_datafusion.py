@@ -362,7 +362,7 @@ def test_full_probe_omits_the_cluster_predicate(
 
 def test_large_nprobe_prunes_postings_files_during_planning(tmp_path: Path) -> None:
     source = tmp_path / "vectors.parquet"
-    ids = list(range(256))
+    ids = list(range(4096))
     write_vectors(source, ids, [[float(value), 0.0] for value in ids])
     session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
@@ -373,13 +373,14 @@ def test_large_nprobe_prunes_postings_files_during_planning(tmp_path: Path) -> N
 
     assert "IvfTopKExec" in plan
     assert "join_type=RightSemi" not in plan
-    assert "full_filters=" in plan
     assert "file_groups={" in plan
-    assert "/cid=129/" not in plan
-    assert "FilterExec" not in plan
+    assert "cid_bucket=" in plan
+    assert "/cid=" not in plan
+    assert "FilterExec" in plan
     sql = session.to_sql(query)
-    assert 'parqdb_selected_clusters("cid") AS (' in sql
-    assert "VALUES (" in sql
+    assert "parqdb_postings_selected_" in sql
+    assert "parqdb_selected_clusters" not in sql
+    assert "VALUES (" not in sql
     assert session.sql(sql).to_pydict()["id"] == [0, 1, 2]
     assert session.collect(query)["id"].to_pylist() == [0, 1, 2]
 

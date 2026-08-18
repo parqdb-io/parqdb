@@ -137,6 +137,7 @@ fn ivf_centroids_document(_store: &MetadataStore) -> IvfCentroidsMetadata {
         created_at_ms: 1_750_000_000_000,
         descriptor,
         centroids: "indexes/centroid-artifacts/centroids/".into(),
+        roots: "indexes/centroid-artifacts/roots/".into(),
     }
 }
 

@@ -54,6 +54,7 @@ An IVF centroid metadata document has these fields:
 | `created-at-ms` | Non-negative Unix epoch time in milliseconds. |
 | `descriptor` | Semantic identity defined below. |
 | `centroids` | Warehouse-relative Parquet location for `ivf_centroids`. |
+| `roots` | Warehouse-relative Parquet location for `ivf_roots`. |
 
 The descriptor contains, in order, `vector-field`, `dimension`, `metric`,
 `nlist`, and `clustering-profile-version`. Version `1` is the only clustering
@@ -94,11 +95,36 @@ are compared byte-for-byte. Integer key types are signed.
 
 ## 5. IVF Centroids
 
+Clustering profile version `1` uses hierarchical K-means. Training produces
+root centroids and leaf centroids. Root `r` owns one non-empty contiguous leaf
+CID interval `[cid_offsets[r], cid_offsets[r + 1])`; the first offset is zero,
+the final offset is `C`, and offsets are strictly increasing. Implementations
+must not infer this mapping by fixed-width division. Flat K-means may be
+requested as an implementation-specific operation, but its result does not
+satisfy this profile unless its leaves are deterministically reordered and a
+valid hierarchy is synthesized. Implementations may use that conversion as a
+warned fallback when bounded recovery cannot keep every trained root partition
+non-empty. For hierarchical training, the exact `C`-leaf budget is allocated
+across non-empty roots in proportion to their sampled populations, with at
+least one leaf per root and no more leaves than assigned sample rows.
+
+`ivf_roots` has this schema:
+
+| Field | Type | Constraint |
+|---|---|---|
+| `cid_bucket` | `int` | Required; unique; ascending root ID. |
+| `cid_begin` | `int` | Required; inclusive first leaf CID. |
+| `cid_end` | `int` | Required; exclusive final leaf CID. |
+| `centroid` | `list<float>` | Required; exactly `D` finite elements. |
+
+The root rows define ordered, adjacent, non-empty ranges that cover `[0, C)`.
+
 `ivf_centroids` has this schema:
 
 | Field | Type | Constraint |
 |---|---|---|
 | `cid` | `int` | Required; unique; in `[0, C)`. |
+| `cid_bucket` | `int` | Required; root whose interval contains `cid`. |
 | `centroid` | `list<float>` | Required; exactly `D` finite elements. |
 
 The relation contains exactly `C` rows. Centroid training is implementation
@@ -191,7 +217,8 @@ Writers may rely on source-key uniqueness and are not required to verify it.
 
 ## 9. Physical Layout
 
-The logical schema does not assign meaning to file boundaries, row groups,
-Parquet encodings, compression, or row order. Parquet LVQ `code` is stored as
-`BYTE_ARRAY`; PLAIN encoding without a dictionary is recommended. Writers may
-partition postings by `cid` without changing index semantics.
+Parquet LVQ `code` is stored as `BYTE_ARRAY`; PLAIN encoding without a
+dictionary is recommended. Parquet postings retain physical `cid` and use the
+manifested, root-bucketed layout in the Parquet relation profile. One postings
+row group contains exactly one CID. File and row-group boundaries are physical
+tuning details subject to those invariants and have no logical identity.

@@ -1,6 +1,6 @@
 # Hive-Partitioned Parquet Postings
 
-- Status: Accepted
+- Status: Superseded by [Static HTTP Index Packages](../rfcs/20260818-static-http-index-packages.md)
 - Date: 2026-08-03
 
 ## Context

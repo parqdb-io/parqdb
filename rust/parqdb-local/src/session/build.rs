@@ -593,6 +593,15 @@ impl LocalSession {
         )?;
         let batch = self.parquet.read(&centroids_location, None).await?;
         let centroids = crate::ivf::read_centroids(&batch, prepared.nlist, prepared.dimension)?;
+        let roots_location = parqdb_index::resolve_warehouse_location(
+            self.indexes.metadata_store().warehouse_root(),
+            &loaded.metadata.roots,
+            loaded.metadata.roots.ends_with('/'),
+        )?;
+        let roots_batch = self.parquet.read(&roots_location, None).await?;
+        let (root_centroids, cid_offsets) =
+            crate::ivf::read_roots(&roots_batch, prepared.nlist, prepared.dimension)?;
+        crate::ivf::validate_centroid_buckets(&batch, &cid_offsets)?;
         let reference = IvfCentroidsReference::new(
             loaded.entry.fingerprint,
             loaded.entry.artifact_uuid,
@@ -605,7 +614,7 @@ impl LocalSession {
             centroids: RelationReference::Parquet {
                 uri: centroids_location,
             },
-            trained: reused_ivf(prepared, centroids)?,
+            trained: reused_ivf(prepared, centroids, root_centroids, cid_offsets)?,
         })
     }
 
@@ -632,10 +641,12 @@ impl LocalSession {
                 .location(&format!("indexes/{}/1", artifact_uuid.simple()), true)?;
             context.build_lease.add_snapshot_root(&centroid_root)?;
             let centroids_location = child_location(&centroid_root, "ivf_centroids", true)?;
+            let roots_location = child_location(&centroid_root, "ivf_roots", true)?;
             let trained = train_prepared_ivf(context.prepared, context.parallel, context.progress)?;
             write_ivf_centroids(
                 &self.parquet,
                 &centroids_location,
+                &roots_location,
                 &trained,
                 context.writer_options,
                 context.progress,
@@ -651,6 +662,10 @@ impl LocalSession {
                     .indexes
                     .metadata_store()
                     .relative_location(&centroids_location)?,
+                roots: self
+                    .indexes
+                    .metadata_store()
+                    .relative_location(&roots_location)?,
             };
             let metadata_location = self
                 .indexes

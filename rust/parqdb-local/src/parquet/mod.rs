@@ -40,6 +40,7 @@ use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion::prelude::{col, lit};
 use futures::{StreamExt, TryStreamExt};
 use object_store::{ObjectStore, ObjectStoreExt, PutMode};
+use parqdb_meta::{IvfPostingsFile, IvfPostingsManifest};
 use parqdb_storage::StorageRegistry;
 use parquet::arrow::async_writer::ParquetObjectWriter;
 use parquet::arrow::{ArrowWriter, AsyncArrowWriter};
@@ -234,54 +235,73 @@ impl ParquetStore {
         Ok(())
     }
 
-    pub(crate) async fn write_hive_cid_dataframe(
+    pub(crate) async fn write_manifested_cid_dataframe(
         &self,
         location: &str,
         dataframe: DataFrame,
         partitions: usize,
+        cid_offsets: &[usize],
+        ntotal: usize,
         options: &ParquetWriterOptions,
-    ) -> Result<()> {
+    ) -> Result<IvfPostingsManifest> {
         options.validate()?;
         self.require_empty(location).await?;
         self.register(location)?;
 
-        let (state, logical_plan) = dataframe.into_parts();
-        let physical_plan = state.create_physical_plan(&logical_plan).await?;
-        let cid_index = physical_plan.schema().index_of("cid").map_err(|_| {
-            Error::InvalidSchema("Hive-partitioned postings must contain cid".into())
-        })?;
-        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(
-            Column::new("cid", cid_index),
-        ))])
-        .expect("cid ordering is non-empty");
-        let repartitioned = Arc::new(RepartitionExec::try_new(
-            physical_plan,
-            PhysicalPartitioning::Hash(vec![Arc::new(Column::new("cid", cid_index))], partitions),
-        )?);
-        let sorted =
-            Arc::new(SortExec::new(ordering, repartitioned).with_preserve_partitioning(true));
-        let streams = execute_stream_partitioned(sorted, state.task_ctx())?;
-        let mut tasks = tokio::task::JoinSet::new();
-        for stream in streams {
-            let registry = self.registry.clone();
-            let location = location.to_owned();
-            let options = options.clone();
-            tasks.spawn(
-                async move { write_hive_cid_stream(registry, location, stream, options).await },
-            );
+        if cid_offsets.len() < 2
+            || cid_offsets.first() != Some(&0)
+            || cid_offsets.windows(2).any(|range| range[0] >= range[1])
+        {
+            return Err(Error::InvalidArgument(
+                "IVF CID offsets must define non-empty contiguous buckets".into(),
+            ));
         }
-        while let Some(result) = tasks.join_next().await {
-            match result {
-                Ok(result) => result?,
-                Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
-                Err(error) => {
-                    return Err(Error::InvalidArgument(format!(
-                        "Hive-partitioned postings writer task failed: {error}"
-                    )));
-                }
-            }
-        }
-        Ok(())
+
+        let files = write_manifested_cid_files(
+            self.registry.clone(),
+            location.to_owned(),
+            dataframe,
+            partitions,
+            options.clone(),
+        )
+        .await?;
+        let nlist = i32::try_from(*cid_offsets.last().expect("CID offsets are non-empty"))
+            .map_err(|_| Error::InvalidArgument("nlist exceeds the INT32 domain".into()))?;
+        let manifest = IvfPostingsManifest {
+            format_version: 1,
+            nlist,
+            ntotal: i64::try_from(ntotal)
+                .map_err(|_| Error::InvalidArgument("ntotal exceeds the INT64 domain".into()))?,
+            cid_offsets: cid_offsets
+                .iter()
+                .map(|offset| {
+                    i32::try_from(*offset).map_err(|_| {
+                        Error::InvalidArgument("CID offset exceeds the INT32 domain".into())
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?,
+            files,
+        };
+        manifest
+            .validate()
+            .map_err(|error| Error::InvalidSchema(error.to_string()))?;
+        let manifest_location = child_location(location, "manifest.json", false)?;
+        let resolved = self.registry.resolve(&manifest_location)?;
+        resolved
+            .store()
+            .put_opts(
+                resolved.path(),
+                Bytes::from(
+                    manifest
+                        .to_json_vec()
+                        .map_err(|error| Error::InvalidSchema(error.to_string()))?,
+                )
+                .into(),
+                PutMode::Create.into(),
+            )
+            .await
+            .map_err(parqdb_storage::Error::from)?;
+        Ok(manifest)
     }
 
     pub(crate) async fn dataframe(&self, location: &str) -> Result<DataFrame> {
@@ -289,22 +309,6 @@ impl ParquetStore {
         Ok(self
             .context
             .read_parquet(location, ParquetReadOptions::default())
-            .await?)
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn partitioned_dataframe(
-        &self,
-        location: &str,
-        partition_columns: Vec<(String, DataType)>,
-    ) -> Result<DataFrame> {
-        self.register(location)?;
-        Ok(self
-            .context
-            .read_parquet(
-                location,
-                ParquetReadOptions::default().table_partition_cols(partition_columns),
-            )
             .await?)
     }
 
@@ -442,83 +446,349 @@ fn valid_parquet_object(object: object_store::ObjectMeta) -> Option<object_store
     (object.size > 0 && object.location.as_ref().ends_with(".parquet")).then_some(object)
 }
 
-async fn write_hive_cid_stream(
+async fn write_manifested_cid_files(
     registry: StorageRegistry,
     location: String,
-    mut stream: SendableRecordBatchStream,
+    dataframe: DataFrame,
+    partitions: usize,
     options: ParquetWriterOptions,
-) -> Result<()> {
-    let schema = stream.schema();
-    let cid_index = schema
+) -> Result<Vec<IvfPostingsFile>> {
+    let (state, logical_plan) = dataframe.into_parts();
+    let physical_plan = state.create_physical_plan(&logical_plan).await?;
+    let cid_index = physical_plan
+        .schema()
         .index_of("cid")
-        .map_err(|_| Error::InvalidSchema("Hive-partitioned postings must contain cid".into()))?;
-    let projection = (0..schema.fields().len())
-        .filter(|index| *index != cid_index)
-        .collect::<Vec<_>>();
-    let output_schema = Arc::new(schema.project(&projection)?);
-    let properties = if output_schema.field_with_name("code").is_ok() {
-        options.code_writer_properties()?
-    } else {
-        options.writer_properties()?
-    };
-    let mut current_cid = None;
-    let mut writer: Option<AsyncArrowWriter<ParquetObjectWriter>> = None;
-
-    while let Some(batch) = stream.next().await {
-        let batch = batch?;
-        let cids = batch
-            .column(cid_index)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .ok_or_else(|| Error::InvalidSchema("IVF postings cid must be int".into()))?;
-        if cids.null_count() != 0 {
-            return Err(Error::InvalidSchema(
-                "IVF postings cid must be required".into(),
-            ));
+        .map_err(|_| Error::InvalidSchema("manifested postings must contain cid".into()))?;
+    let bucket_index = physical_plan
+        .schema()
+        .index_of("cid_bucket")
+        .map_err(|_| Error::InvalidSchema("manifested postings must contain cid_bucket".into()))?;
+    let ordering = LexOrdering::new(vec![
+        PhysicalSortExpr::new_default(Arc::new(Column::new("cid_bucket", bucket_index))),
+        PhysicalSortExpr::new_default(Arc::new(Column::new("cid", cid_index))),
+    ])
+    .expect("bucket and cid ordering is non-empty");
+    let repartitioned = Arc::new(RepartitionExec::try_new(
+        physical_plan,
+        PhysicalPartitioning::Hash(
+            vec![Arc::new(Column::new("cid_bucket", bucket_index))],
+            partitions,
+        ),
+    )?);
+    let sorted = Arc::new(SortExec::new(ordering, repartitioned).with_preserve_partitioning(true));
+    let streams = execute_stream_partitioned(sorted, state.task_ctx())?;
+    let mut tasks = tokio::task::JoinSet::new();
+    for stream in streams {
+        let registry = registry.clone();
+        let location = location.clone();
+        let options = options.clone();
+        tasks.spawn(async move {
+            write_manifested_cid_stream(registry, location, stream, options).await
+        });
+    }
+    let mut files = Vec::new();
+    while let Some(result) = tasks.join_next().await {
+        match result {
+            Ok(result) => files.extend(result?),
+            Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+            Err(error) => {
+                return Err(Error::InvalidArgument(format!(
+                    "manifested postings writer task failed: {error}"
+                )));
+            }
         }
-        let values = cids.values();
-        if values.windows(2).any(|pair| pair[0] > pair[1])
-            || current_cid
-                .is_some_and(|previous| values.first().is_some_and(|first| previous > *first))
+    }
+    files.sort_unstable_by(|left, right| {
+        (
+            left.cid_bucket,
+            left.min_cid,
+            left.max_cid,
+            left.path.as_str(),
+        )
+            .cmp(&(
+                right.cid_bucket,
+                right.min_cid,
+                right.max_cid,
+                right.path.as_str(),
+            ))
+    });
+    Ok(files)
+}
+
+struct OpenPostingsFile {
+    writer: AsyncArrowWriter<ParquetObjectWriter>,
+    store: Arc<dyn ObjectStore>,
+    object_path: object_store::path::Path,
+    relative_path: String,
+    cid_bucket: i32,
+    min_cid: i32,
+    max_cid: i32,
+    rows: u64,
+}
+
+impl OpenPostingsFile {
+    async fn finish(self) -> Result<IvfPostingsFile> {
+        self.writer.close().await?;
+        let metadata = self
+            .store
+            .head(&self.object_path)
+            .await
+            .map_err(parqdb_storage::Error::from)?;
+        Ok(IvfPostingsFile {
+            path: self.relative_path,
+            cid_bucket: self.cid_bucket,
+            min_cid: self.min_cid,
+            max_cid: self.max_cid,
+            rows: self.rows,
+            size: metadata.size,
+        })
+    }
+}
+
+fn open_postings_file(
+    registry: &StorageRegistry,
+    location: &str,
+    bucket: i32,
+    part: usize,
+    cid: i32,
+    schema: SchemaRef,
+    properties: WriterProperties,
+) -> Result<OpenPostingsFile> {
+    let relative_path = format!("cid_bucket={bucket:06}/part-{part:05}.parquet");
+    let file = child_location(location, &relative_path, false)?;
+    let resolved = registry.resolve(&file)?;
+    let store = resolved.store();
+    let object_path = resolved.path().clone();
+    let object_writer = ParquetObjectWriter::new(Arc::clone(&store), object_path.clone());
+    Ok(OpenPostingsFile {
+        writer: AsyncArrowWriter::try_new(object_writer, schema, Some(properties))?,
+        store,
+        object_path,
+        relative_path,
+        cid_bucket: bucket,
+        min_cid: cid,
+        max_cid: cid,
+        rows: 0,
+    })
+}
+
+async fn finish_postings_file(
+    writer: &mut Option<OpenPostingsFile>,
+    files: &mut Vec<IvfPostingsFile>,
+) -> Result<()> {
+    if let Some(writer) = writer.take() {
+        files.push(writer.finish().await?);
+    }
+    Ok(())
+}
+
+struct ManifestedCidStreamWriter {
+    registry: StorageRegistry,
+    location: String,
+    projection: Vec<usize>,
+    output_schema: SchemaRef,
+    properties: WriterProperties,
+    options: ParquetWriterOptions,
+    current_bucket: Option<i32>,
+    current_cid: Option<i32>,
+    next_part: usize,
+    writer: Option<OpenPostingsFile>,
+    files: Vec<IvfPostingsFile>,
+}
+
+impl ManifestedCidStreamWriter {
+    fn new(
+        registry: StorageRegistry,
+        location: String,
+        schema: &SchemaRef,
+        options: ParquetWriterOptions,
+    ) -> Result<(Self, usize, usize)> {
+        let cid_index = schema
+            .index_of("cid")
+            .map_err(|_| Error::InvalidSchema("manifested postings must contain cid".into()))?;
+        let bucket_index = schema.index_of("cid_bucket").map_err(|_| {
+            Error::InvalidSchema("manifested postings must contain cid_bucket".into())
+        })?;
+        let projection = (0..schema.fields().len())
+            .filter(|index| *index != bucket_index)
+            .collect::<Vec<_>>();
+        let output_schema = Arc::new(schema.project(&projection)?);
+        let properties = if output_schema.field_with_name("code").is_ok() {
+            options.code_writer_properties()?
+        } else {
+            options.writer_properties()?
+        };
+        Ok((
+            Self {
+                registry,
+                location,
+                projection,
+                output_schema,
+                properties,
+                options,
+                current_bucket: None,
+                current_cid: None,
+                next_part: 0,
+                writer: None,
+                files: Vec::new(),
+            },
+            cid_index,
+            bucket_index,
+        ))
+    }
+
+    async fn write_batch(
+        &mut self,
+        batch: &RecordBatch,
+        cid_index: usize,
+        bucket_index: usize,
+    ) -> Result<()> {
+        let cids = required_postings_int32(batch, cid_index, "IVF postings cid")?;
+        let buckets = required_postings_int32(batch, bucket_index, "cid_bucket")?;
+        let cid_values = cids.values();
+        let bucket_values = buckets.values();
+        if (1..batch.num_rows()).any(|row| {
+            (bucket_values[row - 1], cid_values[row - 1]) > (bucket_values[row], cid_values[row])
+        }) || self
+            .current_bucket
+            .zip(self.current_cid)
+            .is_some_and(|previous| {
+                bucket_values
+                    .first()
+                    .zip(cid_values.first())
+                    .is_some_and(|(&bucket, &cid)| previous > (bucket, cid))
+            })
         {
             return Err(Error::InvalidArgument(
-                "Hive-partitioned postings input must be ordered by cid".into(),
+                "manifested postings input must be ordered by (cid_bucket, cid)".into(),
             ));
         }
 
         let mut start = 0;
-        while start < values.len() {
-            let cid = values[start];
-            let length = values[start..].partition_point(|candidate| *candidate == cid);
-            if current_cid != Some(cid) {
-                if let Some(writer) = writer.take() {
-                    writer.close().await?;
-                }
-                let file =
-                    child_location(&location, &format!("cid={cid}/part-00000.parquet"), false)?;
-                let resolved = registry.resolve(&file)?;
-                let object_writer =
-                    ParquetObjectWriter::new(resolved.store(), resolved.path().clone());
-                writer = Some(AsyncArrowWriter::try_new(
-                    object_writer,
-                    Arc::clone(&output_schema),
-                    Some(properties.clone()),
-                )?);
-                current_cid = Some(cid);
-            }
-            let projected = batch.slice(start, length).project(&projection)?;
-            writer
-                .as_mut()
-                .expect("current cid has an open writer")
-                .write(&projected)
+        while start < batch.num_rows() {
+            let bucket = bucket_values[start];
+            let cid = cid_values[start];
+            let length = (start..batch.num_rows())
+                .take_while(|index| bucket_values[*index] == bucket && cid_values[*index] == cid)
+                .count();
+            self.begin_cid(bucket, cid).await?;
+            self.write_cid_rows(batch, start, length, bucket, cid)
                 .await?;
             start += length;
         }
+        Ok(())
     }
-    if let Some(writer) = writer {
-        writer.close().await?;
+
+    async fn begin_cid(&mut self, bucket: i32, cid: i32) -> Result<()> {
+        if self.current_bucket != Some(bucket) {
+            finish_postings_file(&mut self.writer, &mut self.files).await?;
+            self.current_bucket = Some(bucket);
+            self.next_part = 0;
+        } else if self.current_cid != Some(cid)
+            && let Some(open) = self.writer.as_mut()
+        {
+            if open.writer.in_progress_rows() > 0 {
+                open.writer.flush().await?;
+            }
+            if open.writer.bytes_written() >= self.options.target_file_size {
+                finish_postings_file(&mut self.writer, &mut self.files).await?;
+                self.next_part += 1;
+            }
+        }
+        self.current_cid = Some(cid);
+        Ok(())
     }
-    Ok(())
+
+    async fn write_cid_rows(
+        &mut self,
+        batch: &RecordBatch,
+        start: usize,
+        length: usize,
+        bucket: i32,
+        cid: i32,
+    ) -> Result<()> {
+        let row_group_rows = self
+            .options
+            .max_row_group_rows
+            .unwrap_or(self.options.write_batch_rows);
+        let mut written = 0;
+        while written < length {
+            if self.writer.is_none() {
+                self.writer = Some(open_postings_file(
+                    &self.registry,
+                    &self.location,
+                    bucket,
+                    self.next_part,
+                    cid,
+                    Arc::clone(&self.output_schema),
+                    self.properties.clone(),
+                )?);
+            }
+            let open = self.writer.as_mut().expect("postings writer was opened");
+            open.max_cid = cid;
+            let remaining_in_group = row_group_rows
+                .saturating_sub(open.writer.in_progress_rows())
+                .max(1);
+            let chunk_rows = remaining_in_group.min(length - written);
+            let projected = batch
+                .slice(start + written, chunk_rows)
+                .project(&self.projection)?;
+            open.writer.write(&projected).await?;
+            open.rows = open
+                .rows
+                .checked_add(u64::try_from(chunk_rows).expect("usize fits u64"))
+                .ok_or_else(|| Error::InvalidArgument("postings row count overflows".into()))?;
+            written += chunk_rows;
+
+            if open.writer.in_progress_rows() >= row_group_rows {
+                open.writer.flush().await?;
+            }
+            if open.writer.in_progress_rows() == 0
+                && open.writer.bytes_written() >= self.options.target_file_size
+            {
+                finish_postings_file(&mut self.writer, &mut self.files).await?;
+                self.next_part += 1;
+            }
+        }
+        Ok(())
+    }
+
+    async fn finish(mut self) -> Result<Vec<IvfPostingsFile>> {
+        finish_postings_file(&mut self.writer, &mut self.files).await?;
+        Ok(self.files)
+    }
+}
+
+fn required_postings_int32<'a>(
+    batch: &'a RecordBatch,
+    index: usize,
+    field: &str,
+) -> Result<&'a Int32Array> {
+    let values = batch
+        .column(index)
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .ok_or_else(|| Error::InvalidSchema(format!("{field} must be int")))?;
+    if values.null_count() != 0 {
+        return Err(Error::InvalidSchema(format!("{field} must be required")));
+    }
+    Ok(values)
+}
+
+async fn write_manifested_cid_stream(
+    registry: StorageRegistry,
+    location: String,
+    mut stream: SendableRecordBatchStream,
+    options: ParquetWriterOptions,
+) -> Result<Vec<IvfPostingsFile>> {
+    let schema = stream.schema();
+    let (mut writer, cid_index, bucket_index) =
+        ManifestedCidStreamWriter::new(registry, location, &schema, options)?;
+
+    while let Some(batch) = stream.next().await {
+        writer.write_batch(&batch?, cid_index, bucket_index).await?;
+    }
+    writer.finish().await
 }
 
 pub(crate) fn child_location(base: &str, child: &str, directory: bool) -> Result<String> {

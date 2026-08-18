@@ -315,7 +315,7 @@ def test_nullable_source_schema_accepts_non_null_values(tmp_path: Path) -> None:
         ]
     )
     assert not postings.field("key_1").nullable
-    assert postings.names == ["key_1"]
+    assert postings.names == ["cid", "key_1"]
 
 
 def test_duplicate_source_key_is_a_caller_contract(tmp_path: Path) -> None:
@@ -413,6 +413,7 @@ def test_supported_source_key_types_round_trip_through_postings(
     )
     assert posting_schema == pa.schema(
         [
+            pa.field("cid", pa.int32(), nullable=False),
             pa.field("key_1", pa.bool_(), nullable=False),
             pa.field("key_2", pa.int32(), nullable=False),
             pa.field("key_3", pa.int64(), nullable=False),

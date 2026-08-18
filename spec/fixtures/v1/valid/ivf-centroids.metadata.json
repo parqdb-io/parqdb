@@ -10,5 +10,6 @@
     "vector-field": "embedding"
   },
   "fingerprint": "3ad6988a-389e-53de-aaa6-f210345fd894",
-  "format-version": 1
+  "format-version": 1,
+  "roots": "ivf_roots.parquet"
 }

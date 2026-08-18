@@ -159,6 +159,7 @@ pub(crate) fn read_centroids(
         .index_of("centroid")
         .map_err(|_| Error::InvalidSchema("ivf_centroids is missing centroid".into()))?;
     let cids = required_int32(table, "cid", "ivf_centroids")?;
+    let _ = required_int32(table, "cid_bucket", "ivf_centroids")?;
     if table.schema().field(centroid_index).is_nullable() {
         return Err(Error::InvalidSchema(
             "ivf_centroids.centroid must be required".into(),
@@ -185,6 +186,81 @@ pub(crate) fn read_centroids(
             .copy_from_slice(&values[row * dimension..(row + 1) * dimension]);
     }
     Ok(reordered)
+}
+
+pub(crate) fn validate_centroid_buckets(table: &RecordBatch, cid_offsets: &[usize]) -> Result<()> {
+    let cids = required_int32(table, "cid", "ivf_centroids")?;
+    let buckets = required_int32(table, "cid_bucket", "ivf_centroids")?;
+    for row in 0..table.num_rows() {
+        let cid = usize::try_from(cids.value(row))
+            .map_err(|_| Error::InvalidSchema("centroid cid must be non-negative".into()))?;
+        let boundary = cid_offsets.partition_point(|offset| *offset <= cid);
+        let expected = boundary
+            .checked_sub(1)
+            .filter(|bucket| *bucket + 1 < cid_offsets.len());
+        let actual = usize::try_from(buckets.value(row)).ok();
+        if actual != expected {
+            return Err(Error::InvalidSchema(
+                "ivf_centroids.cid_bucket does not match ivf_roots".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn read_roots(
+    table: &RecordBatch,
+    nlist: usize,
+    dimension: usize,
+) -> Result<(Vec<f32>, Vec<usize>)> {
+    if table.num_rows() == 0 {
+        return Err(Error::InvalidSchema(
+            "ivf_roots must contain at least one root".into(),
+        ));
+    }
+    let centroid_index = table
+        .schema()
+        .index_of("centroid")
+        .map_err(|_| Error::InvalidSchema("ivf_roots is missing centroid".into()))?;
+    if table.schema().field(centroid_index).is_nullable() {
+        return Err(Error::InvalidSchema(
+            "ivf_roots.centroid must be required".into(),
+        ));
+    }
+    let buckets = required_int32(table, "cid_bucket", "ivf_roots")?;
+    let begins = required_int32(table, "cid_begin", "ivf_roots")?;
+    let ends = required_int32(table, "cid_end", "ivf_roots")?;
+    let (centroids, actual_dimension) = borrow_vectors(table.column(centroid_index))?;
+    if actual_dimension != dimension {
+        return Err(Error::InvalidSchema(
+            "ivf_roots centroid dimension does not match metadata".into(),
+        ));
+    }
+
+    let mut cid_offsets = Vec::with_capacity(table.num_rows() + 1);
+    let mut previous_end = 0_usize;
+    for row in 0..table.num_rows() {
+        let bucket = usize::try_from(buckets.value(row))
+            .map_err(|_| Error::InvalidSchema("root cid_bucket must be non-negative".into()))?;
+        let begin = usize::try_from(begins.value(row))
+            .map_err(|_| Error::InvalidSchema("root cid_begin must be non-negative".into()))?;
+        let end = usize::try_from(ends.value(row))
+            .map_err(|_| Error::InvalidSchema("root cid_end must be non-negative".into()))?;
+        if bucket != row || begin != previous_end || begin >= end || end > nlist {
+            return Err(Error::InvalidSchema(
+                "ivf_roots must define ordered contiguous CID ranges".into(),
+            ));
+        }
+        cid_offsets.push(begin);
+        previous_end = end;
+    }
+    if previous_end != nlist {
+        return Err(Error::InvalidSchema(
+            "ivf_roots CID ranges must cover nlist".into(),
+        ));
+    }
+    cid_offsets.push(previous_end);
+    Ok((centroids.to_vec(), cid_offsets))
 }
 
 pub(crate) fn select_clusters(

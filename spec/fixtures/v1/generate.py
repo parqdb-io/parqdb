@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from generate_lvq import write_lvq_fixtures
 
@@ -36,12 +37,33 @@ def write_postings(directory: Path, table: pa.Table) -> None:
     root = directory / "ivf_postings"
     shutil.rmtree(root, ignore_errors=True)
     (directory / "ivf_postings.parquet").unlink(missing_ok=True)
-    pq.write_to_dataset(
-        table,
-        root_path=root,
-        partition_cols=["cid"],
-        basename_template="part-{i}.parquet",
-        compression="NONE",
+    bucket = root / "cid_bucket=000000"
+    bucket.mkdir(parents=True)
+    path = bucket / "part-00000.parquet"
+    writer = pq.ParquetWriter(path, table.schema, compression="NONE")
+    for cid in range(2):
+        rows = table.filter(pc.equal(table["cid"], cid))
+        if rows.num_rows:
+            writer.write_table(rows, row_group_size=rows.num_rows)
+    writer.close()
+    write_json(
+        root / "manifest.json",
+        {
+            "format-version": 1,
+            "nlist": 2,
+            "ntotal": table.num_rows,
+            "cid-offsets": [0, 2],
+            "files": [
+                {
+                    "path": "cid_bucket=000000/part-00000.parquet",
+                    "cid-bucket": 0,
+                    "min-cid": 0,
+                    "max-cid": 1,
+                    "rows": table.num_rows,
+                    "size": path.stat().st_size,
+                }
+            ],
+        },
     )
 
 
@@ -130,6 +152,7 @@ def ivf_centroids_metadata(
         "created-at-ms": 1_750_000_000_000,
         "descriptor": descriptor,
         "centroids": "ivf_centroids.parquet",
+        "roots": "ivf_roots.parquet",
     }
 
 
@@ -247,11 +270,29 @@ def write_tables() -> None:
     centroids = pa.Table.from_arrays(
         [
             pa.array([0, 1], type=pa.int32()),
+            pa.array([0, 0], type=pa.int32()),
             pa.array([[0.5, 0.0], [10.0, 0.0]], type=vector),
         ],
         schema=pa.schema(
             [
                 pa.field("cid", pa.int32(), nullable=False),
+                pa.field("cid_bucket", pa.int32(), nullable=False),
+                pa.field("centroid", vector, nullable=False),
+            ]
+        ),
+    )
+    roots = pa.Table.from_arrays(
+        [
+            pa.array([0], type=pa.int32()),
+            pa.array([0], type=pa.int32()),
+            pa.array([2], type=pa.int32()),
+            pa.array([[5.25, 0.0]], type=vector),
+        ],
+        schema=pa.schema(
+            [
+                pa.field("cid_bucket", pa.int32(), nullable=False),
+                pa.field("cid_begin", pa.int32(), nullable=False),
+                pa.field("cid_end", pa.int32(), nullable=False),
                 pa.field("centroid", vector, nullable=False),
             ]
         ),
@@ -271,6 +312,7 @@ def write_tables() -> None:
     for name, table in (
         ("source.parquet", source),
         ("ivf_centroids.parquet", centroids),
+        ("ivf_roots.parquet", roots),
     ):
         pq.write_table(table, VALID / name, compression="NONE")
     write_postings(VALID, postings)
@@ -324,11 +366,29 @@ def write_composite_tables() -> None:
     centroids = pa.Table.from_arrays(
         [
             pa.array([0, 1], type=pa.int32()),
+            pa.array([0, 0], type=pa.int32()),
             pa.array([[0.0, 0.0], [10.0, 0.0]], type=vector),
         ],
         schema=pa.schema(
             [
                 pa.field("cid", pa.int32(), nullable=False),
+                pa.field("cid_bucket", pa.int32(), nullable=False),
+                pa.field("centroid", vector, nullable=False),
+            ]
+        ),
+    )
+    roots = pa.Table.from_arrays(
+        [
+            pa.array([0], type=pa.int32()),
+            pa.array([0], type=pa.int32()),
+            pa.array([2], type=pa.int32()),
+            pa.array([[5.0, 0.0]], type=vector),
+        ],
+        schema=pa.schema(
+            [
+                pa.field("cid_bucket", pa.int32(), nullable=False),
+                pa.field("cid_begin", pa.int32(), nullable=False),
+                pa.field("cid_end", pa.int32(), nullable=False),
                 pa.field("centroid", vector, nullable=False),
             ]
         ),
@@ -350,6 +410,7 @@ def write_composite_tables() -> None:
     for name, table in (
         ("source.parquet", source),
         ("ivf_centroids.parquet", centroids),
+        ("ivf_roots.parquet", roots),
     ):
         pq.write_table(table, COMPOSITE / name, compression="NONE")
     write_postings(COMPOSITE, postings)

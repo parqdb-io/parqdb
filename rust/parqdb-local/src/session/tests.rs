@@ -27,7 +27,9 @@ use uuid::Uuid;
 
 use super::*;
 use crate::local_uri::directory_to_file_uri;
-use crate::{IvfConfig, MaintenanceKind, PublishedIndex, parqdb_session_config};
+use crate::{
+    IvfConfig, MaintenanceKind, ParquetWriterOptions, PublishedIndex, parqdb_session_config,
+};
 use crate::{ParqDBRuntime, QueryAdmissionOptions, QueryAdmissionStats};
 
 struct MemoryEntry {
@@ -547,8 +549,12 @@ async fn write_direct_pid_source(store: &ParquetStore, path: &Path) {
     store.write(&location, &source).await.unwrap();
 }
 
-async fn write_direct_pid_relations(store: &ParquetStore, root: &Path) -> (PathBuf, PathBuf) {
+async fn write_direct_pid_relations(
+    store: &ParquetStore,
+    root: &Path,
+) -> (PathBuf, PathBuf, PathBuf) {
     let centroids_path = root.join("centroids");
+    let roots_path = root.join("roots");
     let postings_path = root.join("postings");
     let mut centroids = ListBuilder::new(Float32Builder::new()).with_field(Arc::new(Field::new(
         "element",
@@ -563,9 +569,14 @@ async fn write_direct_pid_relations(store: &ParquetStore, root: &Path) -> (PathB
     let centroid_table = RecordBatch::try_new(
         Arc::new(Schema::new(vec![
             Field::new("cid", DataType::Int32, false),
+            Field::new("cid_bucket", DataType::Int32, false),
             Field::new("centroid", centroids.data_type().clone(), false),
         ])),
-        vec![Arc::new(Int32Array::from(vec![0, 1])), Arc::new(centroids)],
+        vec![
+            Arc::new(Int32Array::from(vec![0, 1])),
+            Arc::new(Int32Array::from(vec![0, 0])),
+            Arc::new(centroids),
+        ],
     )
     .unwrap();
     store
@@ -575,23 +586,77 @@ async fn write_direct_pid_relations(store: &ParquetStore, root: &Path) -> (PathB
         )
         .await
         .unwrap();
-    for (cid, keys) in [(0, vec![20, 10]), (1, vec![30])] {
-        let postings = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new(
-                "key_1",
-                DataType::Int64,
-                false,
-            )])),
-            vec![Arc::new(Int64Array::from(keys))],
-        )
+    let mut roots = ListBuilder::new(Float32Builder::new()).with_field(Arc::new(Field::new(
+        "element",
+        DataType::Float32,
+        false,
+    )));
+    roots.values().append_slice(&[5.0, 0.0]);
+    roots.append(true);
+    let roots = roots.finish();
+    let roots_table = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("cid_bucket", DataType::Int32, false),
+            Field::new("cid_begin", DataType::Int32, false),
+            Field::new("cid_end", DataType::Int32, false),
+            Field::new("centroid", roots.data_type().clone(), false),
+        ])),
+        vec![
+            Arc::new(Int32Array::from(vec![0])),
+            Arc::new(Int32Array::from(vec![0])),
+            Arc::new(Int32Array::from(vec![2])),
+            Arc::new(roots),
+        ],
+    )
+    .unwrap();
+    store
+        .write(&directory_to_file_uri(&roots_path).unwrap(), &roots_table)
+        .await
         .unwrap();
-        let partition = postings_path.join(format!("cid={cid}"));
-        store
-            .write(&directory_to_file_uri(&partition).unwrap(), &postings)
-            .await
-            .unwrap();
-    }
-    (centroids_path, postings_path)
+    let postings = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("cid_bucket", DataType::Int32, false),
+            Field::new("cid", DataType::Int32, false),
+            Field::new("key_1", DataType::Int64, false),
+        ])),
+        vec![
+            Arc::new(Int32Array::from(vec![0, 0, 0])),
+            Arc::new(Int32Array::from(vec![0, 0, 1])),
+            Arc::new(Int64Array::from(vec![20, 10, 30])),
+        ],
+    )
+    .unwrap();
+    let context = store.context();
+    context.register_batch("direct_postings", postings).unwrap();
+    store
+        .write_manifested_cid_dataframe(
+            &directory_to_file_uri(&postings_path).unwrap(),
+            context.table("direct_postings").await.unwrap(),
+            1,
+            &[0, 2],
+            3,
+            &ParquetWriterOptions::default(),
+        )
+        .await
+        .unwrap();
+    (centroids_path, roots_path, postings_path)
+}
+
+#[tokio::test]
+async fn relational_centroid_routing_materializes_a_typed_cid_selection() {
+    let temporary = TempDir::new().unwrap();
+    let session = LocalSession::open(temporary.path().join("parqdb")).unwrap();
+    let (centroids, _, _) = write_direct_pid_relations(&session.parquet, temporary.path()).await;
+    let selected = session
+        .route_centroids_with_datafusion(
+            &directory_to_file_uri(&centroids).unwrap(),
+            &[9.0, 0.0],
+            1,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(selected, [1]);
 }
 
 fn direct_pid_metadata(
@@ -673,7 +738,7 @@ async fn direct_pid_fixture() -> (TempDir, LocalSession, PathBuf) {
     let source_path = temporary.path().join("source");
     write_direct_pid_source(&session.parquet, &source_path).await;
     let artifact_path = file_uri_to_path(session.warehouse_root()).unwrap();
-    let (centroids_path, postings_path) =
+    let (centroids_path, roots_path, postings_path) =
         write_direct_pid_relations(&session.parquet, &artifact_path).await;
     let source = RelationReference::Parquet {
         uri: directory_to_file_uri(&source_path.canonicalize().unwrap()).unwrap(),
@@ -696,6 +761,11 @@ async fn direct_pid_fixture() -> (TempDir, LocalSession, PathBuf) {
             .indexes
             .metadata_store()
             .relative_location(&directory_to_file_uri(&centroids_path).unwrap())
+            .unwrap(),
+        roots: session
+            .indexes
+            .metadata_store()
+            .relative_location(&directory_to_file_uri(&roots_path).unwrap())
             .unwrap(),
     };
     let centroid_location = session
@@ -921,7 +991,7 @@ async fn searches_an_index_by_its_persisted_source_key() {
 }
 
 #[tokio::test]
-async fn large_nprobe_pushes_a_static_filter_into_parquet_postings() {
+async fn large_nprobe_uses_bucket_files_and_keeps_a_correctness_filter() {
     let temporary = TempDir::new().unwrap();
     let session = LocalSession::open(temporary.path().join("parqdb")).unwrap();
     let source_path = temporary.path().join("source");
@@ -930,7 +1000,7 @@ async fn large_nprobe_pushes_a_static_filter_into_parquet_postings() {
         DataType::Float32,
         false,
     )));
-    for value in 0_u16..256 {
+    for value in 0_u16..4096 {
         vectors.values().append_slice(&[f32::from(value), 0.0]);
         vectors.append(true);
     }
@@ -941,7 +1011,7 @@ async fn large_nprobe_pushes_a_static_filter_into_parquet_postings() {
             Field::new("embedding", vectors.data_type().clone(), false),
         ])),
         vec![
-            Arc::new(Int64Array::from_iter_values(0_i64..256)),
+            Arc::new(Int64Array::from_iter_values(0_i64..4096)),
             Arc::new(vectors),
         ],
     )
@@ -995,10 +1065,13 @@ async fn large_nprobe_pushes_a_static_filter_into_parquet_postings() {
     assert_eq!(ids, [0, 1, 2]);
     assert!(plan.contains("IvfTopKExec"), "{plan}");
     assert!(!plan.contains("join_type=RightSemi"), "{plan}");
-    assert!(plan.contains("full_filters="), "{plan}");
     assert!(plan.contains("file_groups={"), "{plan}");
-    assert!(!plan.contains("/cid=129/"), "{plan}");
-    assert!(!plan.contains("FilterExec"), "{plan}");
+    assert!(plan.contains("cid_bucket="), "{plan}");
+    assert!(!plan.contains("/cid="), "{plan}");
+    // Physical pruning comes from the typed CID selection and explicit
+    // ParquetAccessPlan. This residual filter is deliberately retained as a
+    // correctness guard; it is not the pruning mechanism.
+    assert!(plan.contains("FilterExec"), "{plan}");
 }
 
 #[tokio::test]
@@ -1044,10 +1117,27 @@ async fn lvq_indexes_build_and_query_through_parquet() {
         lvq8.index_relations["ivf_postings"]
     );
 
+    let centroid_reference = ivf_centroids_reference(lvq4).unwrap();
+    let centroid_metadata_location = session
+        .indexes
+        .metadata_store()
+        .resolve_location(&centroid_reference.metadata_location, false)
+        .unwrap();
+    let centroid_metadata = session
+        .indexes
+        .metadata_store()
+        .load_ivf_centroids(&centroid_metadata_location)
+        .await
+        .unwrap();
     let centroids = session
         .indexes
         .metadata_store()
-        .resolve_location(&lvq4.index_relations["ivf_centroids"], true)
+        .resolve_location(&centroid_metadata.centroids, true)
+        .unwrap();
+    let ivf_roots = session
+        .indexes
+        .metadata_store()
+        .resolve_location(&centroid_metadata.roots, true)
         .unwrap();
     let lvq4_postings = session
         .indexes
@@ -1059,10 +1149,10 @@ async fn lvq_indexes_build_and_query_through_parquet() {
         .metadata_store()
         .resolve_location(&lvq8.index_relations["ivf_postings"], true)
         .unwrap();
-    let roots = [centroids, lvq4_postings, lvq8_postings];
+    let roots = [centroids, ivf_roots, lvq4_postings, lvq8_postings];
     let objects = session.warehouse.list("indexes").await.unwrap();
     assert!(!objects.is_empty());
-    let mut observed_roots = [false; 3];
+    let mut observed_roots = [false; 4];
     for object in objects {
         let location = session
             .warehouse
@@ -1073,12 +1163,12 @@ async fn lvq_indexes_build_and_query_through_parquet() {
             .position(|root| location.starts_with(root.as_str()))
             .unwrap_or_else(|| {
                 panic!(
-                    "unexpected index object outside centroid and encoded-postings roots: {location}"
+                    "unexpected index object outside centroid, root, and encoded-postings roots: {location}"
                 )
             });
         observed_roots[root] = true;
     }
-    assert_eq!(observed_roots, [true, true, true]);
+    assert_eq!(observed_roots, [true, true, true, true]);
 }
 
 async fn assert_lvq_index(
@@ -1096,11 +1186,7 @@ async fn assert_lvq_index(
         .metadata_store()
         .resolve_location(&snapshot.index_relations["ivf_postings"], true)
         .unwrap();
-    let postings = session
-        .parquet
-        .partitioned_dataframe(&uri, vec![("cid".into(), DataType::Int32)])
-        .await
-        .unwrap();
+    let postings = session.parquet.dataframe(&uri).await.unwrap();
     assert_lvq_postings_schema(postings.schema().inner());
 
     let request = SearchRequest {

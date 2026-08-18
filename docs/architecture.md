@@ -102,9 +102,10 @@ collects a complete result before forwarding it. Closing the HTTP response
 closes the managed native stream and releases query admission.
 
 Centroid routing uses a bounded native matrix path for ordinary indexes and a
-relational path for larger matrices. Selected cluster IDs become static
-postings predicates. Hive-style `cid=<value>` partitions allow file pruning
-before Parquet decoding.
+bounded DataFusion top-k path for larger matrices. Both materialize selected
+cluster IDs before the postings scan. Manifested `cid_bucket=<root>` files and
+explicit row-group access plans allow deterministic pruning before Parquet
+decoding.
 
 The physical optimizer can replace distance projection plus distance Top-K
 with `IvfTopKExec`. The fused operator reads Arrow buffers directly, computes

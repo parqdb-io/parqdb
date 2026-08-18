@@ -922,5 +922,6 @@ fn ivf_centroids_metadata(
         created_at_ms: 1_750_000_000_000,
         descriptor: descriptor.clone(),
         centroids: "centroids/".into(),
+        roots: "roots/".into(),
     }
 }
