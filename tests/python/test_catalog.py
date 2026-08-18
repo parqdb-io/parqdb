@@ -13,7 +13,6 @@ from _support import (
     relation_files,
     write_vectors,
 )
-from parqdb.runtime.catalog import open_index_catalog
 
 
 def test_catalog_lifecycle_survives_session_reopen(tmp_path: Path) -> None:
@@ -24,7 +23,6 @@ def test_catalog_lifecycle_survives_session_reopen(tmp_path: Path) -> None:
         [[0.0, 0.0], [1.0, 0.0], [10.0, 0.0], [11.0, 0.0]],
     )
     session = parqdb.connect(tmp_path / "parqdb-data")
-    assert session._indexes is not None
     vectors = register_source(session, source)
     vectors.create_index(
         "vectors_embedding",
@@ -43,8 +41,7 @@ def test_catalog_lifecycle_survives_session_reopen(tmp_path: Path) -> None:
         timeout=timedelta(seconds=30),
     )
     assert vectors.index_status("vectors_embedding").state == "ready"
-    namespace = vectors.identifier.index_namespace
-    assert session._indexes.list(namespace=namespace) == ["vectors_embedding"]
+    assert [index.name for index in vectors.list_indexes()] == ["vectors_embedding"]
 
     entry = load_table_index(session, vectors, "vectors_embedding")
     assert entry.identifier == "vectors_embedding"
@@ -53,8 +50,7 @@ def test_catalog_lifecycle_survives_session_reopen(tmp_path: Path) -> None:
         "ivf_centroids",
         "ivf_postings",
     }
-    source_reference = {"profile": "parquet", "uri": source.as_uri()}
-    assert session._indexes.list_for(source_reference, namespace=namespace) == [
+    assert vectors.list_indexes() == [
         parqdb.IndexInfo(
             name="vectors_embedding",
             column="embedding",
@@ -64,7 +60,6 @@ def test_catalog_lifecycle_survives_session_reopen(tmp_path: Path) -> None:
             current_snapshot_id=entry.metadata["current-snapshot-id"],
         )
     ]
-    assert session._indexes.select(source_reference, namespace=namespace) == entry
     with pytest.raises(TypeError):
         entry.metadata["current-snapshot-id"] = 0  # type: ignore[index]
     with pytest.raises(TypeError):
@@ -73,51 +68,10 @@ def test_catalog_lifecycle_survives_session_reopen(tmp_path: Path) -> None:
     reopened = parqdb.connect(tmp_path / "parqdb-data")
     reopened_vectors = reopened.table("vectors")
     assert isinstance(reopened_vectors, parqdb.SourceTable)
-    assert reopened._indexes.list(namespace=namespace) == ["vectors_embedding"]
+    assert [index.name for index in reopened_vectors.list_indexes()] == [
+        "vectors_embedding"
+    ]
     assert load_table_index(reopened, reopened_vectors, "vectors_embedding") == entry
-
-
-def test_internal_index_catalog_can_be_opened_without_an_execution_session(
-    tmp_path: Path,
-) -> None:
-    source = tmp_path / "vectors.parquet"
-    root = tmp_path / "state"
-    catalog_path = root / "catalog.sqlite"
-    warehouse = (tmp_path / "warehouse").as_uri()
-    write_vectors(source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
-    session = parqdb.connect(
-        root,
-        warehouse=warehouse,
-    )
-    vectors = register_source(session, source)
-    vectors.create_index(
-        "vectors_embedding",
-        column="embedding",
-        key=["id"],
-        config=parqdb.IVF(nlist=1),
-        wait_timeout=timedelta(seconds=30),
-    )
-    expected = load_table_index(session, vectors, "vectors_embedding")
-    namespace = vectors.identifier.index_namespace
-
-    catalog = open_index_catalog(
-        f"sqlite://{catalog_path}",
-        warehouse=warehouse,
-    )
-
-    assert catalog.load("vectors_embedding", namespace=namespace) == expected
-    source_reference = {"profile": "parquet", "uri": source.as_uri()}
-    assert (
-        catalog.select(source_reference, namespace=namespace).identifier
-        == "vectors_embedding"
-    )
-
-
-def test_catalog_load_reports_a_missing_index(tmp_path: Path) -> None:
-    session = parqdb.connect(tmp_path / "parqdb-data")
-
-    with pytest.raises(parqdb.IndexNotFoundError):
-        session._indexes.load("missing")
 
 
 def test_catalog_drop_and_register_recover_an_existing_index(
@@ -143,7 +97,7 @@ def test_catalog_drop_and_register_recover_an_existing_index(
 
     drop_table_index_entry(session, vectors, "vectors_embedding")
 
-    assert session._indexes.list(namespace=vectors.identifier.index_namespace) == []
+    assert vectors.list_indexes() == []
     assert all(path.exists() for path in index_files)
     with pytest.raises(parqdb.IndexNotFoundError):
         vectors.index_status("vectors_embedding")
@@ -198,7 +152,7 @@ def test_catalogs_share_indexes_through_one_warehouse(tmp_path: Path) -> None:
 
     consumed = load_table_index(consumer, consumed_vectors, "vectors_embedding")
     assert consumed == published
-    assert consumer.to_arrow(consumed_vectors.search([0.0, 0.0]).limit(1))[
+    assert consumer.collect(consumed_vectors.search([0.0, 0.0]).limit(1))[
         "id"
     ].to_pylist() == [0]
     assert (tmp_path / "publisher" / "catalog.sqlite").is_file()

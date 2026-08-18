@@ -102,7 +102,7 @@ def test_vector_query_is_portable_across_sessions_with_the_same_table(
     assert not hasattr(query, "table")
 
     reopened = parqdb.connect(session.root)
-    assert reopened.to_arrow(query)["id"].to_pylist() == [0]
+    assert reopened.collect(query)["id"].to_pylist() == [0]
 
 
 @pytest.mark.parametrize("value", [None, 1, True, [], object()])
@@ -154,7 +154,7 @@ def test_query_validation_reaches_native_execution(
         request = request.select(projection)
 
     with pytest.raises(error_type, match=message):
-        session.to_arrow(request)
+        session.collect(request)
 
 
 def test_index_selection_reports_missing_and_mismatched_indexes(
@@ -163,11 +163,11 @@ def test_index_selection_reports_missing_and_mismatched_indexes(
     session, documents = indexed_documents
 
     with pytest.raises(parqdb.IndexNotFoundError):
-        session.to_arrow(documents.search([0.0, 0.0], index="missing"))
+        session.collect(documents.search([0.0, 0.0], index="missing"))
     with pytest.raises(parqdb.IndexNotFoundError):
-        session.to_arrow(documents.search([0.0, 0.0], column="missing"))
+        session.collect(documents.search([0.0, 0.0], column="missing"))
     with pytest.raises(parqdb.IndexNotFoundError):
-        session.to_arrow(
+        session.collect(
             documents.search(
                 [0.0, 0.0],
                 index="vectors_embedding",
@@ -203,13 +203,13 @@ def test_multiple_indexes_require_disambiguation(tmp_path: Path) -> None:
 
     assert [index.name for index in vectors.list_indexes()] == ["index_a", "index_b"]
     with pytest.raises(parqdb.AmbiguousIndexError, match="index_a, index_b"):
-        session.to_arrow(vectors.search([0.0, 0.0]))
+        session.collect(vectors.search([0.0, 0.0]))
 
-    from_column = session.to_arrow(
+    from_column = session.collect(
         vectors.search([100.0, 0.0], column="embedding_b").limit(1)
     )
     assert from_column["id"].to_pylist() == [0]
-    from_name = session.to_arrow(vectors.search([10.0, 0.0], index="index_a").limit(1))
+    from_name = session.collect(vectors.search([10.0, 0.0], index="index_a").limit(1))
     assert from_name["id"].to_pylist() == [1]
 
 
@@ -223,7 +223,7 @@ def test_explicit_index_remains_bound_to_its_source(tmp_path: Path) -> None:
     build_index(first_table)
 
     with pytest.raises(parqdb.IndexNotFoundError):
-        session.to_arrow(
+        session.collect(
             register_source(session, second, "second").search(
                 [0.0, 0.0],
                 index="vectors_embedding",
@@ -236,7 +236,7 @@ def test_where_filters_source_rows_before_top_k(
 ) -> None:
     session, documents = indexed_documents
 
-    result = session.to_arrow(
+    result = session.collect(
         documents.search([0.0, 0.0]).where("id >= 2").limit(1).select(["id"])
     )
 
@@ -248,7 +248,7 @@ def test_where_supports_source_string_columns(
 ) -> None:
     session, documents = indexed_documents
 
-    result = session.to_arrow(
+    result = session.collect(
         documents.search([0.0, 0.0])
         .where("payload = 'row-1'")
         .select(["id", "payload"])
@@ -285,7 +285,7 @@ def test_where_excludes_null_predicate_results(tmp_path: Path) -> None:
     vectors = register_source(session, source)
     build_index(vectors, nlist=1)
 
-    result = session.to_arrow(
+    result = session.collect(
         vectors.search([0.0, 0.0]).where("category = 'keep'").select(["id"])
     )
 
@@ -298,7 +298,7 @@ def test_where_rejects_invalid_backend_expressions(
     session, documents = indexed_documents
 
     with pytest.raises(parqdb.InvalidArgumentError, match="invalid filter"):
-        session.to_arrow(documents.search([0.0, 0.0]).where("missing = 1"))
+        session.collect(documents.search([0.0, 0.0]).where("missing = 1"))
 
 
 def test_arrow_results_can_be_registered_in_the_native_context(
@@ -307,7 +307,7 @@ def test_arrow_results_can_be_registered_in_the_native_context(
     session, documents = indexed_documents
     query = documents.search([0.0, 0.0]).limit(1).select(["id"])
 
-    result = session.to_arrow(query)
+    result = session.collect(query)
     assert result.column_names == ["id", "_distance"]
     assert result["id"].to_pylist() == [0]
 

@@ -18243,17 +18243,13 @@
         "pkg:cargo/datafusion-python@54.0.0",
         "pkg:cargo/futures@0.3.33",
         "pkg:cargo/parqdb-catalog@0.2.0-rc.1",
-        "pkg:cargo/parqdb-core@0.2.0-rc.1",
-        "pkg:cargo/parqdb-index@0.2.0-rc.1",
         "pkg:cargo/parqdb-local@0.2.0-rc.1",
         "pkg:cargo/parqdb-meta@0.2.0-rc.1",
-        "pkg:cargo/parqdb-storage@0.2.0-rc.1",
         "pkg:cargo/pyo3-async-runtimes@0.28.0",
         "pkg:cargo/pyo3@0.28.3",
         "pkg:cargo/serde_json@1.0.151",
         "pkg:cargo/tokio-util@0.7.19",
-        "pkg:cargo/tokio@1.53.1",
-        "pkg:cargo/uuid@1.24.0"
+        "pkg:cargo/tokio@1.53.1"
       ],
       "ref": "pkg:cargo/parqdb-python@0.2.0-rc.1"
     },
@@ -20211,7 +20207,7 @@
     "properties": [
       {
         "name": "parqdb:cargo-lock-sha256",
-        "value": "0edb35a8b5022e538c8c5f00841e4bff4b5808a103aa130952e7751b4929e525"
+        "value": "f10d4f8b997740b2971ef5f25cca7e94bcffc04feb398fe42399dcfc1a36cdb9"
       }
     ]
   },

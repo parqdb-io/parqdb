@@ -85,7 +85,7 @@ def test_local_build_publish_and_search(tmp_path: Path) -> None:
     assert status.state == "ready"
     assert status.current_snapshot_id is not None
 
-    hits = session.to_arrow(
+    hits = session.collect(
         documents.search([0.0, 0.0])
         .nprobes(1)
         .limit(2)
@@ -104,7 +104,7 @@ def test_local_build_publish_and_search(tmp_path: Path) -> None:
     assert "IvfTopKExec" in index_only_plan
     assert "HashJoinExec" in payload_plan
     assert "IvfTopKExec" in payload_plan
-    vector_hits = session.to_arrow(
+    vector_hits = session.collect(
         documents.search([0.0, 0.0])
         .nprobes(1)
         .select(["document_id", "embedding"])
@@ -116,11 +116,11 @@ def test_local_build_publish_and_search(tmp_path: Path) -> None:
         documents.search([0.0, 0.0]).nprobes(1).select(["document_id", "embedding"])
     )
 
-    exact = session.to_arrow(documents.search([0.0, 0.0]).nprobes(2).limit(4))
+    exact = session.collect(documents.search([0.0, 0.0]).nprobes(2).limit(4))
     assert exact["document_id"].to_pylist() == ["a", "b", "c", "d"]
     assert exact["_distance"].to_pylist() == [0.0, 1.0, 100.0, 121.0]
 
-    tied = session.to_arrow(documents.search([0.5, 0.0]).nprobes(2).limit(2))
+    tied = session.collect(documents.search([0.5, 0.0]).nprobes(2).limit(2))
     assert set(tied["document_id"].to_pylist()) == {"a", "b"}
     assert tied["_distance"].to_pylist() == [0.25, 0.25]
 
@@ -173,7 +173,7 @@ def test_local_build_publish_and_search(tmp_path: Path) -> None:
     reopened = parqdb.connect(tmp_path / "parqdb-data")
     documents = reopened.table("documents")
     assert isinstance(documents, parqdb.SourceTable)
-    hits = reopened.to_arrow(documents.search([10.0, 0.0]).nprobes(1).limit(2))
+    hits = reopened.collect(documents.search([10.0, 0.0]).nprobes(1).limit(2))
     assert hits["document_id"].to_pylist() == ["c", "d"]
 
 
@@ -235,7 +235,7 @@ def test_local_lvq_build_and_search(tmp_path: Path) -> None:
             .select(["document_id"])
             .limit(1)
         )
-        hits = session.to_arrow(query)
+        hits = session.collect(query)
         assert hits["document_id"].to_pylist() == ["c"]
         plan = session.explain(query)
         assert "IvfTopKExec" in plan
@@ -247,7 +247,7 @@ def test_local_lvq_build_and_search(tmp_path: Path) -> None:
             .select(["document_id", "title"])
             .limit(1)
         )
-        payload = session.to_arrow(payload_query)
+        payload = session.collect(payload_query)
         assert payload["title"].to_pylist() == ["ten"]
         assert "HashJoinExec" in session.explain(payload_query)
 
@@ -277,10 +277,10 @@ def test_local_lvq_search_with_direct_io(tmp_path: Path) -> None:
         .limit(1)
     )
 
-    assert session.to_arrow(query)["document_id"].to_pylist() == ["c"]
+    assert session.collect(query)["document_id"].to_pylist() == ["c"]
     cold = session.parquet_page_cache_stats()
     assert cold.admissions > 0
-    assert session.to_arrow(query)["document_id"].to_pylist() == ["c"]
+    assert session.collect(query)["document_id"].to_pylist() == ["c"]
     assert session.parquet_page_cache_stats().hits > cold.hits
 
 
@@ -315,7 +315,7 @@ def test_ivf_centroids_float64_and_cosine_end_to_end(tmp_path: Path) -> None:
         )
         snapshot = load_table_index(session, documents, name).metadata["snapshots"][0]
         cosine_snapshots.append(snapshot)
-        hits = session.to_arrow(
+        hits = session.collect(
             documents.search([10.0, 0.0], index=name).nprobes(1).limit(3)
         )
         assert hits["document_id"].to_pylist() == ["x", "diagonal", "y"]
@@ -360,14 +360,14 @@ def test_ivf_centroids_float64_and_cosine_end_to_end(tmp_path: Path) -> None:
         l2_snapshot["parameters"]["ivf_centroids_fingerprint"]
         != cosine_snapshots[0]["parameters"]["ivf_centroids_fingerprint"]
     )
-    l2_hits = session.to_arrow(
+    l2_hits = session.collect(
         documents.search([2.0, 0.0], index="l2_source").nprobes(1).limit(3)
     )
     assert l2_hits["document_id"].to_pylist() == ["x", "diagonal", "y"]
     assert l2_hits["_distance"].to_pylist() == pytest.approx([0.0, 2.0, 13.0])
 
     with pytest.raises(parqdb.InvalidArgumentError, match="non-zero norm"):
-        session.to_arrow(documents.search([0.0, 0.0], index="cosine_source"))
+        session.collect(documents.search([0.0, 0.0], index="cosine_source"))
 
 
 def test_cosine_build_rejects_zero_source_vectors(tmp_path: Path) -> None:
@@ -436,15 +436,8 @@ query = (
     .limit(2)
     .select(["document_id", "title"])
 )
-hits = session.to_arrow(query)
-metadata = session._indexes.load(
-    "documents_embedding",
-    namespace=documents.identifier.index_namespace,
-).metadata
-print(json.dumps({
-    "hits": hits.to_pydict(),
-    "source_free": "source" not in metadata["snapshots"][0],
-}, sort_keys=True))
+hits = session.collect(query)
+print(json.dumps(hits.to_pydict(), sort_keys=True))
 """
 
     subprocess.run(
@@ -461,12 +454,19 @@ print(json.dumps({
     )
 
     payload = json.loads(result.stdout)
-    assert payload["hits"] == {
+    assert payload == {
         "_distance": [0.0, 1.0],
         "document_id": ["c", "d"],
         "title": ["ten", "eleven"],
     }
-    assert payload["source_free"] is True
+    reopened = parqdb.connect(root)
+    documents = reopened.table("documents")
+    metadata = load_table_index(
+        reopened,
+        documents,
+        "documents_embedding",
+    ).metadata
+    assert "source" not in metadata["snapshots"][0]
 
 
 def test_composite_keys_are_stored_directly_in_postings(tmp_path: Path) -> None:
@@ -502,7 +502,7 @@ def test_composite_keys_are_stored_directly_in_postings(tmp_path: Path) -> None:
         wait_timeout=WAIT,
     )
 
-    hits = session.to_arrow(documents.search([0.5, 0.0]).nprobes(2).limit(4))
+    hits = session.collect(documents.search([0.5, 0.0]).nprobes(2).limit(4))
     assert set(zip(hits["tenant"].to_pylist(), hits["document_id"].to_pylist())) == {
         ("a", 1),
         ("a", 2),
@@ -548,7 +548,7 @@ def test_vectors_can_be_omitted_from_postings(tmp_path: Path) -> None:
             pa.field("key_1", pa.string(), nullable=False),
         ]
     )
-    hits = session.to_arrow(
+    hits = session.collect(
         documents.search([0.0, 0.0], index="compact_index")
         .nprobes(1)
         .select(["document_id"])
@@ -594,7 +594,7 @@ def test_gemm_build_and_simd_search_path(tmp_path: Path) -> None:
         wait_timeout=WAIT,
     )
 
-    hits = session.to_arrow(
+    hits = session.collect(
         vectors.search([7.0] * dimension).nprobes(16).limit(1).select(["id"])
     )
     assert hits["id"].to_pylist() == [7]

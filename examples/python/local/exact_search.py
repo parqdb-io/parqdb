@@ -15,7 +15,7 @@ def main() -> None:
             .limit(3)
             .select(["document_id", "title", "category"])
         )
-        hits = session.to_arrow(query)
+        hits = session.collect(query)
         print("exact-search hits:", hits.to_pylist())
 
 

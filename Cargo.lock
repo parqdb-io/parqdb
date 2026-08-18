@@ -3930,17 +3930,13 @@ dependencies = [
  "datafusion-python",
  "futures",
  "parqdb-catalog",
- "parqdb-core",
- "parqdb-index",
  "parqdb-local",
  "parqdb-meta",
- "parqdb-storage",
  "pyo3",
  "pyo3-async-runtimes",
  "serde_json",
  "tokio",
  "tokio-util",
- "uuid",
 ]
 
 [[package]]

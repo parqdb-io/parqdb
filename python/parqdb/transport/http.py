@@ -19,8 +19,8 @@ from ..datafusion.expr import SortKey
 from ..errors import StreamExecutionError, UnsupportedOperationError
 from ..identifier import TableIdentifier
 from ..query import VectorQuery
-from ..runtime.catalog import IndexInfo
 from ..runtime.service import AsyncBatchStream, TableDescriptor
+from ..table import IndexInfo
 from .errors import raise_remote_build_error, raise_remote_error, unavailable
 from .ipc import decode_ipc_stream
 from .models import (

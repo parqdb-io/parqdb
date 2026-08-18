@@ -148,7 +148,7 @@ def test_removed_metadata_cannot_be_registered_from_session_cache(
             "resurrected",
             entry.metadata_location,
         )
-    assert session._indexes.list(namespace=vectors.identifier.index_namespace) == []
+    assert vectors.list_indexes() == []
 
 
 def test_lazy_query_is_protected_by_retention_without_a_query_lease(

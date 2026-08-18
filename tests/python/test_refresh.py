@@ -49,9 +49,7 @@ def test_refresh_reuses_ivf_centroids_for_the_same_immutable_source(
         snapshots[1]["index-relations"]["ivf_postings"]
         != snapshots[0]["index-relations"]["ivf_postings"]
     )
-    assert session.to_arrow(vectors.search([2.0, 0.0]).limit(1))["id"].to_pylist() == [
-        2
-    ]
+    assert session.collect(vectors.search([2.0, 0.0]).limit(1))["id"].to_pylist() == [2]
     assert (
         vectors.index_status("vectors_embedding").current_snapshot_id
         == (after.metadata["current-snapshot-id"])
@@ -131,9 +129,7 @@ def test_failed_refresh_preserves_the_published_snapshot(tmp_path: Path) -> None
     assert status.state == "ready"
     assert status.current_snapshot_id == before.metadata["current-snapshot-id"]
     assert status.error is not None
-    assert session.to_arrow(vectors.search([0.0, 0.0]).limit(1))["id"].to_pylist() == [
-        0
-    ]
+    assert session.collect(vectors.search([0.0, 0.0]).limit(1))["id"].to_pylist() == [0]
 
     reopened = parqdb.connect(tmp_path / "parqdb-data")
     reopened_vectors = reopened.table("vectors")

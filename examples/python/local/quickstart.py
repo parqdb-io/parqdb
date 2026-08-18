@@ -17,7 +17,7 @@ def main() -> None:
             .limit(3)
             .select(["document_id", "title"])
         )
-        hits = session.to_arrow(query)
+        hits = session.collect(query)
         print("quickstart hits:", hits.to_pylist())
 
 

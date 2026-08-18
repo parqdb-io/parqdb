@@ -200,7 +200,6 @@ including `_distance`.
 
 ```python
 hits = session.collect(query)       # pyarrow.Table
-same = session.to_arrow(query)      # compatibility alias
 
 with session.stream(query) as reader:
     for batch in reader:

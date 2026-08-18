@@ -6,7 +6,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import count
 from pathlib import Path
-from types import MappingProxyType
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -26,7 +25,6 @@ from .iceberg import load_table_state, table_provider_inputs
 from .identifier import TableIdentifier
 from .maintenance import Maintenance
 from .query import VectorQuery
-from .runtime.catalog import IndexCatalog, IndexInfo
 
 
 @dataclass(frozen=True)
@@ -82,8 +80,6 @@ class _EmbeddedSession(SessionContext):
             runtime.config_internal if runtime is not None else None,
         )
         self._warehouse = self._native.warehouse_root()
-        self._repository = self._native.index_repository()
-        self._indexes = IndexCatalog(self._repository)
         self.ctx = self._native.context()
         self._query_names = count()
         self._maintenance = Maintenance(self)
@@ -211,10 +207,6 @@ class _EmbeddedSession(SessionContext):
             schema=dataframe.schema(),
         )
 
-    def to_arrow(self, query: VectorQuery) -> pyarrow.Table:
-        """Execute a vector query and collect its result as an Arrow table."""
-        return self.collect(query)
-
     def to_sql(self, query: VectorQuery) -> str:
         """Compile a vector query to executable SQL in this session."""
         source = self._resolve_query_source(query)
@@ -282,44 +274,6 @@ class _EmbeddedSession(SessionContext):
         if source is None:
             raise ValueError(f"query source is not registered: {identifier!r}")
         return _parquet_relation_json(source)
-
-    def _list_table_indexes(
-        self,
-        identifier: TableIdentifier,
-    ) -> list[IndexInfo]:
-        reference = self._relation_reference(identifier)
-        return [
-            IndexInfo(
-                name=name,
-                column=column,
-                family=family,
-                metric=metric,
-                parameters=MappingProxyType(dict(parameters)),
-                current_snapshot_id=current_snapshot_id,
-            )
-            for (
-                name,
-                column,
-                family,
-                metric,
-                parameters,
-                current_snapshot_id,
-            ) in self._native.list_source_indexes(
-                reference,
-                _index_namespace(identifier),
-            )
-        ]
-
-    def _drop_table_index(
-        self,
-        identifier: TableIdentifier,
-        index: str,
-    ) -> None:
-        self._native.drop_source_index(
-            self._relation_reference(identifier),
-            _index_namespace(identifier),
-            index,
-        )
 
     def _prepare_index_relations(self, query: VectorQuery, source: str) -> None:
         if query.bypass_index:

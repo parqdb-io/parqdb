@@ -13,7 +13,7 @@ from ..build import IndexStatus
 from ..config import IVF, WriteOptions
 from ..identifier import TableIdentifier
 from ..query import VectorQuery
-from ..runtime.catalog import IndexInfo
+from ..table import IndexInfo
 
 ARROW_STREAM_MEDIA_TYPE = "application/vnd.apache.arrow.stream"
 DEFAULT_IDENTIFIER_DELIMITER = "$"

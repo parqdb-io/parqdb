@@ -1,17 +1,35 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
+from types import MappingProxyType
+from typing import Any, cast
 from urllib.parse import unquote, urljoin, urlparse
 
 import parqdb
 import pyarrow as pa
 import pyarrow.parquet as pq
-from parqdb.runtime.catalog import CatalogEntry
 
 WAIT = timedelta(seconds=30)
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogEntry:
+    identifier: str
+    metadata_location: str
+    metadata: Mapping[str, Any]
+
+
+def embedded_native(session: parqdb.Session | parqdb.AsyncSession) -> Any:
+    """Return the native host for tests that exercise native-only behavior."""
+    async_session = session._async if isinstance(session, parqdb.Session) else session
+    transport = cast(Any, async_session)._transport
+    return transport._service.host._native
 
 
 def vector_type(*, nullable_elements: bool = False) -> pa.ListType:
@@ -81,9 +99,20 @@ def load_table_index(
     table: parqdb.SourceTable,
     index: str,
 ) -> CatalogEntry:
-    return session._indexes.load(
-        index,
-        namespace=table.identifier.index_namespace,
+    with sqlite3.connect(session.root / "catalog.sqlite") as catalog:
+        row = catalog.execute(
+            "SELECT metadata_location FROM indexes WHERE namespace = ? AND name = ?",
+            (_namespace_key(table.identifier.index_namespace), index),
+        ).fetchone()
+    if row is None:
+        raise parqdb.IndexNotFoundError(f"index not found: {index}")
+    metadata_location = str(row[0])
+    metadata = load_metadata_file(metadata_location)
+    assert isinstance(metadata, dict)
+    return CatalogEntry(
+        identifier=index,
+        metadata_location=metadata_location,
+        metadata=_freeze_json(metadata),
     )
 
 
@@ -103,10 +132,27 @@ def drop_table_index_entry(
     table: parqdb.SourceTable,
     index: str,
 ) -> None:
-    session._indexes.drop(
-        index,
-        namespace=table.identifier.index_namespace,
-    )
+    with sqlite3.connect(session.root / "catalog.sqlite") as catalog:
+        catalog.execute("BEGIN IMMEDIATE")
+        row = catalog.execute(
+            "SELECT metadata_location FROM indexes WHERE namespace = ? AND name = ?",
+            (_namespace_key(table.identifier.index_namespace), index),
+        ).fetchone()
+        if row is None:
+            raise parqdb.IndexNotFoundError(f"index not found: {index}")
+        catalog.execute(
+            """
+            INSERT INTO catalog_tombstones(metadata_location, unreachable_since_ms)
+            VALUES (?, ?)
+            ON CONFLICT(metadata_location) DO UPDATE SET
+                unreachable_since_ms = excluded.unreachable_since_ms
+            """,
+            (str(row[0]), time.time_ns() // 1_000_000),
+        )
+        catalog.execute(
+            "DELETE FROM indexes WHERE namespace = ? AND name = ?",
+            (_namespace_key(table.identifier.index_namespace), index),
+        )
 
 
 def relation_root(reference: str, warehouse: str) -> Path:
@@ -131,6 +177,20 @@ def thaw_json(value: object) -> object:
         return {key: thaw_json(child) for key, child in value.items()}
     if isinstance(value, tuple):
         return [thaw_json(child) for child in value]
+    return value
+
+
+def _namespace_key(namespace: tuple[str, ...]) -> str:
+    return json.dumps(namespace, separators=(",", ":"))
+
+
+def _freeze_json(value: Any) -> Any:
+    if isinstance(value, dict):
+        return MappingProxyType(
+            {str(key): _freeze_json(child) for key, child in value.items()}
+        )
+    if isinstance(value, list):
+        return tuple(_freeze_json(child) for child in value)
     return value
 
 

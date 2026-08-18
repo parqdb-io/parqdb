@@ -20,9 +20,8 @@ from .datafusion.expr import SortKey
 from .errors import UnsupportedOperationError
 from .identifier import TableIdentifier
 from .query import VectorQuery
-from .runtime.catalog import IndexInfo
 from .runtime.service import AsyncBatchStream, TableDescriptor
-from .table import _normalize_query
+from .table import IndexInfo, _normalize_query
 from .transport.base import InProcessTransport, SessionTransport
 
 _T = TypeVar("_T")
@@ -70,7 +69,7 @@ class AsyncSession:
 
     async def stream(self, query: VectorQuery | str) -> AsyncResultStream:
         stream = AsyncResultStream(
-            await self._open_stream(query),
+            await self._transport.stream(query),
             on_close=self._streams.discard,
         )
         self._streams.add(stream)
@@ -86,9 +85,6 @@ class AsyncSession:
 
     async def sql(self, statement: str) -> pyarrow.Table:
         return await self.collect(statement)
-
-    async def to_arrow(self, query: VectorQuery | str) -> pyarrow.Table:
-        return await self.collect(query)
 
     async def to_sql(self, query: VectorQuery) -> str:
         return await self._transport.to_sql(query)
@@ -131,47 +127,6 @@ class AsyncSession:
 
     async def __aexit__(self, *_exc: object) -> None:
         await self.close()
-
-    async def _create_index(
-        self,
-        identifier: TableIdentifier,
-        index: str,
-        *,
-        column: str,
-        key: list[str],
-        config: IVF,
-        writer_options: WriteOptions | None = None,
-        wait_timeout: timedelta | None = None,
-    ) -> None:
-        await self._transport.create_index(
-            identifier,
-            index,
-            column=column,
-            key=key,
-            config=config,
-            writer_options=writer_options,
-            wait_timeout=wait_timeout,
-        )
-
-    async def _refresh_index(
-        self,
-        identifier: TableIdentifier,
-        index: str,
-        *,
-        config: IVF | None = None,
-        writer_options: WriteOptions | None = None,
-        wait_timeout: timedelta | None = None,
-    ) -> None:
-        await self._transport.refresh_index(
-            identifier,
-            index,
-            config=config,
-            writer_options=writer_options,
-            wait_timeout=wait_timeout,
-        )
-
-    async def _open_stream(self, query: VectorQuery | str) -> AsyncBatchStream:
-        return await self._transport.stream(query)
 
 
 class AsyncResultStream:
@@ -230,7 +185,7 @@ class AsyncSourceTable:
         writer_options: WriteOptions | None = None,
         wait_timeout: timedelta | None = None,
     ) -> None:
-        await self._session._create_index(
+        await self._session._transport.create_index(
             self.identifier,
             index,
             column=column,
@@ -260,7 +215,7 @@ class AsyncSourceTable:
         writer_options: WriteOptions | None = None,
         wait_timeout: timedelta | None = None,
     ) -> None:
-        await self._session._refresh_index(
+        await self._session._transport.refresh_index(
             self.identifier,
             index,
             config=config,
@@ -319,7 +274,8 @@ class Session:
         schema: pyarrow.Schema | None = None,
         file_sort_order: Sequence[Sequence[SortKey]] | None = None,
     ) -> None:
-        self._run(
+        _run_sync(
+            self,
             self._async.register_parquet(
                 name,
                 path,
@@ -329,21 +285,21 @@ class Session:
                 skip_metadata=skip_metadata,
                 schema=schema,
                 file_sort_order=file_sort_order,
-            )
+            ),
         )
 
     def list_tables(self) -> list[TableIdentifier]:
-        return self._run(self._async.list_tables())
+        return _run_sync(self, self._async.list_tables())
 
     def table(self, identifier: str | TableIdentifier) -> SourceTable:
-        table = self._run(self._async.table(identifier))
+        table = _run_sync(self, self._async.table(identifier))
         return SourceTable(self, TableDescriptor(table.identifier, table.schema))
 
     def deregister_table(self, identifier: str | TableIdentifier) -> None:
-        self._run(self._async.deregister_table(identifier))
+        _run_sync(self, self._async.deregister_table(identifier))
 
     def stream(self, query: VectorQuery | str) -> pyarrow.RecordBatchReader:
-        stream = self._run(self._async._open_stream(query))
+        stream = _run_sync(self, self._async._transport.stream(query))
         if hasattr(stream, "__arrow_c_stream__"):
             reader = pyarrow.RecordBatchReader.from_stream(stream)
         else:
@@ -356,16 +312,13 @@ class Session:
         return reader
 
     def collect(self, query: VectorQuery | str) -> pyarrow.Table:
-        return self._run(self._async.collect(query))
+        return _run_sync(self, self._async.collect(query))
 
     def sql(self, statement: str) -> pyarrow.Table:
-        return self._run(self._async.sql(statement))
-
-    def to_arrow(self, query: VectorQuery | str) -> pyarrow.Table:
-        return self.collect(query)
+        return _run_sync(self, self._async.sql(statement))
 
     def to_sql(self, query: VectorQuery) -> str:
-        return self._run(self._async.to_sql(query))
+        return _run_sync(self, self._async.to_sql(query))
 
     def explain(
         self,
@@ -373,32 +326,32 @@ class Session:
         *,
         verbose: bool = False,
     ) -> str:
-        return self._run(self._async.explain(query, verbose=verbose))
+        return _run_sync(self, self._async.explain(query, verbose=verbose))
 
     def analyze(self, query: VectorQuery | str) -> str:
-        return self._run(self._async.analyze(query))
+        return _run_sync(self, self._async.analyze(query))
 
     def datafusion_context(self) -> Any:
         return self._async.datafusion_context()
 
     @property
     def root(self) -> Path:
-        return self._embedded_host().root
+        return _embedded_host(self._async).root
 
     @property
     def warehouse(self) -> str:
         """Return the index warehouse bound to this embedded session."""
-        return self._embedded_host().warehouse
+        return _embedded_host(self._async).warehouse
 
     @property
     def maintenance(self) -> Any:
-        return self._embedded_host().maintenance
+        return _embedded_host(self._async).maintenance
 
     def parquet_page_cache_stats(self) -> Any:
-        return self._embedded_host().parquet_page_cache_stats()
+        return _embedded_host(self._async).parquet_page_cache_stats()
 
     def clear_parquet_page_cache(self) -> None:
-        self._embedded_host().clear_parquet_page_cache()
+        _embedded_host(self._async).clear_parquet_page_cache()
 
     def close(self) -> None:
         if self._closed:
@@ -418,49 +371,19 @@ class Session:
     def __exit__(self, *_exc: object) -> None:
         self.close()
 
-    def _run(self, operation: Coroutine[Any, Any, _T]) -> _T:
-        if self._closed:
-            operation.close()
-            raise RuntimeError("session is closed")
-        return self._bridge.run(operation)
 
-    def _embedded_host(self) -> Any:
-        transport = self._async._transport
-        if not isinstance(transport, InProcessTransport):
-            raise UnsupportedOperationError(
-                "operation is available only in embedded mode"
-            )
-        return transport._service.host
+def _run_sync(session: Session, operation: Coroutine[Any, Any, _T]) -> _T:
+    if session._closed:
+        operation.close()
+        raise RuntimeError("session is closed")
+    return session._bridge.run(operation)
 
-    @property
-    def _native(self) -> Any:
-        return self._embedded_host()._native
 
-    @_native.setter
-    def _native(self, value: Any) -> None:
-        self._embedded_host()._native = value
-
-    @property
-    def _repository(self) -> Any:
-        return self._embedded_host()._repository
-
-    @_repository.setter
-    def _repository(self, value: Any) -> None:
-        self._embedded_host()._repository = value
-
-    @property
-    def _indexes(self) -> Any:
-        return self._embedded_host()._indexes
-
-    @_indexes.setter
-    def _indexes(self, value: Any) -> None:
-        self._embedded_host()._indexes = value
-
-    def _list_table_indexes(self, identifier: TableIdentifier) -> list[IndexInfo]:
-        return self._embedded_host()._list_table_indexes(identifier)
-
-    def _drop_table_index(self, identifier: TableIdentifier, index: str) -> None:
-        self._embedded_host()._drop_table_index(identifier, index)
+def _embedded_host(session: AsyncSession) -> Any:
+    transport = session._transport
+    if not isinstance(transport, InProcessTransport):
+        raise UnsupportedOperationError("operation is available only in embedded mode")
+    return transport._service.host
 
 
 class SourceTable:
@@ -481,8 +404,9 @@ class SourceTable:
         writer_options: WriteOptions | None = None,
         wait_timeout: timedelta | None = None,
     ) -> None:
-        self._session._run(
-            self._session._async._create_index(
+        _run_sync(
+            self._session,
+            self._session._async._transport.create_index(
                 self.identifier,
                 index,
                 column=column,
@@ -490,7 +414,7 @@ class SourceTable:
                 config=config,
                 writer_options=writer_options,
                 wait_timeout=wait_timeout,
-            )
+            ),
         )
 
     def register_index(
@@ -499,12 +423,13 @@ class SourceTable:
         *,
         metadata_location: str,
     ) -> None:
-        self._session._run(
+        _run_sync(
+            self._session,
             self._session._async._transport.register_index(
                 self.identifier,
                 index,
                 metadata_location=metadata_location,
-            )
+            ),
         )
 
     def refresh_index(
@@ -515,19 +440,21 @@ class SourceTable:
         writer_options: WriteOptions | None = None,
         wait_timeout: timedelta | None = None,
     ) -> None:
-        self._session._run(
-            self._session._async._refresh_index(
+        _run_sync(
+            self._session,
+            self._session._async._transport.refresh_index(
                 self.identifier,
                 index,
                 config=config,
                 writer_options=writer_options,
                 wait_timeout=wait_timeout,
-            )
+            ),
         )
 
     def index_status(self, index: str) -> IndexStatus:
-        return self._session._run(
-            self._session._async._transport.index_status(self.identifier, index)
+        return _run_sync(
+            self._session,
+            self._session._async._transport.index_status(self.identifier, index),
         )
 
     def wait_for_index(
@@ -536,22 +463,24 @@ class SourceTable:
         *,
         timeout: timedelta = timedelta(minutes=5),
     ) -> None:
-        self._session._run(
+        _run_sync(
+            self._session,
             self._session._async._transport.wait_for_index(
                 self.identifier,
                 index,
                 timeout,
-            )
+            ),
         )
 
     def list_indexes(self) -> list[IndexInfo]:
-        return self._session._run(
-            self._session._async._transport.list_indexes(self.identifier)
+        return _run_sync(
+            self._session, self._session._async._transport.list_indexes(self.identifier)
         )
 
     def drop_index(self, index: str) -> None:
-        self._session._run(
-            self._session._async._transport.drop_index(self.identifier, index)
+        _run_sync(
+            self._session,
+            self._session._async._transport.drop_index(self.identifier, index),
         )
 
     def search(

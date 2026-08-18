@@ -37,7 +37,7 @@ def main() -> None:
             .limit(3)
             .select(["document_id", "title"])
         )
-        hits = reopened.to_arrow(query)
+        hits = reopened.collect(query)
         print("Parquet round trip:", hits.to_pylist())
 
 

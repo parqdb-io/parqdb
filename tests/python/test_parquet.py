@@ -52,7 +52,7 @@ def test_parquet_source_reference_forms(
     vectors = register_source(session, reference)
     build_index(vectors)
 
-    hits = session.to_arrow(vectors.search([10.0, 0.0]).nprobes(2).limit(2))
+    hits = session.collect(vectors.search([10.0, 0.0]).nprobes(2).limit(2))
     assert hits["id"].to_pylist() == [2, 3]
     snapshot = load_table_index(session, vectors, "vectors_embedding").metadata[
         "snapshots"

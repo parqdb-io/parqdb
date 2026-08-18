@@ -42,7 +42,7 @@ def main() -> None:
             .limit(2)
             .select(["document_id"])
         )
-        hits = session.to_arrow(query).to_pylist()
+        hits = session.collect(query).to_pylist()
         if [row["document_id"] for row in hits] != [1, 2] or any(
             row["_distance"] < 0 for row in hits
         ):

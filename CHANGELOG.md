@@ -7,6 +7,17 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Python index discovery and removal now stay behind the table-centered API;
+  internal catalog and native repository bridges are no longer exposed through
+  session facade attributes.
+
+### Removed
+
+- The pre-1.0 `Session.to_arrow()` compatibility alias; use `collect()` for a
+  materialized Arrow table or `stream()` for incremental batches.
+
 ## [0.2.0rc1] - 2026-08-18
 
 ### Added
