@@ -6,6 +6,21 @@ export interface HttpOptions {
   fetch?: typeof globalThis.fetch
   maxManifestBytes?: number
   maxRangeBytes?: number
+  maxRangeGapBytes?: number
+}
+
+interface PendingRange {
+  start: number
+  end: number
+  resolve: (bytes: ArrayBuffer) => void
+  reject: (error: unknown) => void
+}
+
+interface CoalescedRange {
+  start: number
+  end: number
+  gapBytes: number
+  reads: PendingRange[]
 }
 
 export async function fetchManifest(url: URL, options: HttpOptions): Promise<ArrayBuffer> {
@@ -31,6 +46,8 @@ export async function fetchManifest(url: URL, options: HttpOptions): Promise<Arr
 
 export class HttpRangeBuffer implements AsyncBuffer {
   readonly byteLength: number
+  private pending: PendingRange[] = []
+  private flushScheduled = false
 
   constructor(
     private readonly url: URL,
@@ -52,6 +69,58 @@ export class HttpRangeBuffer implements AsyncBuffer {
     if (end - start > maxRangeBytes && !(start === 0 && end === this.byteLength)) {
       throw new RangeError(`HTTP byte range exceeds ${maxRangeBytes}-byte client limit`)
     }
+    if (start === 0 && end === this.byteLength) return this.fetchSlice(start, end)
+    return new Promise<ArrayBuffer>((resolve, reject) => {
+      this.pending.push({ start, end, resolve, reject })
+      if (this.flushScheduled) return
+      this.flushScheduled = true
+      setTimeout(() => {
+        this.flushScheduled = false
+        const pending = this.pending
+        this.pending = []
+        void this.flush(pending)
+      }, 0)
+    })
+  }
+
+  private async flush(pending: PendingRange[]): Promise<void> {
+    const maxRangeBytes = this.options.maxRangeBytes ?? 64 * 1024 * 1024
+    const maxRangeGapBytes = this.options.maxRangeGapBytes ?? 64 * 1024
+    if (!Number.isSafeInteger(maxRangeGapBytes) || maxRangeGapBytes < 0 || maxRangeGapBytes > maxRangeBytes) {
+      const error = new RangeError(`maxRangeGapBytes must be a portable integer in [0, ${maxRangeBytes}]`)
+      pending.forEach(read => read.reject(error))
+      return
+    }
+    const coalesced: CoalescedRange[] = []
+    for (const read of pending.sort((left, right) => left.start - right.start || left.end - right.end)) {
+      const previous = coalesced.at(-1)
+      const gap = previous === undefined ? 0 : Math.max(0, read.start - previous.end)
+      const mergedEnd = previous === undefined ? read.end : Math.max(previous.end, read.end)
+      if (
+        previous !== undefined &&
+        previous.gapBytes + gap <= maxRangeGapBytes &&
+        mergedEnd - previous.start <= maxRangeBytes
+      ) {
+        previous.end = mergedEnd
+        previous.gapBytes += gap
+        previous.reads.push(read)
+      } else {
+        coalesced.push({ start: read.start, end: read.end, gapBytes: 0, reads: [read] })
+      }
+    }
+    await Promise.all(coalesced.map(async range => {
+      try {
+        const bytes = await this.fetchSlice(range.start, range.end)
+        for (const read of range.reads) {
+          read.resolve(bytes.slice(read.start - range.start, read.end - range.start))
+        }
+      } catch (error) {
+        range.reads.forEach(read => read.reject(error))
+      }
+    }))
+  }
+
+  private async fetchSlice(start: number, end: number): Promise<ArrayBuffer> {
     const fetcher = this.options.fetch ?? globalThis.fetch
     if (fetcher === undefined) throw new Error('ParqDB browser client requires fetch')
     const complete = start === 0 && end === this.byteLength

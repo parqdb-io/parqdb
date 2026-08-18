@@ -5,6 +5,7 @@ import { resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 
 import { ParqDB } from '../src/index.js'
+import { HttpRangeBuffer } from '../src/http.js'
 import { parseManifest } from '../src/manifest.js'
 
 const fixtureRoot = resolve('../spec/fixtures/v1/valid/lvq8')
@@ -66,6 +67,32 @@ describe('static package manifest', () => {
 })
 
 describe('HTTP Range query', () => {
+  test('coalesces nearby byte ranges while fetching distant groups concurrently', async () => {
+    requests.length = 0
+    const path = 'centroids.parquet'
+    const bytes = await readFile(resolve(fixtureRoot, path))
+    const file = new HttpRangeBuffer(new URL(`${baseUrl}/${path}`), bytes.byteLength, {
+      allowHttp: true,
+      maxRangeGapBytes: 8,
+    })
+
+    const [first, second, third, distant] = await Promise.all([
+      file.slice(0, 10),
+      file.slice(10, 20),
+      file.slice(24, 30),
+      file.slice(200, 210),
+    ])
+
+    expect(new Uint8Array(first)).toEqual(Uint8Array.from(bytes.subarray(0, 10)))
+    expect(new Uint8Array(second)).toEqual(Uint8Array.from(bytes.subarray(10, 20)))
+    expect(new Uint8Array(third)).toEqual(Uint8Array.from(bytes.subarray(24, 30)))
+    expect(new Uint8Array(distant)).toEqual(Uint8Array.from(bytes.subarray(200, 210)))
+    expect(requests.filter(request => request.path === path)).toEqual([
+      { path, range: 'bytes=0-29' },
+      { path, range: 'bytes=200-209' },
+    ])
+  })
+
   test('queries LVQ8 without listing or fetching the native relation manifest', async () => {
     requests.length = 0
     const wasm = await readFile(wasmPath)

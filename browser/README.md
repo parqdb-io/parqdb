@@ -15,4 +15,8 @@ only postings files and row groups intersecting the selected CIDs, and returns
 the source-key fields plus `_distance`. It never lists the object prefix and
 does not fetch or join the source table. Selected row-group reads run with a
 bounded concurrency of eight by default; set `maxConcurrentReads` in the search
-options to a value from 1 through 64 to tune the transport.
+options to a value from 1 through 64 to tune the transport. Concurrent slices
+of the same object are coalesced into fewer HTTP requests when their total gaps
+fit within 64 KiB. Set `maxRangeGapBytes` when opening the index to tune that
+bounded over-read, or set it to zero to merge only overlapping and adjacent
+ranges.
