@@ -88,7 +88,7 @@ export class ParqDB {
       throw new Error('k must be a positive portable integer')
     }
     const effectiveNprobe = Math.min(options.nprobe, nlist)
-    const effectiveK = Math.min(options.k, this.manifest.index.ntotal, 1_000_000)
+    const effectiveK = Math.min(options.k, this.manifest.index.ntotal, 100)
     const rawQuery = Float32Array.from(query)
     if (rawQuery.length !== dimension || rawQuery.some(value => !Number.isFinite(value))) {
       throw new Error(`query must contain ${dimension} finite values`)

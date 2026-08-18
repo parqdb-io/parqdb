@@ -89,7 +89,7 @@ describe('HTTP Range query', () => {
       wasm,
     })
 
-    const hits = await index.search([0, 0, 0], { nprobe: 20, k: 20 })
+    const hits = await index.search([0, 0, 0], { nprobe: 20, k: 200 })
 
     expect(hits).toHaveLength(3)
     expect(hits.map(hit => hit.document_id)).toEqual(['a', 'b', 'c'])
