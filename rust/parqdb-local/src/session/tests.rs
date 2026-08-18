@@ -4,7 +4,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use arrow::array::{Array, Float32Builder, Int32Array, Int64Array, ListBuilder, StringArray};
+use arrow::array::{
+    Array, BinaryArray, Float32Array, Float32Builder, Int32Array, Int64Array, ListBuilder,
+    StringArray,
+};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
@@ -13,6 +16,7 @@ use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::ParquetReadOptions;
 use futures::StreamExt;
 use parqdb_catalog::{IvfCentroidsCatalogEntry, IvfCentroidsClaim, IvfCentroidsClaimResult};
+use parqdb_kernels::{LvqBits, encode_lvq_rows};
 use parqdb_meta::{
     DistanceMetric, IVF_CLUSTERING_PROFILE_VERSION, IndexMetadata, IvfCentroidsDescriptor,
     IvfCentroidsMetadata, IvfCentroidsReference, PostingEncoding, SnapshotLogEntry,
@@ -557,26 +561,23 @@ async fn write_direct_pid_relations(
     let centroids_path = root.join("centroids");
     let roots_path = root.join("roots");
     let postings_path = root.join("postings");
-    let mut centroids = ListBuilder::new(Float32Builder::new()).with_field(Arc::new(Field::new(
-        "element",
-        DataType::Float32,
-        false,
-    )));
-    centroids.values().append_slice(&[0.0, 0.0]);
-    centroids.append(true);
-    centroids.values().append_slice(&[10.0, 0.0]);
-    centroids.append(true);
-    let centroids = centroids.finish();
+    let centroids = encode_lvq_rows(&[0.0, 0.0, 10.0, 0.0], 2, LvqBits::Eight).unwrap();
+    let (codes, offsets, scales) = centroids.into_parts();
+    let codes = BinaryArray::from_iter_values(codes.chunks_exact(2));
     let centroid_table = RecordBatch::try_new(
         Arc::new(Schema::new(vec![
             Field::new("cid", DataType::Int32, false),
             Field::new("cid_bucket", DataType::Int32, false),
-            Field::new("centroid", centroids.data_type().clone(), false),
+            Field::new("offset", DataType::Float32, false),
+            Field::new("scale", DataType::Float32, false),
+            Field::new("code", DataType::Binary, false),
         ])),
         vec![
             Arc::new(Int32Array::from(vec![0, 1])),
             Arc::new(Int32Array::from(vec![0, 0])),
-            Arc::new(centroids),
+            Arc::new(Float32Array::from(offsets)),
+            Arc::new(Float32Array::from(scales)),
+            Arc::new(codes),
         ],
     )
     .unwrap();

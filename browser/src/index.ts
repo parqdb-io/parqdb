@@ -48,7 +48,12 @@ interface RowSpan {
 
 export class ParqDB {
   readonly manifest: PackageManifest
-  private centroidData: Promise<{ values: Float32Array; cids: Int32Array }> | undefined
+  private centroidData: Promise<{
+    codes: Uint8Array
+    offsets: Float32Array
+    scales: Float32Array
+    cids: Int32Array
+  }> | undefined
   private readonly postingsMetadata = new Map<string, Promise<FileMetaData>>()
 
   private constructor(
@@ -170,11 +175,16 @@ export class ParqDB {
   }
 
   private async selectCids(query: Float32Array, nprobe: number, options: HttpOptions): Promise<number[]> {
-    const { values, cids } = await this.loadCentroids(options)
-    return this.kernel.denseTopk(values, query, nprobe).map(hit => cids[hit.row]!)
+    const { codes, offsets, scales, cids } = await this.loadCentroids(options)
+    return this.kernel.lvqTopk(codes, offsets, scales, query, 8, nprobe).map(hit => cids[hit.row]!)
   }
 
-  private async loadCentroids(options: HttpOptions): Promise<{ values: Float32Array; cids: Int32Array }> {
+  private async loadCentroids(options: HttpOptions): Promise<{
+    codes: Uint8Array
+    offsets: Float32Array
+    scales: Float32Array
+    cids: Int32Array
+  }> {
     if (this.centroidData !== undefined) return this.centroidData
     const loading = this.readCentroids(options)
     this.centroidData = loading
@@ -186,7 +196,12 @@ export class ParqDB {
     }
   }
 
-  private async readCentroids(options: HttpOptions): Promise<{ values: Float32Array; cids: Int32Array }> {
+  private async readCentroids(options: HttpOptions): Promise<{
+    codes: Uint8Array
+    offsets: Float32Array
+    scales: Float32Array
+    cids: Int32Array
+  }> {
     const descriptor = this.manifest.hierarchy.centroids
     const file = new HttpRangeBuffer(objectUrl(this.manifestUrl, descriptor.path), descriptor.size, options)
     const metadata = await parquetMetadataAsync(file)
@@ -196,8 +211,16 @@ export class ParqDB {
     if (metadata.row_groups.length !== this.manifest.hierarchy.rootCount) {
       throw new Error('leaf centroid row groups do not match root-count')
     }
-    const rows = await parquetReadObjects({ file, metadata, columns: ['cid', 'cid_bucket', 'centroid'], compressors })
-    const values = new Float32Array(rows.length * this.manifest.index.dimension)
+    const rows = await parquetReadObjects({
+      file,
+      metadata,
+      columns: ['cid', 'cid_bucket', 'offset', 'scale', 'code'],
+      compressors,
+      utf8: false,
+    })
+    const codes = new Uint8Array(rows.length * this.manifest.index.dimension)
+    const offsets = new Float32Array(rows.length)
+    const scales = new Float32Array(rows.length)
     const cids = new Int32Array(rows.length)
     rows.forEach((row, position) => {
       const cid = requiredInteger(row.cid, 'centroid cid')
@@ -211,11 +234,20 @@ export class ParqDB {
       ) {
         throw new Error('centroid rows do not follow manifest CID topology')
       }
-      const vector = floatVector(row.centroid, this.manifest.index.dimension, 'centroid')
-      values.set(vector, position * this.manifest.index.dimension)
+      const offset = requiredFloat(row.offset, 'centroid LVQ offset')
+      const scale = requiredFloat(row.scale, 'centroid LVQ scale')
+      if (scale < 0) throw new Error('centroid LVQ scale must be non-negative')
+      if (!(row.code instanceof Uint8Array) || row.code.length !== this.manifest.index.dimension) {
+        const kind = Object.prototype.toString.call(row.code)
+        const length = row.code !== null && typeof row.code === 'object' && 'length' in row.code ? row.code.length : 'missing'
+        throw new Error(`centroid LVQ8 code has the wrong shape (${kind}, length ${String(length)})`)
+      }
+      codes.set(row.code, position * this.manifest.index.dimension)
+      offsets[position] = offset
+      scales[position] = scale
       cids[position] = cid
     })
-    return { values, cids }
+    return { codes, offsets, scales, cids }
   }
 
   private async planPostings(
@@ -326,15 +358,6 @@ function validateSourceKey(value: unknown, field: SourceKeyField): asserts value
     (field.type === 'binary' && value instanceof Uint8Array) ||
     (fixed !== null && value instanceof Uint8Array && value.length === Number(fixed[1]))
   if (!valid) throw new Error(`source key ${field.name} does not match ${field.type}`)
-}
-
-function floatVector(value: unknown, dimension: number, label: string): Float32Array {
-  if (!Array.isArray(value) && !(value instanceof Float32Array)) throw new Error(`${label} must be a float vector`)
-  const vector = Float32Array.from(value as Iterable<number>)
-  if (vector.length !== dimension || vector.some(entry => !Number.isFinite(entry))) {
-    throw new Error(`${label} must contain ${dimension} finite values`)
-  }
-  return vector
 }
 
 function requiredInteger(value: unknown, label: string): number {

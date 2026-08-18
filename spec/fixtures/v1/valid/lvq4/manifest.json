@@ -1,10 +1,11 @@
 {
   "format-version": 1,
   "hierarchy": {
+    "centroid-encoding": "lvq8",
     "centroids": {
       "path": "centroids.parquet",
-      "sha256": "fd22a96c4f57a95c7957c2cbdcaa638dec7828236377643283c582c09dba0732",
-      "size": 1087
+      "sha256": "ef187a534f7b3023bab9f3c07b9ef4c89fac59a4dd24b4763e7703997c30edda",
+      "size": 1382
     },
     "cid-offsets": [
       0,

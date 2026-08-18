@@ -22,6 +22,14 @@ def squared_l2(left: list[float], right: list[float]) -> float:
     return sum((x - y) * (x - y) for x, y in zip(left, right, strict=True))
 
 
+def decode_lvq(row: dict[str, Any], dimension: int, bits: int) -> list[float]:
+    codes = []
+    for index in range(dimension):
+        byte = row["code"][index if bits == 8 else index // 2]
+        codes.append(byte if bits == 8 else (byte >> (4 * (index % 2))) & 0x0F)
+    return [row["offset"] + row["scale"] * code for code in codes]
+
+
 def assert_query_result(
     actual: list[dict[str, object]],
     expected: list[dict[str, object]],
@@ -50,6 +58,7 @@ def reference_search(
     snapshot = metadata["snapshots"][0]
     key_fields = snapshot["source-key-fields"]
     vector_field = snapshot["vector-field"]
+    dimension = int(snapshot["parameters"]["dimension"])
     source = {
         tuple(row[field] for field in key_fields): row
         for row in pq.read_table(directory / "source.parquet").to_pylist()
@@ -62,7 +71,10 @@ def reference_search(
         row["cid"]
         for row in sorted(
             centroids,
-            key=lambda row: (squared_l2(query, row["centroid"]), row["cid"]),
+            key=lambda row: (
+                squared_l2(query, decode_lvq(row, dimension, 8)),
+                row["cid"],
+            ),
         )[: case["nprobe"]]
     }
 
@@ -107,7 +119,10 @@ def reference_lvq_search(
         row["cid"]
         for row in sorted(
             centroids,
-            key=lambda row: (squared_l2(query, row["centroid"]), row["cid"]),
+            key=lambda row: (
+                squared_l2(query, decode_lvq(row, dimension, 8)),
+                row["cid"],
+            ),
         )[: case["nprobe"]]
     }
 
@@ -115,11 +130,7 @@ def reference_lvq_search(
     for posting in postings:
         if posting["cid"] not in selected:
             continue
-        codes = []
-        for index in range(dimension):
-            byte = posting["code"][index if bits == 8 else index // 2]
-            codes.append(byte if bits == 8 else (byte >> (4 * (index % 2))) & 0x0F)
-        vector = [posting["offset"] + posting["scale"] * code for code in codes]
+        vector = decode_lvq(posting, dimension, bits)
         candidates.append(
             {
                 "document_id": posting["key_1"],

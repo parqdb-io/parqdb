@@ -61,6 +61,8 @@ pub struct StaticIndexHierarchy {
     pub root_count: i32,
     /// Root-to-leaf prefix sum.
     pub cid_offsets: Vec<i32>,
+    /// Leaf-centroid representation used for global routing.
+    pub centroid_encoding: PostingEncoding,
     /// Root centroid Parquet object.
     pub roots: StaticIndexObject,
     /// Leaf centroid Parquet object.
@@ -181,6 +183,9 @@ impl StaticIndexPackageManifest {
 
     fn validate_hierarchy(&self) -> Result<()> {
         let hierarchy = &self.hierarchy;
+        if hierarchy.centroid_encoding != PostingEncoding::Lvq8 {
+            return invalid("static package version 1 requires lvq8 leaf centroids");
+        }
         if hierarchy.root_count <= 0
             || hierarchy.cid_offsets.len()
                 != usize::try_from(hierarchy.root_count)
@@ -338,6 +343,7 @@ mod tests {
             hierarchy: StaticIndexHierarchy {
                 root_count: 2,
                 cid_offsets: vec![0, 2, 4],
+                centroid_encoding: PostingEncoding::Lvq8,
                 roots: StaticIndexObject {
                     path: "roots.parquet".into(),
                     size: 100,

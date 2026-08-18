@@ -125,11 +125,15 @@ The root rows define ordered, adjacent, non-empty ranges that cover `[0, C)`.
 |---|---|---|
 | `cid` | `int` | Required; unique; in `[0, C)`. |
 | `cid_bucket` | `int` | Required; root whose interval contains `cid`. |
-| `centroid` | `list<float>` | Required; exactly `D` finite elements. |
+| `offset` | `float` | Required; finite LVQ8 lower bound. |
+| `scale` | `float` | Required; finite and non-negative LVQ8 scale. |
+| `code` | `binary` | Required; exactly `D` LVQ8 bytes. |
 
 The relation contains exactly `C` rows. Centroid training is implementation
 specific. A source row is assigned to the centroid with the smallest squared
-Euclidean distance; equal distances select the smaller `cid`.
+Euclidean distance to its LVQ8 reconstruction; equal distances select the
+smaller `cid`. Leaf-centroid assignment and query routing both use this
+persisted representation. Root centroids remain dense `list<float>` values.
 
 For `cosine`, source vectors are normalized before training and assignment.
 Training persists the centroids produced from those normalized inputs. A

@@ -22,8 +22,8 @@ fields:
 - `package-uuid`: a non-nil lowercase UUID;
 - `index`: `metric`, `posting-encoding`, `dimension`, `nlist`, `ntotal`, and
   ordered `source-key-fields`;
-- `hierarchy`: `root-count`, `cid-offsets`, and descriptors for the roots and
-  leaf-centroid Parquet objects; and
+- `hierarchy`: `root-count`, `cid-offsets`, `centroid-encoding` (exactly
+  `lvq8`), and descriptors for the roots and leaf-centroid Parquet objects; and
 - `postings.files`: the canonical inventory of postings Parquet objects.
 
 Unknown fields are invalid. Each object descriptor contains a relative `path`,
@@ -50,8 +50,10 @@ zero, and ends at `nlist`. Root `r` owns the CID interval
 `roots.parquet` has one row per root. It records topology and is not a
 query-time pruning layer. `centroids.parquet` has one row per leaf CID, ordered
 by `(cid_bucket, cid)`, and exactly one row group per root. A leaf centroid row
-group cannot cross a root boundary. Readers rank all leaf centroids globally;
-they must not restrict leaf routing to selected roots.
+contains required `offset: float`, `scale: float`, and `code: binary` columns;
+the code is exactly `dimension` LVQ8 bytes. A row group cannot cross a root
+boundary. Readers rank all leaf centroids globally; they must not restrict
+leaf routing to selected roots.
 
 Postings paths are rooted at
 `ivf_postings/cid_bucket=<six-digit-root-id>/`. The top-level manifest repeats

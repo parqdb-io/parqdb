@@ -183,7 +183,7 @@ different; physical replication of one artifact is outside this RFC.
 The centroid artifact contains one logical relation:
 
 ```text
-ivf_centroids(cid, centroid)
+ivf_centroids(cid, cid_bucket, offset, scale, code)
 ```
 
 ### IVF

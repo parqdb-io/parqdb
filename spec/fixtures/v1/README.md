@@ -5,8 +5,8 @@ These non-normative fixtures exercise ParqDB metadata and IVF schema version
 
 `valid/` contains a source-encoded IVF fixture. It includes logical index
 metadata, IVF-centroids metadata, source and centroid Parquet files,
-hierarchical root centroids, manifested root-bucketed postings, and ordered
-query results.
+hierarchical FP32 root centroids, LVQ8 leaf centroids, manifested root-bucketed
+postings, and ordered query results.
 
 Additional directories cover:
 

@@ -8,7 +8,6 @@ use std::sync::{Arc, Mutex};
 use parallite::Executor;
 use parallite::ParalliteContext;
 use parqdb_kernels::{LvqBits, LvqEncodedBatch, detect, encode_lvq_rows};
-use parqdb_kmeans::assign_batch_to_centroids;
 
 use graph::{Graph, SearchScratch};
 
@@ -71,12 +70,12 @@ pub(crate) struct CentroidNavigator {
 
 #[derive(Debug)]
 enum NavigatorStrategy {
-    Exact(Arc<[f32]>),
+    Exact(LvqEncodedBatch),
     Hnsw(HnswNavigator),
 }
 
 impl CentroidNavigator {
-    pub(crate) fn new(nlist: usize, dimension: usize, values: Arc<[f32]>) -> Result<Self> {
+    pub(crate) fn new(nlist: usize, dimension: usize, values: &[f32]) -> Result<Self> {
         let parallel = ParalliteContext::default();
         Self::new_parallel(nlist, dimension, values, &parallel)
     }
@@ -84,7 +83,7 @@ impl CentroidNavigator {
     pub(crate) fn new_parallel(
         nlist: usize,
         dimension: usize,
-        values: Arc<[f32]>,
+        values: &[f32],
         parallel: &ParalliteContext,
     ) -> Result<Self> {
         Self::new_with_policy(nlist, dimension, values, MIN_HNSW_CENTROIDS, parallel)
@@ -100,7 +99,7 @@ impl CentroidNavigator {
     fn new_with_policy(
         nlist: usize,
         dimension: usize,
-        values: Arc<[f32]>,
+        values: &[f32],
         min_hnsw_centroids: usize,
         parallel: &ParalliteContext,
     ) -> Result<Self> {
@@ -120,15 +119,15 @@ impl CentroidNavigator {
                 "centroid matrix must contain only finite values".into(),
             ));
         }
+        let centroids = encode_lvq_rows(values, dimension, LvqBits::Eight)?;
         let strategy = if nlist >= min_hnsw_centroids {
-            NavigatorStrategy::Hnsw(HnswNavigator::build_parallel(
-                &values,
-                dimension,
+            NavigatorStrategy::Hnsw(HnswNavigator::build_encoded_parallel(
+                centroids,
                 HnswConfig::default(),
                 parallel,
             )?)
         } else {
-            NavigatorStrategy::Exact(values)
+            NavigatorStrategy::Exact(centroids)
         };
         Ok(Self {
             nlist,
@@ -154,15 +153,7 @@ impl CentroidNavigator {
         }
         match &self.strategy {
             NavigatorStrategy::Hnsw(navigator) => navigator.route(query, nprobe),
-            NavigatorStrategy::Exact(values) => {
-                Ok(
-                    crate::ivf::select_clusters(query, values, self.dimension, nprobe)
-                        .into_iter()
-                        .enumerate()
-                        .filter_map(|(cid, selected)| selected.then_some(cid))
-                        .collect(),
-                )
-            }
+            NavigatorStrategy::Exact(centroids) => route_exact(centroids, query, nprobe),
         }
     }
 
@@ -189,9 +180,6 @@ impl CentroidNavigator {
         }
         match &self.strategy {
             NavigatorStrategy::Hnsw(navigator) => navigator.route_batch(queries, nprobe),
-            NavigatorStrategy::Exact(values) if nprobe == 1 => {
-                assign_batch_to_centroids(queries, self.dimension, values).map_err(Into::into)
-            }
             NavigatorStrategy::Exact(_) => {
                 let mut output =
                     Vec::with_capacity(queries.len() / self.dimension * nprobe.min(self.nlist));
@@ -205,7 +193,7 @@ impl CentroidNavigator {
 
     pub(crate) fn resident_size(&self) -> usize {
         match &self.strategy {
-            NavigatorStrategy::Exact(values) => std::mem::size_of_val(values.as_ref()),
+            NavigatorStrategy::Exact(centroids) => centroids.resident_size(),
             NavigatorStrategy::Hnsw(navigator) => navigator.resident_size(),
         }
     }
@@ -233,9 +221,29 @@ impl HnswIndex {
         Self::build_parallel(values, dimension, config, &parallel)
     }
 
+    #[cfg(test)]
     fn build_parallel(
         values: &[f32],
         dimension: usize,
+        config: HnswConfig,
+        parallel: &ParalliteContext,
+    ) -> Result<Self> {
+        if dimension == 0 || values.is_empty() || !values.len().is_multiple_of(dimension) {
+            return Err(Error::InvalidArgument(
+                "centroid matrix must contain complete non-empty rows".into(),
+            ));
+        }
+        if values.iter().any(|value| !value.is_finite()) {
+            return Err(Error::InvalidArgument(
+                "centroid matrix must contain only finite values".into(),
+            ));
+        }
+        let centroids = encode_lvq_rows(values, dimension, LvqBits::Eight)?;
+        Self::build_encoded_parallel(centroids, config, parallel)
+    }
+
+    fn build_encoded_parallel(
+        centroids: LvqEncodedBatch,
         config: HnswConfig,
         parallel: &ParalliteContext,
     ) -> Result<Self> {
@@ -252,25 +260,16 @@ impl HnswIndex {
                 "HNSW ef_search must be positive".into(),
             ));
         }
-        if dimension == 0 || values.is_empty() || !values.len().is_multiple_of(dimension) {
-            return Err(Error::InvalidArgument(
-                "centroid matrix must contain complete non-empty rows".into(),
-            ));
-        }
-        if values.iter().any(|value| !value.is_finite()) {
-            return Err(Error::InvalidArgument(
-                "centroid matrix must contain only finite values".into(),
-            ));
-        }
+        let dimension = centroids.dimension();
+        let values = decode_centroids(&centroids)?;
         let graph = Graph::build(
-            values,
+            &values,
             dimension,
             config.m,
             config.ef_construction,
             config.seed,
             parallel,
         )?;
-        let centroids = encode_lvq_rows(values, dimension, LvqBits::Eight)?;
         Ok(Self {
             centroids,
             graph,
@@ -437,7 +436,38 @@ fn exact_scan_preferred(nprobe: usize, nlist: usize) -> bool {
     nprobe.saturating_mul(EXACT_SCAN_NPROBE_DIVISOR) >= nlist
 }
 
+fn decode_centroids(centroids: &LvqEncodedBatch) -> Result<Vec<f32>> {
+    let mut values = vec![0.0; centroids.row_count() * centroids.dimension()];
+    let view = centroids.as_view();
+    for (row, output) in values.chunks_exact_mut(centroids.dimension()).enumerate() {
+        view.decode_row(row, output)?;
+    }
+    Ok(values)
+}
+
+fn route_exact(centroids: &LvqEncodedBatch, query: &[f32], nprobe: usize) -> Result<Vec<usize>> {
+    let mut distances = vec![0.0_f32; centroids.row_count()];
+    detect().lvq_squared_l2_rows(&centroids.as_view(), query, &mut distances)?;
+    let mut scored = distances
+        .into_iter()
+        .enumerate()
+        .map(|(cid, distance)| (distance, cid))
+        .collect::<Vec<_>>();
+    let compare = |left: &(f32, usize), right: &(f32, usize)| {
+        left.0
+            .total_cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+    };
+    if nprobe < scored.len() {
+        scored.select_nth_unstable_by(nprobe, compare);
+        scored.truncate(nprobe);
+    }
+    scored.sort_unstable_by(compare);
+    Ok(scored.into_iter().map(|(_, cid)| cid).collect())
+}
+
 impl HnswNavigator {
+    #[cfg(test)]
     fn build_parallel(
         values: &[f32],
         dimension: usize,
@@ -447,6 +477,10 @@ impl HnswNavigator {
         let index = Arc::new(HnswIndex::build_parallel(
             values, dimension, config, parallel,
         )?);
+        Ok(Self::from_index(index, config, parallel))
+    }
+
+    fn from_index(index: Arc<HnswIndex>, config: HnswConfig, parallel: &ParalliteContext) -> Self {
         let scratch_capacity = parallel.thread_count().max(1);
         let pooled_result_capacity = config.ef_search;
         let pooled_candidate_capacity = config.ef_search.saturating_mul(2);
@@ -456,14 +490,25 @@ impl HnswNavigator {
         let scratch_resident_limit = scratches
             .first()
             .map_or(0, |scratch| scratch.graph.resident_size());
-        Ok(Self {
+        Self {
             index,
             scratches: Mutex::new(scratches),
             scratch_capacity,
             scratch_resident_limit,
             pooled_result_capacity,
             pooled_candidate_capacity,
-        })
+        }
+    }
+
+    fn build_encoded_parallel(
+        centroids: LvqEncodedBatch,
+        config: HnswConfig,
+        parallel: &ParalliteContext,
+    ) -> Result<Self> {
+        let index = Arc::new(HnswIndex::build_encoded_parallel(
+            centroids, config, parallel,
+        )?);
+        Ok(Self::from_index(index, config, parallel))
     }
 
     fn route(&self, query: &[f32], nprobe: usize) -> Result<Vec<usize>> {
@@ -536,16 +581,16 @@ mod tests {
 
     #[test]
     fn generic_navigator_validates_shape() {
-        let error = CentroidNavigator::new(2, 3, Arc::from(vec![0.0; 5])).unwrap_err();
+        let error = CentroidNavigator::new(2, 3, &[0.0; 5]).unwrap_err();
 
         assert!(error.to_string().contains("2 x 3"));
         assert!(error.to_string().contains("6 values, found 5"));
-        assert!(CentroidNavigator::new(0, 3, Arc::from([])).is_err());
+        assert!(CentroidNavigator::new(0, 3, &[]).is_err());
     }
 
     #[test]
     fn selecting_every_cluster_bypasses_the_strategy() {
-        let navigator = CentroidNavigator::new(2, 2, Arc::from([0.0, 0.0, 1.0, 1.0])).unwrap();
+        let navigator = CentroidNavigator::new(2, 2, &[0.0, 0.0, 1.0, 1.0]).unwrap();
 
         assert_eq!(navigator.route(&[0.5, 0.5], 2).unwrap(), [0, 1]);
         assert_eq!(
@@ -560,8 +605,7 @@ mod tests {
         let values = (0_u16..256 * 8)
             .map(|value| f32::from(value % 251))
             .collect::<Vec<_>>();
-        let navigator =
-            CentroidNavigator::new_with_policy(256, 8, Arc::from(values), 1, &parallel).unwrap();
+        let navigator = CentroidNavigator::new_with_policy(256, 8, &values, 1, &parallel).unwrap();
 
         let NavigatorStrategy::Hnsw(hnsw) = &navigator.strategy else {
             panic!("expected HNSW navigation");

@@ -172,6 +172,7 @@ An abbreviated example is:
   "hierarchy": {
     "root-count": 2,
     "cid-offsets": [0, 2, 4],
+    "centroid-encoding": "lvq8",
     "roots": {
       "path": "roots.parquet",
       "size": 7184,
@@ -282,7 +283,9 @@ The file is small enough to fetch as one object in version 1.
 | --- | --- | --- |
 | `cid` | `int` | Required, unique, ascending, in `[0, nlist)`. |
 | `cid_bucket` | `int` | Required, equal to the root owning `cid`. |
-| `centroid` | `list<float>` | Required, exactly `dimension` finite elements. |
+| `offset` | `float` | Required, finite LVQ8 lower bound. |
+| `scale` | `float` | Required, finite and non-negative LVQ8 scale. |
+| `code` | `binary` | Required, exactly `dimension` bytes. |
 
 Rows are ordered by `(cid_bucket, cid)`. A leaf-centroid row group cannot cross
 a `cid_bucket` boundary. Version 1 readers still rank every leaf centroid
@@ -372,7 +375,7 @@ The TypeScript client opens an immutable package URL and performs:
 GET manifest.json
     -> validate format and query parameters
 Range GET centroids.parquet footer
-Range GET all leaf-centroid column chunks
+Range GET all LVQ8 leaf-centroid column chunks
     -> WASM distance/top-k globally selects leaf CIDs
 manifest file-range lookup
     -> select postings files whose CID intervals intersect selected CIDs
@@ -399,8 +402,8 @@ does not pass through an optimizer's `IN`-list expansion, simplification, or
 statistics-pruning threshold. The browser represents it as a sorted unique
 integer set or bitmap and tests row-group `cid` statistics directly.
 
-The WebAssembly kernel implements root and leaf centroid distance, LVQ4/LVQ8
-distance, and bounded top-k selection. TypeScript owns manifest parsing, HTTP
+The WebAssembly kernel implements global LVQ8 leaf-centroid routing, LVQ4/LVQ8
+posting distance, and bounded top-k selection. TypeScript owns manifest parsing, HTTP
 requests, Parquet metadata planning, cancellation, and the public result API.
 
 For cosine, the client applies the same normalized-vector and reported-distance
