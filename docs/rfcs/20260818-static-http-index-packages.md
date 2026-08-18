@@ -28,7 +28,7 @@ format.
 | What can host a version 1 package? | A public Hugging Face dataset revision or public S3 objects exposed through HTTP. |
 | How does a reader discover objects? | One exact `manifest.json` request. Readers never list the package prefix. |
 | Which index representations are supported? | IVF-LVQ4 and IVF-LVQ8. |
-| Which clustering strategy is used? | Hierarchical K-means by default and for every version 1 package. |
+| Which clustering strategy is used? | Hierarchical K-means by default and for every version 1 package. The hierarchy controls CID order and layout, not query-time root pruning. |
 | How are leaf CIDs assigned? | Each root owns one contiguous CID interval. |
 | What is the postings partition key? | `cid_bucket`, equal to the hierarchical root ID. |
 | Is `cid_bucket` part of the logical postings schema? | No. It is private physical layout metadata. |
@@ -47,7 +47,7 @@ Version 1 includes:
 
 - public, unauthenticated Hugging Face dataset and S3 HTTP objects;
 - an immutable package manifest;
-- hierarchical IVF routing;
+- global leaf-centroid IVF routing over hierarchy-ordered CIDs;
 - LVQ4 and LVQ8 postings;
 - standard Parquet objects selected with HTTP range requests;
 - a TypeScript client and WebAssembly distance/top-k kernel; and
@@ -71,7 +71,8 @@ A package is a directory-like immutable object prefix:
 manifest.json
 roots.parquet
 centroids.parquet
-postings/
+ivf_postings/
+  manifest.json
   cid_bucket=000000/
     part-00000.parquet
     part-00001.parquet
@@ -81,8 +82,11 @@ postings/
 
 The Hive-looking directory names are only canonical object names. Readers do
 not infer a Hive schema and do not expose `cid_bucket` as a query column.
-`manifest.json` is the sole discovery entry point and lists every object that
-may be read.
+The top-level `manifest.json` is the sole browser discovery entry point and
+lists every Parquet object that may be read. `ivf_postings/manifest.json` is
+the native Parquet relation manifest; a browser does not fetch it. Keeping the
+relation manifest in the package lets the same snapshot remain a normal
+catalog-backed ParqDB index without object listing.
 
 All manifest paths are relative to the directory containing `manifest.json`.
 A path is non-empty, uses `/`, and contains no empty, `.` or `..` segment,
@@ -90,8 +94,9 @@ query, fragment, or URI scheme. Resolving a path must remain below the package
 root.
 
 Object names are not content-addressed in version 1. Immutability is therefore
-a publication requirement: a publisher writes a new prefix for a new package
-and never replaces an object reachable from a published manifest.
+a storage requirement: a builder writes a new snapshot prefix and never
+replaces an object reachable from its manifest. Publishing that snapshot is a
+byte-for-byte copy, not a format conversion.
 
 ## 2. Hierarchical Clustering and CID Assignment
 
@@ -181,7 +186,7 @@ An abbreviated example is:
   "postings": {
     "files": [
       {
-        "path": "postings/cid_bucket=000000/part-00000.parquet",
+        "path": "ivf_postings/cid_bucket=000000/part-00000.parquet",
         "cid-bucket": 0,
         "min-cid": 0,
         "max-cid": 1,
@@ -190,7 +195,7 @@ An abbreviated example is:
         "sha256": "e1550cc51520095ad34357a61f5a23532b72885d083c6ddfd83936f9b139cbc7"
       },
       {
-        "path": "postings/cid_bucket=000000/part-00001.parquet",
+        "path": "ivf_postings/cid_bucket=000000/part-00001.parquet",
         "cid-bucket": 0,
         "min-cid": 1,
         "max-cid": 1,
@@ -199,7 +204,7 @@ An abbreviated example is:
         "sha256": "bf40320451c794954fecdffdc749f17c150bd2c59e4777f06c3846b226f196ef"
       },
       {
-        "path": "postings/cid_bucket=000001/part-00000.parquet",
+        "path": "ivf_postings/cid_bucket=000001/part-00000.parquet",
         "cid-bucket": 1,
         "min-cid": 2,
         "max-cid": 2,
@@ -208,7 +213,7 @@ An abbreviated example is:
         "sha256": "92ada15d0cc7e83b1538e591094f5f52666822317fcef66e8bd24f7b0d965232"
       },
       {
-        "path": "postings/cid_bucket=000001/part-00001.parquet",
+        "path": "ivf_postings/cid_bucket=000001/part-00001.parquet",
         "cid-bucket": 1,
         "min-cid": 3,
         "max-cid": 3,
@@ -237,17 +242,19 @@ are:
 - files from different buckets never overlap;
 - consecutive files in one bucket may overlap at exactly one boundary CID
   when that CID spans files;
-- `rows` and `size` are positive; and
-- the sum of postings file `rows` equals `ntotal`; and
+- `ntotal`, every `rows`, and every `size` are positive integers no greater
+  than `9007199254740991`, so a browser can validate them without precision
+  loss;
+- the sum of postings file `rows` equals `ntotal`;
 - `sha256` is the lowercase digest of the complete referenced object.
 
 The manifest deliberately contains only file-level postings ranges. Parquet
 footers remain the sole authority for row groups, column chunks, page indexes,
 compression, and byte offsets.
 
-The complete source-key type grammar will reuse the canonical IVF source-key
-types. A JavaScript-facing API represents 64-bit integers without lossy
-conversion to `number`.
+Source-key types use the canonical IVF grammar: `boolean`, `int`, `long`,
+`binary`, `string`, `date`, or `fixed(L)` for positive canonical `L`. A
+JavaScript-facing API represents `long` values as `bigint`, not `number`.
 
 ## 4. Parquet Contracts
 
@@ -278,8 +285,9 @@ The file is small enough to fetch as one object in version 1.
 | `centroid` | `list<float>` | Required, exactly `dimension` finite elements. |
 
 Rows are ordered by `(cid_bucket, cid)`. A leaf-centroid row group cannot cross
-a `cid_bucket` boundary. This lets a reader select roots first and range-read
-only the leaf-centroid row groups belonging to those roots.
+a `cid_bucket` boundary. Version 1 readers still rank every leaf centroid
+globally: row-group boundaries preserve physical topology and future planning
+options, but must not be used to prune roots and change the selected CIDs.
 
 ### Postings
 
@@ -308,23 +316,31 @@ The writer enables Parquet statistics for `cid`. Every postings row group's
 `cid` minimum and maximum must both equal its single CID. A package validator
 checks this invariant before publication.
 
-## 5. Publication
+## 5. Build and Publication
 
-Publication is write-once and ordered:
+The index builder creates a self-contained snapshot in this order:
 
 1. train and validate the hierarchical centroid model;
-2. write `roots.parquet` and `centroids.parquet`;
-3. write every postings file to a fresh package prefix;
+2. write every postings file and the native relation manifest to a fresh
+   snapshot prefix;
+3. write package-local `roots.parquet` and `centroids.parquet`;
 4. close all Parquet writers and collect exact object sizes and SHA-256
    digests;
 5. validate schemas, hierarchy, file ranges, and row-group CID statistics;
 6. create `manifest.json` last; and
-7. expose or register the manifest URL only after the create succeeds.
+7. return the completed snapshot root only after the manifest create succeeds.
 
-An interrupted publication may leave unreachable objects but cannot expose a
-valid partial package because the entry-point manifest does not exist. A
-publisher must use create-if-absent behavior for `manifest.json` and must never
-overwrite a published object.
+An interrupted build may leave unreachable objects but cannot expose a valid
+partial package because the entry-point manifest does not exist. The builder
+uses create-if-absent behavior for every object, including `manifest.json`.
+
+No package exporter or service-specific publisher is required. A user may copy
+the completed snapshot directory with ordinary tools such as `cp`, an S3 sync,
+or a Hugging Face dataset upload. The upload operation must preserve relative
+paths and bytes, target a fresh immutable prefix or revision, and make the
+top-level manifest visible only after all referenced Parquet objects have been
+uploaded. When an upload tool cannot guarantee that order, the user uploads
+`manifest.json` in a final operation.
 
 Hugging Face publication identifies an immutable dataset commit, not a moving
 branch such as `main`. S3 publication uses a fresh immutable key prefix. Bucket
@@ -355,12 +371,9 @@ The TypeScript client opens an immutable package URL and performs:
 ```text
 GET manifest.json
     -> validate format and query parameters
-GET roots.parquet
-    -> WASM distance/top-k selects root IDs / cid_buckets
 Range GET centroids.parquet footer
-    -> select row groups for those cid_buckets
-Range GET selected leaf-centroid column chunks
-    -> WASM distance/top-k selects leaf CIDs
+Range GET all leaf-centroid column chunks
+    -> WASM distance/top-k globally selects leaf CIDs
 manifest file-range lookup
     -> select postings files whose CID intervals intersect selected CIDs
 Range GET selected postings footers
@@ -370,7 +383,12 @@ Range GET selected postings column chunks
 return source keys + _distance
 ```
 
-Footer-derived row-group selection is explicit. The client does not download a
+Root centroids are not part of version 1 query routing. Selecting roots first
+would make the candidate leaf set differ from native global `nprobe` routing
+and can reduce recall. The hierarchy instead makes related globally selected
+CIDs more likely to map to nearby row groups and ranges.
+
+Footer-derived postings row-group selection is explicit. The client does not download a
 whole candidate file and hope that a generic predicate optimizer prunes it.
 Adjacent selected ranges may be coalesced to reduce requests, but coalescing
 must be bounded so one small query cannot accidentally fetch a complete large
@@ -547,8 +565,8 @@ and every package invariant remain true.
 5. update the unreleased IVF and Parquet version 1 specifications and regenerate
    fixtures;
 6. add the TypeScript HTTP/Parquet planner and WebAssembly query kernel;
-7. add public Hugging Face and S3 publication adapters and HTTP capability
-   validation; and
+7. add host-independent HTTP capability validation and document byte-preserving
+   uploads to public Hugging Face datasets and S3; and
 8. add cross-runtime conformance, corruption, CORS, range, skewed-CID, and
    billion-scale manifest tests. Native tests must use CID selections larger
    than optimizer `IN`-list thresholds and assert the exact accessible row

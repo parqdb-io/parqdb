@@ -136,6 +136,8 @@ Core:
 
 - [`metadata.md`](metadata.md): index metadata format and snapshots.
 - [`catalog.md`](catalog.md): catalog state and atomic metadata commits.
+- [`static-package.md`](static-package.md): immutable HTTP-queryable IVF-LVQ
+  snapshots.
 
 Relation profiles:
 

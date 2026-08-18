@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#070907" />
+    <title>ParqDB // HTTP index console</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: "SFMono-Regular", "Cascadia Code", "Roboto Mono", "Liberation Mono", Menlo, Consolas, monospace;
+        font-synthesis: none;
+        --bg: #070907;
+        --panel: #0b0e0b;
+        --panel-2: #0e120e;
+        --ink: #d7ddd7;
+        --muted: #6f786f;
+        --faint: #343b34;
+        --line: #252b25;
+        --green: #7bff9e;
+        --cyan: #69d7ff;
+        --amber: #ffc45c;
+        --red: #ff6b6b;
+      }
+
+      * { box-sizing: border-box; }
+      html { background: var(--bg); }
+      body { margin: 0; min-width: 320px; background: var(--bg); color: var(--ink); }
+      body::after {
+        content: "";
+        position: fixed;
+        inset: 0;
+        z-index: 100;
+        pointer-events: none;
+        opacity: .035;
+        background: repeating-linear-gradient(0deg, transparent 0 3px, #b5ffbd 3px 4px);
+      }
+      ::selection { color: #071008; background: var(--green); }
+      button, input { font: inherit; }
+      button { color: inherit; }
+      a { color: inherit; text-decoration: none; }
+
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        height: 42px;
+        display: grid;
+        grid-template-columns: 1fr auto 1fr;
+        align-items: center;
+        padding: 0 max(14px, env(safe-area-inset-left));
+        border-bottom: 1px solid var(--line);
+        background: rgba(7, 9, 7, .94);
+      }
+      .topbar strong { color: var(--green); font-size: 12px; letter-spacing: .04em; }
+      .topbar-center { color: var(--muted); font-size: 10px; }
+      .topbar-right { justify-self: end; display: flex; align-items: center; gap: 14px; color: #8f998f; font-size: 10px; }
+      .topbar-right > span { display: flex; align-items: center; gap: 8px; }
+      .repo-link { color: #b8c1b8; }
+      .repo-link:hover, .repo-link:focus-visible { color: var(--green); }
+      .pulse { width: 7px; height: 7px; background: var(--green); box-shadow: 0 0 12px rgba(123,255,158,.65); animation: pulse 1.4s steps(2,end) infinite; }
+
+      main { width: min(1440px, 100%); margin: 0 auto; border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
+      .boot { padding: 34px 28px 30px; border-bottom: 1px solid var(--line); }
+      .prompt { color: var(--green); font-size: 11px; }
+      .prompt::before { content: "> "; color: #dfffe5; }
+      h1 { margin: 14px 0 10px; font-size: clamp(24px, 3.3vw, 46px); line-height: 1; letter-spacing: -.055em; font-weight: 650; }
+      .boot-copy { max-width: 820px; margin: 0; color: #919a91; font-size: 12px; line-height: 1.65; }
+      .boot-copy b { color: var(--ink); font-weight: 500; }
+
+      .routes { margin-top: 28px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+      .route { min-height: 38px; display: grid; grid-template-columns: 86px 1fr auto; gap: 18px; align-items: center; padding: 8px 10px; font-size: 11px; }
+      .route + .route { border-top: 1px solid var(--line); }
+      .route-name { color: var(--muted); }
+      .route-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #b8c0b8; }
+      .route-state { padding: 2px 6px; border: 1px solid currentColor; font-size: 9px; }
+      .route.legacy { color: #765252; background: repeating-linear-gradient(-45deg, transparent 0 12px, rgba(255,107,107,.035) 12px 13px); }
+      .route.legacy .route-path { color: #765f5f; text-decoration: line-through; text-decoration-thickness: 1px; }
+      .route.legacy .route-state { color: var(--red); }
+      .route.direct .route-name, .route.direct .route-path { color: #a9c9b0; }
+      .route.direct .route-state { color: var(--green); }
+
+      .workspace { display: grid; grid-template-columns: minmax(330px, .72fr) minmax(540px, 1.6fr); min-height: 650px; }
+      .pane { min-width: 0; }
+      .controls { border-right: 1px solid var(--line); background: var(--panel); }
+      .pane-head { height: 38px; display: flex; align-items: center; justify-content: space-between; padding: 0 14px; border-bottom: 1px solid var(--line); background: #090b09; color: #8d968d; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+      .pane-head code { color: #596159; font-size: 9px; }
+      .form { padding: 18px 16px 22px; }
+      .field { margin-bottom: 16px; }
+      label { display: flex; justify-content: space-between; margin-bottom: 6px; color: #8a938a; font-size: 10px; }
+      label span { color: #4e574e; }
+      input {
+        width: 100%;
+        min-height: 40px;
+        padding: 9px 10px;
+        border: 1px solid #303730;
+        border-radius: 0;
+        outline: 0;
+        background: #070907;
+        color: #dce4dc;
+        font-size: 12px;
+      }
+      input:focus { border-color: var(--green); box-shadow: inset 3px 0 var(--green); }
+      .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .actions { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 4px; }
+      button { min-height: 42px; border: 1px solid #384138; border-radius: 0; background: #101510; cursor: pointer; font-size: 11px; }
+      button:hover { border-color: var(--green); color: var(--green); }
+      button:focus-visible { outline: 1px solid var(--green); outline-offset: 2px; }
+      button:disabled { cursor: wait; opacity: .5; }
+      .run { border-color: var(--green); background: var(--green); color: #071008; font-weight: 700; }
+      .run:hover { background: #a3ffb9; color: #071008; }
+
+      .package-info { margin-top: 20px; border: 1px solid var(--line); }
+      .kv { display: grid; grid-template-columns: 1fr 1fr; min-height: 32px; align-items: center; padding: 0 9px; font-size: 10px; }
+      .kv + .kv { border-top: 1px solid var(--line); }
+      .kv span { color: var(--muted); }
+      .kv b { justify-self: end; color: #cbd4cb; font-weight: 500; }
+      .status { min-height: 50px; margin: 16px 0 0; padding: 10px; border-left: 2px solid #495149; background: #080a08; color: #798279; font-size: 9px; line-height: 1.55; overflow-wrap: anywhere; }
+      .status::before { content: "SYS  "; color: #a7afa7; }
+      .status.error { border-color: var(--red); color: #e88787; }
+
+      .profiler { background: #080a08; }
+      .metrics { display: grid; grid-template-columns: repeat(5, 1fr); border-bottom: 1px solid var(--line); }
+      .metric { min-width: 0; padding: 13px 12px; }
+      .metric + .metric { border-left: 1px solid var(--line); }
+      .metric span { display: block; overflow: hidden; color: #596259; font-size: 8px; letter-spacing: .12em; text-transform: uppercase; text-overflow: ellipsis; }
+      .metric b { display: block; margin-top: 7px; overflow: hidden; color: #d7dfd7; font-size: 14px; font-weight: 500; text-overflow: ellipsis; }
+      .metric b.accent { color: var(--green); }
+
+      .plan { border-bottom: 1px solid var(--line); }
+      .plan-row { min-height: 46px; display: grid; grid-template-columns: 28px 92px minmax(0,1fr) 72px; align-items: center; gap: 8px; padding: 0 14px; font-size: 10px; }
+      .plan-row + .plan-row { border-top: 1px solid #171c17; }
+      .plan-row::before { content: attr(data-step); color: #444c44; }
+      .phase-name { color: #a7afa7; }
+      .phase-detail { min-width: 0; overflow: hidden; color: #626b62; text-overflow: ellipsis; white-space: nowrap; }
+      .phase-status { justify-self: end; color: #4c554c; font-size: 9px; }
+      .plan-row[data-state="active"] { background: rgba(105,215,255,.035); }
+      .plan-row[data-state="active"]::before, .plan-row[data-state="active"] .phase-status { color: var(--cyan); }
+      .plan-row[data-state="active"] .phase-status::before { content: "RUNNING"; }
+      .plan-row[data-state="done"]::before, .plan-row[data-state="done"] .phase-status { color: var(--green); }
+      .plan-row[data-state="done"] .phase-status::before { content: "OK"; }
+      .plan-row[data-state="idle"] .phase-status::before { content: "WAIT"; }
+
+      .activity { min-height: 288px; }
+      .request-log { height: 250px; overflow: auto; scrollbar-color: #313831 #090b09; }
+      .request-row { min-height: 35px; display: grid; grid-template-columns: 48px minmax(150px,1fr) minmax(86px,140px) 62px; gap: 9px; align-items: center; padding: 6px 14px; border-bottom: 1px solid #151a15; font-size: 9px; animation: enter .14s steps(2,end) both; }
+      .request-row b { color: var(--green); font-weight: 500; }
+      .request-row .path, .request-row .range { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .request-row .path { color: #a6aea6; }
+      .request-row .range { color: var(--cyan); }
+      .request-row .time { justify-self: end; color: var(--amber); }
+      .request-empty { height: 250px; display: grid; place-items: center; color: #444c44; font-size: 10px; }
+
+      .results { border-top: 1px solid var(--line); background: var(--panel); }
+      .result-head { height: 42px; display: flex; align-items: center; justify-content: space-between; padding: 0 14px; border-bottom: 1px solid var(--line); color: #8e978e; font-size: 10px; }
+      .latency { color: var(--green); }
+      .table-wrap { min-height: 150px; overflow-x: auto; }
+      table { width: 100%; border-collapse: collapse; font-size: 10px; }
+      th, td { padding: 11px 14px; border-bottom: 1px solid #1a1f1a; text-align: left; white-space: nowrap; }
+      th { color: #596159; font-size: 8px; font-weight: 500; letter-spacing: .1em; text-transform: uppercase; }
+      td { color: #b8c1b8; }
+      td:last-child { color: var(--green); }
+      .empty { min-height: 150px; display: grid; place-items: center; color: #464e46; font-size: 10px; }
+      .footer { min-height: 46px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 0 14px calc(env(safe-area-inset-bottom)); border-top: 1px solid var(--line); color: #4e564e; font-size: 9px; }
+      .footer b { color: #778077; font-weight: 500; }
+
+      @keyframes pulse { 50% { opacity: .25; } }
+      @keyframes enter { from { opacity: 0; transform: translateX(-5px); } }
+      @media (max-width: 900px) {
+        main { border: 0; }
+        .workspace { grid-template-columns: 1fr; }
+        .controls { border-right: 0; border-bottom: 1px solid var(--line); }
+        .metrics { grid-template-columns: repeat(5, minmax(100px,1fr)); overflow-x: auto; }
+      }
+      @media (max-width: 620px) {
+        .topbar { grid-template-columns: 1fr auto; }
+        .topbar-center { display: none; }
+        .boot { padding: 24px 14px 20px; }
+        h1 { font-size: 27px; }
+        .routes { margin-top: 20px; }
+        .route { grid-template-columns: 58px minmax(0,1fr); gap: 8px; padding: 9px 6px; }
+        .route-state { grid-column: 2; justify-self: start; }
+        .form { padding: 15px 12px 18px; }
+        input { font-size: 16px; }
+        .plan-row { grid-template-columns: 22px 72px minmax(0,1fr) 48px; padding: 0 10px; }
+        .request-row { grid-template-columns: 44px minmax(0,1fr) 55px; padding: 7px 10px; }
+        .request-row .range { grid-column: 2 / 4; font-size: 8px; }
+        .request-row .time { grid-column: 3; grid-row: 1; }
+        .footer { align-items: flex-start; flex-direction: column; gap: 4px; padding: 12px 10px calc(12px + env(safe-area-inset-bottom)); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { animation: none !important; }
+        body::after { display: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <strong>PARQDB://CONSOLE</strong>
+      <span class="topbar-center">STATIC_HTTP_INDEX_PACKAGE_V1</span>
+      <span class="topbar-right"><span><i class="pulse"></i> CLIENT ONLINE</span><a class="repo-link" href="https://github.com/parqdb-io/parqdb" target="_blank" rel="noreferrer">GITHUB ↗</a></span>
+    </header>
+
+    <main>
+      <section class="boot">
+        <div class="prompt">parqdb inspect --transport=http-range --runtime=wasm</div>
+        <h1>QUERY THE INDEX. WATCH THE BYTES.</h1>
+        <p class="boot-copy">A live execution console for immutable Parquet indexes. <b>No simulated traffic.</b> Every line below is emitted by the browser while it routes, prunes and ranks the query locally.</p>
+        <div class="routes" aria-label="Architecture comparison">
+          <div class="route legacy"><span class="route-name">LEGACY</span><span class="route-path">browser ──RPC──&gt; API server ──&gt; vector database</span><span class="route-state">KILLED ×</span></div>
+          <div class="route direct"><span class="route-name">PARQDB</span><span class="route-path">browser ──GET bytes=n-m──&gt; parquet ──&gt; wasm top-k</span><span class="route-state">LIVE</span></div>
+        </div>
+      </section>
+
+      <section class="workspace" id="console">
+        <aside class="pane controls">
+          <div class="pane-head"><span>01 / query input</span><code>ctrl+enter to run</code></div>
+          <form class="form" id="query-form">
+            <div class="field"><label for="manifest">PACKAGE URI <span>immutable manifest</span></label><input id="manifest" value="./fixtures/lvq8/manifest.json" spellcheck="false" autocapitalize="off" /></div>
+            <div class="field"><label for="query">QUERY VECTOR <span>float32[]</span></label><input id="query" value="0, 0, 0" spellcheck="false" inputmode="decimal" /></div>
+            <div class="pair">
+              <div class="field"><label for="nprobe">NPROBE</label><input id="nprobe" type="number" min="1" value="1" /></div>
+              <div class="field"><label for="k">TOP_K</label><input id="k" type="number" min="1" value="2" /></div>
+            </div>
+            <div class="actions"><button class="run" id="search" type="submit">EXECUTE QUERY ↵</button><button id="lvq4" type="button">USE LVQ4</button></div>
+            <div class="package-info">
+              <div class="kv"><span>encoding</span><b id="encoding">—</b></div>
+              <div class="kv"><span>dimension</span><b id="dimension">—</b></div>
+              <div class="kv"><span>rows</span><b id="ntotal">—</b></div>
+              <div class="kv"><span>transport</span><b>HTTP RANGE</b></div>
+              <div class="kv"><span>compute</span><b>LOCAL WASM</b></div>
+            </div>
+            <p class="status" id="status">Ready. No package loaded.</p>
+          </form>
+        </aside>
+
+        <section class="pane profiler">
+          <div class="pane-head"><span>02 / query profiler</span><code id="trace-state">AWAITING EXECUTION</code></div>
+          <div class="metrics">
+            <div class="metric"><span>requests</span><b id="request-count">0</b></div>
+            <div class="metric"><span>transferred</span><b id="byte-total">0 B</b></div>
+            <div class="metric"><span>selected cids</span><b id="cid-count">—</b></div>
+            <div class="metric"><span>candidates</span><b id="candidate-count">—</b></div>
+            <div class="metric"><span>query time</span><b class="accent" id="query-time">—</b></div>
+          </div>
+          <div class="plan" aria-label="Query execution plan">
+            <div class="plan-row" id="phase-manifest" data-step="00" data-state="idle"><span class="phase-name">DISCOVER</span><span class="phase-detail">manifest.json</span><span class="phase-status"></span></div>
+            <div class="plan-row" id="phase-routing" data-step="01" data-state="idle"><span class="phase-name">ROUTE</span><span class="phase-detail">global centroid top-nprobe</span><span class="phase-status"></span></div>
+            <div class="plan-row" id="phase-ranges" data-step="02" data-state="idle"><span class="phase-name">PRUNE</span><span class="phase-detail">footer → selected row groups</span><span class="phase-status"></span></div>
+            <div class="plan-row" id="phase-wasm" data-step="03" data-state="idle"><span class="phase-name">RANK</span><span class="phase-detail">LVQ distance + bounded top-k</span><span class="phase-status"></span></div>
+          </div>
+          <div class="activity">
+            <div class="pane-head"><span>03 / HTTP trace</span><code>METHOD · OBJECT · BYTE RANGE · RTT</code></div>
+            <div class="request-log" id="request-log"><div class="request-empty">$ waiting for range requests<span class="cursor">_</span></div></div>
+          </div>
+        </section>
+      </section>
+
+      <section class="results">
+        <div class="result-head"><span>04 / RESULT SET · SOURCE KEYS + _DISTANCE</span><span class="latency" id="latency"></span></div>
+        <div class="table-wrap" id="output"><div class="empty">$ no rows materialized</div></div>
+      </section>
+      <footer class="footer"><span><b>NO LIST</b> · NO API · NO REMOTE COMPUTE</span><span><a class="repo-link" href="https://github.com/parqdb-io/parqdb" target="_blank" rel="noreferrer">SOURCE ON GITHUB ↗</a> · HTTP RANGE / PARQUET / WEBASSEMBLY</span></footer>
+    </main>
+
+    <script type="module">
+      import { ParqDB } from '../src/index.ts'
+
+      const byId = id => document.getElementById(id)
+      const manifestInput = byId('manifest')
+      const searchButton = byId('search')
+      const status = byId('status')
+      const phases = { manifest: byId('phase-manifest'), routing: byId('phase-routing'), ranges: byId('phase-ranges'), wasm: byId('phase-wasm') }
+      let wasm
+      let openedIndex
+      let openedUrl = ''
+      let requests = []
+      let transferred = 0
+
+      byId('query-form').addEventListener('submit', event => { event.preventDefault(); run() })
+      document.addEventListener('keydown', event => {
+        if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); run() }
+      })
+      byId('lvq4').addEventListener('click', () => {
+        manifestInput.value = './fixtures/lvq4/manifest.json'
+        openedIndex = undefined
+        openedUrl = ''
+        run()
+      })
+
+      async function tracedFetch(input, init) {
+        const request = new Request(input, init)
+        const url = new URL(request.url)
+        const range = request.headers.get('range')
+        const method = range ? 'RANGE' : 'GET'
+        const started = performance.now()
+        if (url.pathname.endsWith('/manifest.json') && !url.pathname.includes('/ivf_postings/')) setPhase('manifest', 'active', 'GET manifest.json')
+        const response = await fetch(request)
+        const elapsed = performance.now() - started
+        const bytes = Number(response.headers.get('content-length') ?? 0)
+        transferred += Number.isFinite(bytes) ? bytes : 0
+        requests.unshift({ method, path: compactPath(url.pathname), range: range?.replace('bytes=', '') ?? 'complete', elapsed, status: response.status })
+        requests = requests.slice(0, 24)
+        renderRequests()
+        if (url.pathname.endsWith('/manifest.json') && !url.pathname.includes('/ivf_postings/')) setPhase('manifest', 'done', `${response.status} · ${bytes} B`)
+        return response
+      }
+
+      function onTrace(event) {
+        if (event.phase === 'routing') {
+          setPhase('routing', event.status === 'start' ? 'active' : 'done', event.status === 'complete' ? `${event.selectedCids} CIDs selected` : 'loading leaf centroids')
+          if (event.selectedCids !== undefined) byId('cid-count').textContent = event.selectedCids.toLocaleString()
+        } else if (event.phase === 'planning') {
+          setPhase('ranges', event.status === 'start' ? 'active' : 'done', event.status === 'complete' ? `${event.files} files / ${event.candidateRows} rows` : `${event.files} candidate files`)
+          if (event.candidateRows !== undefined) byId('candidate-count').textContent = event.candidateRows.toLocaleString()
+        } else {
+          setPhase('wasm', event.status === 'start' ? 'active' : 'done', event.status === 'complete' ? `${event.candidateRows} vectors ranked` : 'executing distance kernel')
+        }
+      }
+
+      async function run() {
+        searchButton.disabled = true
+        byId('trace-state').textContent = 'EXECUTING'
+        status.className = 'status'
+        status.textContent = 'Opening immutable package…'
+        byId('latency').textContent = ''
+        byId('query-time').textContent = '—'
+        byId('cid-count').textContent = '—'
+        byId('candidate-count').textContent = '—'
+        requests = []
+        transferred = 0
+        renderRequests()
+        Object.keys(phases).forEach(name => setPhase(name, 'idle', defaultPhaseText(name)))
+        try {
+          const manifestUrl = new URL(manifestInput.value, location.href)
+          let openMs
+          if (openedIndex === undefined || openedUrl !== manifestUrl.href) {
+            const openStarted = performance.now()
+            wasm ??= await fetch(new URL('./parqdb_browser_kernels.wasm', location.href)).then(response => response.arrayBuffer())
+            openedIndex = await ParqDB.open(manifestUrl, { wasm, allowHttp: true, fetch: tracedFetch })
+            openedUrl = manifestUrl.href
+            openMs = performance.now() - openStarted
+          } else {
+            setPhase('manifest', 'done', 'metadata cache hit')
+          }
+          const vector = byId('query').value.split(',').map(value => Number(value.trim()))
+          const queryStarted = performance.now()
+          const hits = await openedIndex.search(vector, { nprobe: Number(byId('nprobe').value), k: Number(byId('k').value), trace: onTrace })
+          const queryMs = performance.now() - queryStarted
+          renderFacts(openedIndex.manifest)
+          renderRows(hits)
+          byId('query-time').textContent = `${queryMs.toFixed(1)} ms`
+          byId('latency').textContent = openMs === undefined ? `${queryMs.toFixed(1)} ms / CACHE HIT` : `${openMs.toFixed(1)} ms OPEN / ${queryMs.toFixed(1)} ms QUERY`
+          byId('trace-state').textContent = 'COMPLETE'
+          status.textContent = `${openedIndex.manifest.packageUuid} · no object listing · no remote compute`
+        } catch (error) {
+          status.className = 'status error'
+          status.textContent = error instanceof Error ? error.message : String(error)
+          byId('trace-state').textContent = 'FAULT'
+          byId('output').innerHTML = '<div class="empty">$ query failed — inspect SYS output</div>'
+        } finally {
+          searchButton.disabled = false
+        }
+      }
+
+      function setPhase(name, state, detail) { phases[name].dataset.state = state; phases[name].querySelector('.phase-detail').textContent = detail }
+      function defaultPhaseText(name) { return ({ manifest: 'manifest.json', routing: 'global centroid top-nprobe', ranges: 'footer → selected row groups', wasm: 'LVQ distance + bounded top-k' })[name] }
+      function compactPath(path) { return path.replace('/fixtures/lvq8/', '').replace('/fixtures/lvq4/', '') }
+      function renderRequests() {
+        byId('request-count').textContent = requests.length.toLocaleString()
+        byId('byte-total').textContent = formatBytes(transferred)
+        byId('request-log').innerHTML = requests.length ? requests.map(request => `<div class="request-row"><b>${request.method}</b><span class="path">${request.status} ${escape(request.path)}</span><span class="range">${escape(request.range)}</span><span class="time">${request.elapsed.toFixed(1)}ms</span></div>`).join('') : '<div class="request-empty">$ waiting for range requests_</div>'
+      }
+      function renderFacts(manifest) { byId('encoding').textContent = manifest.index.postingEncoding.toUpperCase(); byId('dimension').textContent = manifest.index.dimension.toLocaleString(); byId('ntotal').textContent = manifest.index.ntotal.toLocaleString() }
+      function renderRows(rows) {
+        if (!rows.length) { byId('output').innerHTML = '<div class="empty">$ query returned 0 rows</div>'; return }
+        const columns = Object.keys(rows[0])
+        byId('output').innerHTML = `<table><thead><tr>${columns.map(column => `<th>${escape(column)}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${columns.map(column => `<td>${escape(format(row[column]))}</td>`).join('')}</tr>`).join('')}</tbody></table>`
+      }
+      function format(value) { if (typeof value === 'number') return Number.isInteger(value) ? String(value) : value.toFixed(6); if (typeof value === 'bigint') return value.toString(); if (value instanceof Uint8Array) return [...value].map(byte => byte.toString(16).padStart(2,'0')).join(''); return String(value) }
+      function formatBytes(bytes) { if (bytes < 1024) return `${bytes} B`; if (bytes < 1048576) return `${(bytes/1024).toFixed(1)} KiB`; return `${(bytes/1048576).toFixed(1)} MiB` }
+      function escape(value) { return value.replace(/[&<>"']/g, character => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[character]) }
+
+      run()
+    </script>
+  </body>
+</html>

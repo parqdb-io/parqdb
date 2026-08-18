@@ -243,6 +243,7 @@ impl DistanceKernel {
             rows,
             "nearest-reference distances do not match the input row count"
         );
+        #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
         let reference_rows = references.len() / dimension;
         match self.backend {
             #[cfg(not(target_arch = "aarch64"))]

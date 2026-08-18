@@ -23,6 +23,8 @@ pub struct IvfPostingsFile {
     pub rows: u64,
     /// Complete object size in bytes.
     pub size: u64,
+    /// Lowercase SHA-256 digest of the complete object.
+    pub sha256: String,
 }
 
 /// Version 1 manifest for one immutable IVF postings relation.
@@ -107,6 +109,14 @@ impl IvfPostingsManifest {
             if file.rows == 0 || file.size == 0 {
                 return invalid("IVF postings file rows and size must be positive");
             }
+            if file.sha256.len() != 64
+                || file
+                    .sha256
+                    .bytes()
+                    .any(|byte| !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte))
+            {
+                return invalid("IVF postings sha256 must be 64 lowercase hexadecimal characters");
+            }
             total_rows = total_rows
                 .checked_add(file.rows)
                 .ok_or_else(|| crate::Error::new("IVF postings row count overflows"))?;
@@ -160,6 +170,7 @@ mod tests {
                     max_cid: 1,
                     rows: 6,
                     size: 100,
+                    sha256: "a".repeat(64),
                 },
                 IvfPostingsFile {
                     path: "cid_bucket=000001/part-00000.parquet".into(),
@@ -168,6 +179,7 @@ mod tests {
                     max_cid: 3,
                     rows: 4,
                     size: 80,
+                    sha256: "b".repeat(64),
                 },
             ],
         }
@@ -196,6 +208,7 @@ mod tests {
                 max_cid: 1,
                 rows: 2,
                 size: 50,
+                sha256: "c".repeat(64),
             },
         );
         manifest.files[0].rows -= 2;

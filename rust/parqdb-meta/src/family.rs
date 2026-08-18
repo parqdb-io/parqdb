@@ -10,7 +10,8 @@ use crate::{DistanceMetric, IndexSnapshot, IvfCentroidsReference, Result};
 pub const IVF_SCHEMA_VERSION: i32 = 1;
 
 /// Vector representation stored in IVF postings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PostingEncoding {
     /// Store only source keys and read vectors from the source relation.
     Source,

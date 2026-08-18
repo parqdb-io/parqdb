@@ -7,6 +7,16 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- LVQ4/LVQ8 builds now emit a strict, immutable top-level `manifest.json` and
+  package-local centroid objects, so one snapshot directory can be copied
+  directly to public HTTP storage without repacking.
+- The new `@parqdb/browser` client performs global leaf-centroid routing,
+  explicit postings row-group selection through HTTP Range requests, and
+  LVQ distance/top-k execution in WebAssembly, returning source keys plus
+  `_distance` without listing objects or joining the source table.
+
 ### Changed
 
 - IVF training now defaults to a persisted two-level hierarchy. Postings are

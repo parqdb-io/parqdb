@@ -1,0 +1,44 @@
+{
+  "name": "@parqdb/browser",
+  "version": "0.2.0-rc.1",
+  "description": "HTTP Range client for immutable ParqDB IVF-LVQ packages",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./parqdb_browser_kernels.wasm": "./dist/parqdb_browser_kernels.wasm"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build:wasm": "cargo build --manifest-path ../Cargo.toml -p parqdb-browser-kernels --target wasm32-unknown-unknown --release && node scripts/copy-wasm.mjs",
+    "build": "npm run build:wasm && tsc -p tsconfig.json",
+    "build:pages": "vite build",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "demo": "vite --host 0.0.0.0",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "hyparquet": "1.28.2",
+    "hyparquet-compressors": "1.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.3",
+    "typescript": "5.8.3",
+    "vitest": "3.1.2"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/parqdb-io/parqdb.git",
+    "directory": "browser"
+  }
+}
