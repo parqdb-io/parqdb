@@ -6,8 +6,8 @@ from typing import Self
 
 import pyarrow as pa
 import pytest
-from relify._native import _IpcEncoder
-from relify.transport.ipc import decode_ipc_stream, encode_ipc_stream
+from parqdb._native import _IpcEncoder
+from parqdb.transport.ipc import decode_ipc_stream, encode_ipc_stream
 
 
 class BatchSource:

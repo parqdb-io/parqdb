@@ -46,7 +46,7 @@ def test_storage_backed_prepare_and_query_smoke(tmp_path: Path) -> None:
         row_group_rows=32,
     )
 
-    for implementation in ("relify", "faiss"):
+    for implementation in ("parqdb", "faiss"):
         subprocess.run(
             [
                 sys.executable,
@@ -76,7 +76,7 @@ def test_storage_backed_prepare_and_query_smoke(tmp_path: Path) -> None:
     metadata = json.loads(
         (prepared / "storage-indexes.json").read_text(encoding="utf-8")
     )
-    assert set(metadata["indexes"]) == {"relify", "faiss"}
+    assert set(metadata["indexes"]) == {"parqdb", "faiss"}
     assert metadata["indexes"]["faiss"]["inverted_lists_type"] == (
         "OnDiskInvertedLists"
     )
@@ -86,7 +86,7 @@ def test_storage_backed_prepare_and_query_smoke(tmp_path: Path) -> None:
         for index in metadata["indexes"].values()
     )
 
-    for implementation in ("relify", "faiss"):
+    for implementation in ("parqdb", "faiss"):
         output = tmp_path / f"{implementation}.json"
         subprocess.run(
             [
@@ -175,7 +175,7 @@ def test_storage_backed_prepare_and_query_smoke(tmp_path: Path) -> None:
             capture_output=True,
             text=True,
         )
-    for implementation in ("relify", "faiss"):
+    for implementation in ("parqdb", "faiss"):
         output = tmp_path / f"reused-{implementation}.json"
         subprocess.run(
             [

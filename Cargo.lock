@@ -3771,7 +3771,7 @@ dependencies = [
 
 [[package]]
 name = "parallite"
-version = "0.1.0-rc.2"
+version = "0.2.0-rc.1"
 dependencies = [
  "rayon",
 ]
@@ -3803,6 +3803,158 @@ dependencies = [
  "redox_syscall 0.5.18",
  "smallvec",
  "windows-link",
+]
+
+[[package]]
+name = "parqdb-catalog"
+version = "0.2.0-rc.1"
+dependencies = [
+ "parqdb-meta",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "parqdb-core"
+version = "0.2.0-rc.1"
+dependencies = [
+ "parqdb-catalog",
+ "parqdb-meta",
+]
+
+[[package]]
+name = "parqdb-iceberg"
+version = "0.2.0-rc.1"
+dependencies = [
+ "datafusion",
+ "iceberg",
+ "iceberg-datafusion",
+ "iceberg-storage-opendal",
+ "parqdb-meta",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
+name = "parqdb-index"
+version = "0.2.0-rc.1"
+dependencies = [
+ "bytes",
+ "parqdb-catalog",
+ "parqdb-core",
+ "parqdb-meta",
+ "parqdb-storage",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "parqdb-kernels"
+version = "0.2.0-rc.1"
+dependencies = [
+ "matrixmultiply",
+ "thiserror",
+]
+
+[[package]]
+name = "parqdb-kmeans"
+version = "0.2.0-rc.1"
+dependencies = [
+ "num-traits",
+ "parallite",
+ "parqdb-kernels",
+ "thiserror",
+]
+
+[[package]]
+name = "parqdb-local"
+version = "0.2.0-rc.1"
+dependencies = [
+ "arrow",
+ "arrow-data",
+ "arrow-ipc",
+ "async-trait",
+ "base64",
+ "bytes",
+ "datafusion",
+ "datafusion-datasource-parquet",
+ "futures",
+ "hashlink 0.11.1",
+ "humantime",
+ "libc",
+ "object_store",
+ "parallite",
+ "parqdb-catalog",
+ "parqdb-core",
+ "parqdb-iceberg",
+ "parqdb-index",
+ "parqdb-kernels",
+ "parqdb-kmeans",
+ "parqdb-meta",
+ "parqdb-storage",
+ "parquet",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "parqdb-meta"
+version = "0.2.0-rc.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "parqdb-python"
+version = "0.2.0-rc.1"
+dependencies = [
+ "arrow",
+ "arrow-ipc",
+ "datafusion-python",
+ "futures",
+ "parqdb-catalog",
+ "parqdb-core",
+ "parqdb-index",
+ "parqdb-local",
+ "parqdb-meta",
+ "parqdb-storage",
+ "pyo3",
+ "pyo3-async-runtimes",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "uuid",
+]
+
+[[package]]
+name = "parqdb-storage"
+version = "0.2.0-rc.1"
+dependencies = [
+ "bytes",
+ "futures",
+ "hdfs-native-object-store",
+ "object_store",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "url",
 ]
 
 [[package]]
@@ -4494,158 +4646,6 @@ checksum = "2057b2325e68a893284d1538021ab90279adac1139957ca2a74426c6f118fb48"
 dependencies = [
  "hashbrown 0.16.1",
  "memchr",
-]
-
-[[package]]
-name = "relify-catalog"
-version = "0.1.0-rc.2"
-dependencies = [
- "relify-meta",
- "rusqlite",
- "serde_json",
- "tempfile",
- "thiserror",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "relify-core"
-version = "0.1.0-rc.2"
-dependencies = [
- "relify-catalog",
- "relify-meta",
-]
-
-[[package]]
-name = "relify-iceberg"
-version = "0.1.0-rc.2"
-dependencies = [
- "datafusion",
- "iceberg",
- "iceberg-datafusion",
- "iceberg-storage-opendal",
- "relify-meta",
- "thiserror",
- "uuid",
-]
-
-[[package]]
-name = "relify-index"
-version = "0.1.0-rc.2"
-dependencies = [
- "bytes",
- "relify-catalog",
- "relify-core",
- "relify-meta",
- "relify-storage",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "relify-kernels"
-version = "0.1.0-rc.2"
-dependencies = [
- "matrixmultiply",
- "thiserror",
-]
-
-[[package]]
-name = "relify-kmeans"
-version = "0.1.0-rc.2"
-dependencies = [
- "num-traits",
- "parallite",
- "relify-kernels",
- "thiserror",
-]
-
-[[package]]
-name = "relify-local"
-version = "0.1.0-rc.2"
-dependencies = [
- "arrow",
- "arrow-data",
- "arrow-ipc",
- "async-trait",
- "base64",
- "bytes",
- "datafusion",
- "datafusion-datasource-parquet",
- "futures",
- "hashlink 0.11.1",
- "humantime",
- "libc",
- "object_store",
- "parallite",
- "parquet",
- "relify-catalog",
- "relify-core",
- "relify-iceberg",
- "relify-index",
- "relify-kernels",
- "relify-kmeans",
- "relify-meta",
- "relify-storage",
- "rusqlite",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
- "tokio-util",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "relify-meta"
-version = "0.1.0-rc.2"
-dependencies = [
- "serde",
- "serde_json",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "relify-python"
-version = "0.1.0-rc.2"
-dependencies = [
- "arrow",
- "arrow-ipc",
- "datafusion-python",
- "futures",
- "pyo3",
- "pyo3-async-runtimes",
- "relify-catalog",
- "relify-core",
- "relify-index",
- "relify-local",
- "relify-meta",
- "relify-storage",
- "serde_json",
- "tokio",
- "tokio-util",
- "uuid",
-]
-
-[[package]]
-name = "relify-storage"
-version = "0.1.0-rc.2"
-dependencies = [
- "bytes",
- "futures",
- "hdfs-native-object-store",
- "object_store",
- "tempfile",
- "thiserror",
- "tokio",
- "url",
 ]
 
 [[package]]

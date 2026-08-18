@@ -105,9 +105,9 @@ package: sbom
 		uv run --no-sync maturin build --release --locked --compatibility pypi --out dist
 
 verify-package: package
-	@wheel_count="$$(find dist -maxdepth 1 -name 'relify-*.whl' | wc -l)"; \
+	@wheel_count="$$(find dist -maxdepth 1 -name 'parqdb-*.whl' | wc -l)"; \
 	test "$$wheel_count" -eq 1; \
-	wheel="$$(find dist -maxdepth 1 -name 'relify-*.whl' -print)"; \
+	wheel="$$(find dist -maxdepth 1 -name 'parqdb-*.whl' -print)"; \
 	$(UV_RUN) python tools/verify_release.py "$$wheel"
 
 check: lint test

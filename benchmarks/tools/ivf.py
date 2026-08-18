@@ -51,26 +51,26 @@ from benchmarks.tools.resources import (
     effective_cpu_count,
 )
 from benchmarks.tools.search_adapters import (
-    configure_relify_session,
+    configure_parqdb_session,
     faiss_search,
-    relify_search,
+    parqdb_search,
 )
 
 if TYPE_CHECKING:
-    import relify
+    import parqdb
 
-UNTIMED_RELIFY_BUILD_PHASES = {
+UNTIMED_PARQDB_BUILD_PHASES = {
     None,
     "pending",
     "scanning_source",
     "reading_training_vectors",
 }
 TRAINING_SAMPLING = {
-    "relify": "streaming-reservoir-v2",
+    "parqdb": "streaming-reservoir-v2",
     "faiss": "uniform-without-replacement-v1",
 }
-RELIFY_POSTINGS_LAYOUT = "hive-cid-file-v1"
-RELIFY_ENCODINGS = ("lvq8", "lvq4", "source")
+PARQDB_POSTINGS_LAYOUT = "hive-cid-file-v1"
+PARQDB_ENCODINGS = ("lvq8", "lvq4", "source")
 FAISS_ENCODINGS = ("sq8", "sq4", "flat")
 
 
@@ -131,11 +131,11 @@ def artifact_signature(
         "training_sampling": TRAINING_SAMPLING[implementation],
         "build_timing": "training-to-persistence-v1",
     }
-    supported = RELIFY_ENCODINGS if implementation == "relify" else FAISS_ENCODINGS
+    supported = PARQDB_ENCODINGS if implementation == "parqdb" else FAISS_ENCODINGS
     if encoding not in supported:
         raise ValueError(f"{implementation} artifact requires a supported encoding")
-    if implementation == "relify":
-        signature["postings_layout"] = RELIFY_POSTINGS_LAYOUT
+    if implementation == "parqdb":
+        signature["postings_layout"] = PARQDB_POSTINGS_LAYOUT
     signature["encoding"] = encoding
     return signature
 
@@ -201,8 +201,8 @@ def write_artifact(
     temporary_path.replace(manifest_path)
 
 
-def create_relify_index_with_progress(
-    table: relify.SourceTable,
+def create_parqdb_index_with_progress(
+    table: parqdb.SourceTable,
     *,
     id_column: str,
     vector_column: str,
@@ -211,9 +211,9 @@ def create_relify_index_with_progress(
     threads: int,
     show_progress: bool,
 ) -> BuildMeasurement:
-    import relify
+    import parqdb
 
-    bar = BuildProgressBar("Relify", enabled=show_progress)
+    bar = BuildProgressBar("ParqDB", enabled=show_progress)
     preparation_started = time.perf_counter()
     build_started: float | None = None
     build_resources: ResourceMonitor | None = None
@@ -221,7 +221,7 @@ def create_relify_index_with_progress(
         "benchmark_embedding",
         column=vector_column,
         key=[id_column],
-        config=relify.IVF(nlist=nlist, encoding=encoding),
+        config=parqdb.IVF(nlist=nlist, encoding=encoding),
     )
     deadline = time.monotonic() + timedelta(hours=24).total_seconds()
     try:
@@ -229,7 +229,7 @@ def create_relify_index_with_progress(
             status = table.index_status("benchmark_embedding")
             if (
                 build_started is None
-                and status.phase not in UNTIMED_RELIFY_BUILD_PHASES
+                and status.phase not in UNTIMED_PARQDB_BUILD_PHASES
             ):
                 build_started = time.perf_counter()
                 build_resources = ResourceMonitor()
@@ -253,9 +253,9 @@ def create_relify_index_with_progress(
                     "benchmark_embedding",
                     timeout=timedelta(seconds=1),
                 )
-                raise RuntimeError(status.error or "Relify index build failed")
+                raise RuntimeError(status.error or "ParqDB index build failed")
             if time.monotonic() >= deadline:
-                raise TimeoutError("timed out waiting for Relify index build")
+                raise TimeoutError("timed out waiting for ParqDB index build")
             time.sleep(0.01)
     except BaseException:
         if build_resources is not None and build_resources.metrics is None:
@@ -311,7 +311,7 @@ def add_source_vectors(
         raise ValueError("source row count changed while populating the Faiss index")
 
 
-def benchmark_relify(
+def benchmark_parqdb(
     source: ParquetSource,
     queries: np.ndarray | None,
     expected: np.ndarray | None,
@@ -335,19 +335,19 @@ def benchmark_relify(
     max_temp_directory_size_bytes: int | None,
     index_io: str,
 ) -> dict[str, Any]:
-    import relify
+    import parqdb
 
     signature = artifact_signature(
-        "relify",
+        "parqdb",
         source,
         rows=rows,
         dimension=dimension,
         nlist=nlist,
-        version=importlib.metadata.version("relify"),
+        version=importlib.metadata.version("parqdb"),
         encoding=encoding,
     )
     with artifact_directory(
-        "relify",
+        "parqdb",
         index_root=index_root,
         work_root=work_root,
         rebuild=rebuild,
@@ -357,25 +357,25 @@ def benchmark_relify(
         if result is None:
             if not build_missing:
                 raise RuntimeError(
-                    f"Relify benchmark artifact is missing at {root}; "
+                    f"ParqDB benchmark artifact is missing at {root}; "
                     "run python -m benchmarks.build first"
                 )
             build_config = (
-                relify.SessionConfig()
-                .set("relify.parquet.page_cache.capacity", "0")
-                .set("relify.build.dop", str(threads))
+                parqdb.SessionConfig()
+                .set("parqdb.parquet.page_cache.capacity", "0")
+                .set("parqdb.build.dop", str(threads))
             )
-            session = relify.connect(root / "relify-data", config=build_config)
-            configure_relify_session(
+            session = parqdb.connect(root / "parqdb-data", config=build_config)
+            configure_parqdb_session(
                 session,
                 threads,
                 max_temp_directory_size_bytes=max_temp_directory_size_bytes,
             )
             session.register_parquet("benchmark", source.path)
             table = session.table("benchmark")
-            assert isinstance(table, relify.SourceTable)
+            assert isinstance(table, parqdb.SourceTable)
 
-            measurement = create_relify_index_with_progress(
+            measurement = create_parqdb_index_with_progress(
                 table,
                 id_column=source.id_column,
                 vector_column=source.vector_column,
@@ -386,14 +386,14 @@ def benchmark_relify(
             )
 
             result = {
-                "implementation": "relify",
+                "implementation": "parqdb",
                 "workload": (
                     "IVF training, assignment, Parquet persistence, and catalog "
                     "publication; preparation excluded"
                 ),
                 "training_rows": min(rows, nlist * 256),
-                "training_sampling": TRAINING_SAMPLING["relify"],
-                "postings_layout": RELIFY_POSTINGS_LAYOUT,
+                "training_sampling": TRAINING_SAMPLING["parqdb"],
+                "postings_layout": PARQDB_POSTINGS_LAYOUT,
                 "encoding": encoding,
                 "kmeans_max_iterations": KMEANS_MAX_ITERATIONS,
                 "kmeans_seed": KMEANS_SEED,
@@ -410,20 +410,20 @@ def benchmark_relify(
         if measure_search:
             if queries is None or expected is None:
                 raise ValueError("queries and ground truth are required for search")
-            query_config = relify.SessionConfig()
-            query_config.set("relify.parquet.index_io", index_io)
+            query_config = parqdb.SessionConfig()
+            query_config.set("parqdb.parquet.index_io", index_io)
             if page_cache_capacity_bytes is not None:
                 query_config.set(
-                    "relify.parquet.page_cache.capacity",
+                    "parqdb.parquet.page_cache.capacity",
                     str(page_cache_capacity_bytes),
                 )
-            query_session = relify.connect(root / "relify-data", config=query_config)
-            configure_relify_session(query_session, threads)
+            query_session = parqdb.connect(root / "parqdb-data", config=query_config)
+            configure_parqdb_session(query_session, threads)
             query_table = query_session.table("benchmark")
-            assert isinstance(query_table, relify.SourceTable)
+            assert isinstance(query_table, parqdb.SourceTable)
             result["cache_kind"] = "bounded decompressed Parquet page cache"
             result["search_curve"] = measure_search_curve(
-                relify_search(
+                parqdb_search(
                     query_session,
                     query_table,
                     id_column=source.id_column,
@@ -435,7 +435,7 @@ def benchmark_relify(
                 nprobe_values=nprobe_values,
                 repetitions=search_repetitions,
                 warmup_queries=warmup_queries,
-                progress=CounterProgressBar("Relify query", enabled=show_progress),
+                progress=CounterProgressBar("ParqDB query", enabled=show_progress),
             )
             result["page_cache"] = asdict(query_session.parquet_page_cache_stats())
         return result
@@ -848,7 +848,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
         expected = None
         query_source_ids = None
         source_context = tempfile.TemporaryDirectory(
-            prefix="relify-source-benchmark-",
+            prefix="parqdb-source-benchmark-",
             dir=work_root,
         )
         source_bytes = 0
@@ -878,9 +878,9 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
         else:
             assert isinstance(source_value, ParquetSource)
             source = source_value
-        if args.implementation == "relify":
-            relify_trials = [
-                benchmark_relify(
+        if args.implementation == "parqdb":
+            parqdb_trials = [
+                benchmark_parqdb(
                     source,
                     queries,
                     expected,
@@ -907,12 +907,12 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
             ]
             if args.operation == "build":
                 implementation_result = aggregate_build_trials(
-                    relify_trials,
+                    parqdb_trials,
                     points=rows,
                 )
             else:
                 implementation_result = summarize_query(
-                    relify_trials[0],
+                    parqdb_trials[0],
                     headline_nprobe=args.nprobe,
                     headline_k=args.k,
                 )
@@ -957,7 +957,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
 
         implementation_version = implementation_result.get("version")
         if implementation_version is None:
-            implementation_version = importlib.metadata.version("relify")
+            implementation_version = importlib.metadata.version("parqdb")
         result: dict[str, Any] = {
             "schema_version": 1,
             "generated_at_utc": datetime.now(UTC).isoformat(),
@@ -1050,7 +1050,7 @@ def add_common_arguments(
     command.add_argument("--dataset-revision")
     command.add_argument("--dataset-split")
     command.add_argument("--nlist", type=int, default=256)
-    encodings = RELIFY_ENCODINGS if implementation == "relify" else FAISS_ENCODINGS
+    encodings = PARQDB_ENCODINGS if implementation == "parqdb" else FAISS_ENCODINGS
     command.add_argument(
         "--encoding",
         choices=encodings,
@@ -1063,10 +1063,10 @@ def add_common_arguments(
     command.add_argument("--no-progress", action="store_true")
 
 
-def build_parser(implementation: str = "relify") -> argparse.ArgumentParser:
+def build_parser(implementation: str = "parqdb") -> argparse.ArgumentParser:
     program = (
         "python -m benchmarks.build"
-        if implementation == "relify"
+        if implementation == "parqdb"
         else "python -m benchmarks.tools.faiss build"
     )
     command = argparse.ArgumentParser(
@@ -1081,7 +1081,7 @@ def build_parser(implementation: str = "relify") -> argparse.ArgumentParser:
     command.add_argument("--seed", type=int, default=KMEANS_SEED)
     command.add_argument("--repetitions", type=int, default=1)
     command.add_argument("--rebuild", action="store_true")
-    if implementation == "relify":
+    if implementation == "parqdb":
         command.add_argument("--max-temp-directory-size-bytes", type=int)
     else:
         command.set_defaults(max_temp_directory_size_bytes=None)
@@ -1106,10 +1106,10 @@ def build_parser(implementation: str = "relify") -> argparse.ArgumentParser:
     return command
 
 
-def query_parser(implementation: str = "relify") -> argparse.ArgumentParser:
+def query_parser(implementation: str = "parqdb") -> argparse.ArgumentParser:
     program = (
         "python -m benchmarks.query"
-        if implementation == "relify"
+        if implementation == "parqdb"
         else "python -m benchmarks.tools.faiss query"
     )
     command = argparse.ArgumentParser(
@@ -1131,7 +1131,7 @@ def query_parser(implementation: str = "relify") -> argparse.ArgumentParser:
     command.add_argument("--curve-k-values", default="100,1000,10000")
     command.add_argument("--search-repetitions", type=int, default=3)
     command.add_argument("--warmup-queries", type=int, default=5)
-    if implementation == "relify":
+    if implementation == "parqdb":
         command.add_argument("--page-cache-capacity-bytes", type=int)
         command.add_argument(
             "--index-io",
@@ -1157,7 +1157,7 @@ def query_parser(implementation: str = "relify") -> argparse.ArgumentParser:
 
 def main(
     operation: str,
-    implementation: str = "relify",
+    implementation: str = "parqdb",
     argv: list[str] | None = None,
 ) -> None:
     if operation == "build":

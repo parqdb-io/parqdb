@@ -1,12 +1,12 @@
 # Core Concepts
 
-Relify keeps vector indexes as table data and executes search inside a SQL
+ParqDB keeps vector indexes as table data and executes search inside a SQL
 runtime. The persisted index, catalog state, and execution runtime have separate
 responsibilities.
 
 ## Source Table
 
-A source table contains the original vectors and payload columns. Relify does
+A source table contains the original vectors and payload columns. ParqDB does
 not copy those rows into a private database. Each indexed source declares one
 or more key columns that join index candidates back to source rows.
 
@@ -42,7 +42,7 @@ not replace registered Parquet files in place while an index depends on them.
 
 ## Session and Execution
 
-`relify.connect` returns a portable session facade. The embedded transport calls
+`parqdb.connect` returns a portable session facade. The embedded transport calls
 the session service directly; the service owns a private DataFusion host and a
 native Rust `LocalSession`. Public `Session` and `SourceTable` objects do not
 inherit DataFusion classes.
@@ -60,5 +60,5 @@ An indexed query has four logical stages:
 3. apply source filters and compute distance; and
 4. order by distance and retain the requested limit.
 
-Relify may fuse or prune these stages physically without changing the index
+ParqDB may fuse or prune these stages physically without changing the index
 format or result semantics.

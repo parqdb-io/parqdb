@@ -827,6 +827,98 @@ wheels = [
 ]
 
 [[package]]
+name = "parqdb"
+version = "0.2.0rc1"
+source = { editable = "." }
+dependencies = [
+    { name = "cloudpickle" },
+    { name = "httpx" },
+    { name = "pyarrow" },
+    { name = "starlette" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "uvicorn" },
+]
+
+[package.optional-dependencies]
+iceberg = [
+    { name = "pyiceberg" },
+]
+
+[package.dev-dependencies]
+benchmark = [
+    { name = "h5py" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://mirrors.huaweicloud.com/repository/pypi/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://mirrors.huaweicloud.com/repository/pypi/simple" }, marker = "python_full_version >= '3.12'" },
+]
+benchmark-faiss = [
+    { name = "faiss-cpu" },
+    { name = "h5py" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://mirrors.huaweicloud.com/repository/pypi/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://mirrors.huaweicloud.com/repository/pypi/simple" }, marker = "python_full_version >= '3.12'" },
+]
+dev = [
+    { name = "duckdb" },
+    { name = "h5py" },
+    { name = "markdown-it-py" },
+    { name = "maturin" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://mirrors.huaweicloud.com/repository/pypi/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://mirrors.huaweicloud.com/repository/pypi/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "pip-audit" },
+    { name = "pyiceberg", extra = ["sql-sqlite"] },
+    { name = "pyright", extra = ["nodejs"] },
+    { name = "pytest" },
+    { name = "ruff" },
+]
+wheel-test = [
+    { name = "duckdb" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://mirrors.huaweicloud.com/repository/pypi/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://mirrors.huaweicloud.com/repository/pypi/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "pyiceberg", extra = ["sql-sqlite"] },
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cloudpickle", specifier = ">=2.0" },
+    { name = "httpx", specifier = ">=0.28,<1" },
+    { name = "pyarrow", specifier = ">=18" },
+    { name = "pyiceberg", marker = "extra == 'iceberg'", specifier = ">=0.10,<1" },
+    { name = "starlette", specifier = ">=1.3.1,<2" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "uvicorn", specifier = ">=0.35,<1" },
+]
+provides-extras = ["iceberg"]
+
+[package.metadata.requires-dev]
+benchmark = [
+    { name = "h5py", specifier = ">=3.12,<4" },
+    { name = "numpy", specifier = ">=1.26,<3" },
+]
+benchmark-faiss = [
+    { name = "faiss-cpu", specifier = ">=1.14,<1.15" },
+    { name = "h5py", specifier = ">=3.12,<4" },
+    { name = "numpy", specifier = ">=1.26,<3" },
+]
+dev = [
+    { name = "duckdb", specifier = ">=1.5,<1.6" },
+    { name = "h5py", specifier = ">=3.12,<4" },
+    { name = "markdown-it-py", specifier = ">=4,<5" },
+    { name = "maturin", specifier = ">=1.9,<2" },
+    { name = "numpy", specifier = ">=1.26,<3" },
+    { name = "pip-audit", specifier = ">=2.10,<3" },
+    { name = "pyiceberg", extras = ["sql-sqlite"], specifier = ">=0.10,<1" },
+    { name = "pyright", extras = ["nodejs"], specifier = ">=1.1.400,<2" },
+    { name = "pytest", specifier = ">=8.3" },
+    { name = "ruff", specifier = ">=0.12,<1" },
+]
+wheel-test = [
+    { name = "duckdb", specifier = ">=1.5,<1.6" },
+    { name = "numpy", specifier = ">=1.26,<3" },
+    { name = "pyiceberg", extras = ["sql-sqlite"], specifier = ">=0.10,<1" },
+    { name = "pytest", specifier = ">=8.3" },
+]
+
+[[package]]
 name = "pip"
 version = "26.1.2"
 source = { registry = "https://mirrors.huaweicloud.com/repository/pypi/simple" }
@@ -1249,98 +1341,6 @@ dependencies = [
 sdist = { url = "https://mirrors.huaweicloud.com/repository/pypi/packages/66/c0/0c8b6ad9f17a802ee498c46e004a0eb49bc148f2fd230864601a86dcf6db/python-dateutil-2.9.0.post0.tar.gz", hash = "sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3" }
 wheels = [
     { url = "https://mirrors.huaweicloud.com/repository/pypi/packages/ec/57/56b9bcc3c9c6a792fcbaf139543cee77261f3651ca9da0c93f5c1221264b/python_dateutil-2.9.0.post0-py2.py3-none-any.whl", hash = "sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427" },
-]
-
-[[package]]
-name = "relify"
-version = "0.1.0rc2"
-source = { editable = "." }
-dependencies = [
-    { name = "cloudpickle" },
-    { name = "httpx" },
-    { name = "pyarrow" },
-    { name = "starlette" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
-    { name = "uvicorn" },
-]
-
-[package.optional-dependencies]
-iceberg = [
-    { name = "pyiceberg" },
-]
-
-[package.dev-dependencies]
-benchmark = [
-    { name = "h5py" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://mirrors.huaweicloud.com/repository/pypi/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "numpy", version = "2.5.1", source = { registry = "https://mirrors.huaweicloud.com/repository/pypi/simple" }, marker = "python_full_version >= '3.12'" },
-]
-benchmark-faiss = [
-    { name = "faiss-cpu" },
-    { name = "h5py" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://mirrors.huaweicloud.com/repository/pypi/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "numpy", version = "2.5.1", source = { registry = "https://mirrors.huaweicloud.com/repository/pypi/simple" }, marker = "python_full_version >= '3.12'" },
-]
-dev = [
-    { name = "duckdb" },
-    { name = "h5py" },
-    { name = "markdown-it-py" },
-    { name = "maturin" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://mirrors.huaweicloud.com/repository/pypi/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "numpy", version = "2.5.1", source = { registry = "https://mirrors.huaweicloud.com/repository/pypi/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "pip-audit" },
-    { name = "pyiceberg", extra = ["sql-sqlite"] },
-    { name = "pyright", extra = ["nodejs"] },
-    { name = "pytest" },
-    { name = "ruff" },
-]
-wheel-test = [
-    { name = "duckdb" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://mirrors.huaweicloud.com/repository/pypi/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "numpy", version = "2.5.1", source = { registry = "https://mirrors.huaweicloud.com/repository/pypi/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "pyiceberg", extra = ["sql-sqlite"] },
-    { name = "pytest" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "cloudpickle", specifier = ">=2.0" },
-    { name = "httpx", specifier = ">=0.28,<1" },
-    { name = "pyarrow", specifier = ">=18" },
-    { name = "pyiceberg", marker = "extra == 'iceberg'", specifier = ">=0.10,<1" },
-    { name = "starlette", specifier = ">=1.3.1,<2" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
-    { name = "uvicorn", specifier = ">=0.35,<1" },
-]
-provides-extras = ["iceberg"]
-
-[package.metadata.requires-dev]
-benchmark = [
-    { name = "h5py", specifier = ">=3.12,<4" },
-    { name = "numpy", specifier = ">=1.26,<3" },
-]
-benchmark-faiss = [
-    { name = "faiss-cpu", specifier = ">=1.14,<1.15" },
-    { name = "h5py", specifier = ">=3.12,<4" },
-    { name = "numpy", specifier = ">=1.26,<3" },
-]
-dev = [
-    { name = "duckdb", specifier = ">=1.5,<1.6" },
-    { name = "h5py", specifier = ">=3.12,<4" },
-    { name = "markdown-it-py", specifier = ">=4,<5" },
-    { name = "maturin", specifier = ">=1.9,<2" },
-    { name = "numpy", specifier = ">=1.26,<3" },
-    { name = "pip-audit", specifier = ">=2.10,<3" },
-    { name = "pyiceberg", extras = ["sql-sqlite"], specifier = ">=0.10,<1" },
-    { name = "pyright", extras = ["nodejs"], specifier = ">=1.1.400,<2" },
-    { name = "pytest", specifier = ">=8.3" },
-    { name = "ruff", specifier = ">=0.12,<1" },
-]
-wheel-test = [
-    { name = "duckdb", specifier = ">=1.5,<1.6" },
-    { name = "numpy", specifier = ">=1.26,<3" },
-    { name = "pyiceberg", extras = ["sql-sqlite"], specifier = ">=0.10,<1" },
-    { name = "pytest", specifier = ">=8.3" },
 ]
 
 [[package]]

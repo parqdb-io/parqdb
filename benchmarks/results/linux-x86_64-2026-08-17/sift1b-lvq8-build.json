@@ -11,7 +11,7 @@
     "query_source_id_range": null,
     "revision": null,
     "rows": 1000000000,
-    "source_parquet": "/storage_ssd/relify-benchmarks/datasets/sift1b/source",
+    "source_parquet": "/storage_ssd/parqdb-benchmarks/datasets/sift1b/source",
     "source_parquet_bytes": 124888648321,
     "split": null,
     "vector_column": "embedding"
@@ -20,8 +20,8 @@
   "implementation_revision": "75dad2ea7af3fcf9681efc8acbfbf8bbe0c88bc2",
   "parameters": {
     "encoding": "lvq8",
-    "implementation": "relify",
-    "index_root": "/storage_ssd/relify-benchmarks/indexes/sift1b-lvq8-65536",
+    "implementation": "parqdb",
+    "index_root": "/storage_ssd/parqdb-benchmarks/indexes/sift1b-lvq8-65536",
     "max_temp_directory_size_bytes": 322122547200,
     "nlist": 65536,
     "rebuild": true,
@@ -81,7 +81,7 @@
         2159.670218873769
       ],
       "encoding": "lvq8",
-      "implementation": "relify",
+      "implementation": "parqdb",
       "index_reused": false,
       "kmeans_max_iterations": 20,
       "kmeans_seed": 42,
@@ -111,7 +111,7 @@
     "platform": "Linux-6.8.0-114-generic-x86_64-with-glibc2.36",
     "pyarrow": "25.0.0",
     "python": "3.12.2",
-    "relify": "0.1.0rc2",
+    "parqdb": "0.1.0rc2",
     "rustc": null
   }
 }

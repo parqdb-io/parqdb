@@ -2,7 +2,7 @@
 
 ## Problem
 
-Relify previously exposed two index scan paths:
+ParqDB previously exposed two index scan paths:
 
 - `cache_index()` materializes a complete index as decoded Arrow data;
 - an uncached query reads Parquet through DataFusion.
@@ -11,7 +11,7 @@ The first path is fast only when the complete index fits in memory. It has no
 capacity or eviction policy, duplicates data during snapshot refresh, and
 implements scan behavior separately from the storage-backed path.
 
-Relify needs one storage-backed path with a bounded read-through cache.
+ParqDB needs one storage-backed path with a bounded read-through cache.
 Published Parquet or Iceberg data remains authoritative. Query correctness must
 not depend on which data is resident.
 
@@ -130,7 +130,7 @@ its Pages sequentially. For each current Page offset it:
 The cached header supplies the compressed and uncompressed lengths needed to
 advance the reader. This path does not require a Parquet OffsetIndex. StarRocks
 may cache either compressed or decompressed bodies according to compression
-benefit; Relify deliberately admits only decompressed bodies so a warm hit also
+benefit; ParqDB deliberately admits only decompressed bodies so a warm hit also
 avoids decompression.
 
 StarRocks constructs a compact file key from a 64-bit filename hash, a cache
@@ -141,7 +141,7 @@ modification time because their files are not overwritten.
 
 StarRocks returns a reference-counted `PageHandle` with each hit. An entry held
 by an active reader is not eligible for LRU eviction. Its LRU implementation
-may temporarily exceed capacity when all candidates are pinned. Relify follows
+may temporarily exceed capacity when all candidates are pinned. ParqDB follows
 the same lifetime model, with the stricter admission behavior defined in Clause
 6.
 
@@ -251,10 +251,10 @@ public Page-provider hook. The first implementation gate is therefore a small
 prototype that provides this boundary through either:
 
 - a generic upstream Page-provider hook; or
-- a Relify-owned cache-aware `PageReader` adapter that reuses arrow-rs Page and
+- a ParqDB-owned cache-aware `PageReader` adapter that reuses arrow-rs Page and
   value decoders.
 
-Relify vendors the required arrow-rs/DataFusion reader change and keeps it
+ParqDB vendors the required arrow-rs/DataFusion reader change and keeps it
 narrowly scoped to Page production and lifetime. It must not fork or copy the
 value decoders. A cache implemented only in `AsyncFileReader`, or by retaining
 output `RecordBatch` objects, does not satisfy this RFC.
@@ -343,7 +343,7 @@ invalidate references held by running decoders or Arrow arrays.
 
 ## 6. Memory and Eviction
 
-`relify-local` owns one `DecompressedParquetPageCache` per `LocalSession`. The
+`parqdb-local` owns one `DecompressedParquetPageCache` per `LocalSession`. The
 cache is an execution resource and is never serialized into index metadata or
 the catalog. Closing the session releases its cache references.
 
@@ -371,21 +371,21 @@ scans evict useful hot Pages.
 Capacity is a DataFusion session option expressed as an absolute byte count:
 
 ```python
-config = relify.SessionConfig().set(
-    "relify.parquet.page_cache.capacity",
+config = parqdb.SessionConfig().set(
+    "parqdb.parquet.page_cache.capacity",
     str(4 * 1024**3),
 )
-session = relify.connect("./relify-data", config=config)
+session = parqdb.connect("./parqdb-data", config=config)
 ```
 
 The same variable is available through SQL:
 
 ```sql
-SET relify.parquet.page_cache.capacity = 4294967296;
+SET parqdb.parquet.page_cache.capacity = 4294967296;
 ```
 
 When unset, the capacity is 20% of DataFusion's finite memory-pool limit. If
-the pool is unbounded, Relify uses 20% of the effective Linux cgroup or physical
+the pool is unbounded, ParqDB uses 20% of the effective Linux cgroup or physical
 memory limit; platforms without a detectable limit use 256 MiB. `0` disables
 admission and retires resident entries. A SQL `SET` applies before the next
 physical Parquet plan is created. Operational methods are:
@@ -395,7 +395,7 @@ stats = session.parquet_page_cache_stats()
 session.clear_parquet_page_cache()
 ```
 
-The Page cache is the only Relify-managed index data cache. The former
+The Page cache is the only ParqDB-managed index data cache. The former
 whole-index Arrow cache and its `cache_index()`, `is_index_cached()`, and
 `uncache_index()` APIs are removed so cold and warm queries use the same Parquet
 scan path.
@@ -445,17 +445,17 @@ The storage-backed path must demonstrate:
 ## Prior Art
 
 Databend and StarRocks place caches inside storage readers they own. Neither
-provides a reader crate that Relify can adopt unchanged.
+provides a reader crate that ParqDB can adopt unchanged.
 
-| System | Cache design | Difference from Relify |
+| System | Cache design | Difference from ParqDB |
 | --- | --- | --- |
 | Databend Fuse | Decoded block columns and compressed column-chunk bytes | Fuse controls its writer, block metadata, and Parquet deserializer; a managed block is typically one single-row-group file. |
 | StarRocks external Parquet | Remote byte-range cache plus Page caching in its Parquet reader | This RFC follows its sequential Page discovery, file identity, deletion, and handle-lifetime model, while always caching decompressed bodies and enforcing a hard admission budget. |
-| Relify | Decompressed Parquet Pages consumed by arrow-rs decoders | Relify keeps open Parquet files and must add a narrow Page-provider boundary to DataFusion's reader. |
+| ParqDB | Decompressed Parquet Pages consumed by arrow-rs decoders | ParqDB keeps open Parquet files and must add a narrow Page-provider boundary to DataFusion's reader. |
 
 The PLAIN `BYTE_ARRAY` layout changes the trade-off relative to Databend's
 decoded-column cache. The Page payload can remain authoritative in memory while
-Arrow `BinaryView` arrays reference it directly, so Relify does not need a
+Arrow `BinaryView` arrays reference it directly, so ParqDB does not need a
 second decoded representation for LVQ codes.
 
 Relevant implementations:

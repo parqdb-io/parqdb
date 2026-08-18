@@ -136,9 +136,9 @@ fn get_python_formatter_with_config(py: Python) -> PyResult<PythonFormatter> {
     Ok(PythonFormatter { formatter, config })
 }
 
-/// Get the Python formatter from the relify.datafusion.dataframe_formatter module
+/// Get the Python formatter from the parqdb.datafusion.dataframe_formatter module
 fn import_python_formatter(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
-    let formatter_module = py.import("relify.datafusion.dataframe_formatter")?;
+    let formatter_module = py.import("parqdb.datafusion.dataframe_formatter")?;
     let get_formatter = formatter_module.getattr("get_formatter")?;
     get_formatter.call0()
 }

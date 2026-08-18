@@ -1,13 +1,13 @@
-# Relify Spec
+# ParqDB Spec
 
-Relify is a library for building and querying vector indexes over existing data
+ParqDB is a library for building and querying vector indexes over existing data
 tables. This specification defines the portable metadata, table schemas,
 and query semantics shared across compute engines.
 
 ## Background and Motivation
 
 Vector indexes are commonly stored in engine-specific formats and cannot be
-reused by another engine that accesses the same source data. Relify standardizes
+reused by another engine that accesses the same source data. ParqDB standardizes
 the metadata, table schemas, and query semantics required to share vector
 indexes across engines.
 
@@ -20,7 +20,7 @@ indexes across engines.
 
 ## Overview
 
-A Relify index is an access path for a source table. The source table remains
+A ParqDB index is an access path for a source table. The source table remains
 authoritative for source rows. Index tables contain auxiliary data
 used to accelerate queries, such as centroids and postings.
 

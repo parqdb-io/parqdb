@@ -69,7 +69,7 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 /// Initialize the low-level bindings in an embedding Python module.
 ///
-/// Relify calls this function to install the complete DataFusion Python API in
+/// `ParqDB` calls this function to install the complete DataFusion Python API in
 /// the same extension module as its Rust-owned `SessionContext`.
 pub fn init_internal_module(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Initialize logging

@@ -2,7 +2,7 @@
 
 ## Problem
 
-Relify currently exposes its embedded DataFusion implementation directly:
+ParqDB currently exposes its embedded DataFusion implementation directly:
 `Session` inherits `SessionContext`, and `SourceTable` inherits DataFusion's
 `DataFrame`. This is convenient locally, but it makes a client/server mode
 impossible to add without either introducing a second public API or pretending
@@ -11,7 +11,7 @@ that process-local DataFusion objects can cross a network boundary.
 Client/server execution is needed for concurrent serving. One server process can
 own the execution runtime, catalog connections, and bounded caches while many
 clients submit queries. A multiprocessing benchmark or application should not
-create one independent Relify runtime and Page cache per worker.
+create one independent ParqDB runtime and Page cache per worker.
 
 The public API must not expose this deployment choice. After `connect`, source
 registration, index lifecycle, query construction, execution, result schemas,
@@ -21,7 +21,7 @@ LanceDB provides the relevant API and protocol precedent. One `connect` entry
 point selects a local or remote connection, while both implementations satisfy
 the same connection, table, and query interfaces. Its REST Catalog also defines
 operation models once and maps them to versioned HTTP routes with JSON metadata
-and Arrow IPC data. Relify adopts both principles. It does not retain a public
+and Arrow IPC data. ParqDB adopts both principles. It does not retain a public
 compute-backend plugin layer: embedded and client/server requests both execute
 through the same DataFusion engine.
 
@@ -37,7 +37,7 @@ References:
 
 | Question | Decision |
 | --- | --- |
-| How does an application select the mode? | `relify.connect` selects embedded or client/server execution from the URI. |
+| How does an application select the mode? | `parqdb.connect` selects embedded or client/server execution from the URI. |
 | Does the mode change user operations? | No. Both modes return the same public `Session`, `SourceTable`, and query types. |
 | Is asynchronous I/O supported? | Yes. `connect_async` provides matching `AsyncSession` and `AsyncSourceTable` facades for both deployment modes. |
 | Which implementation is authoritative? | The asynchronous transport and service path. The synchronous API is a blocking facade over that path, not a second implementation. |
@@ -47,14 +47,14 @@ References:
 | What is the remote protocol? | A versioned HTTP/HTTPS API described by OpenAPI. It follows the Lance REST Catalog operation and route model. |
 | How are results transferred? | Metadata uses JSON. Query results use Arrow IPC streams over HTTP and are never converted to JSON by the SDK. |
 | Is the DataFusion Python API part of the shared contract? | No. Engine-native objects are an explicit embedded-only escape hatch. |
-| Are inherited DataFusion APIs preserved? | No. Relify exposes its own table, SQL, vector-query, index-lifecycle, and Arrow-result APIs instead of forwarding `SessionContext` or `DataFrame` methods. |
+| Are inherited DataFusion APIs preserved? | No. ParqDB exposes its own table, SQL, vector-query, index-lifecycle, and Arrow-result APIs instead of forwarding `SessionContext` or `DataFrame` methods. |
 | Is a catalog object exposed to applications? | No. `Session` provides table registration and discovery; index lifecycle remains table-centered. |
 | What does a path mean in client/server mode? | The execution process resolves it. A server must be able to access every registered URI. |
 | Who owns runtime resources? | Embedded applications own them in process; in client/server mode the server owns them and shares bounded caches across requests. |
-| Are runtime resources owned by a session? | No. A process-scoped `RelifyRuntime` owns shareable execution resources; one or more `LocalSession` instances use it for catalog-scoped execution. |
+| Are runtime resources owned by a session? | No. A process-scoped `ParqDBRuntime` owns shareable execution resources; one or more `LocalSession` instances use it for catalog-scoped execution. |
 | How is query concurrency controlled? | Deployment settings independently limit process workers, per-query DOP, active queries, and queued queries. Remote requests cannot override them. |
 | Is `query_dop` a strict CPU limit? | No. It is the DataFusion planning target for one query. The process worker count bounds the shared Tokio query executor. |
-| Where does blocking catalog I/O run? | On a bounded blocking executor owned by `RelifyRuntime`, never on the ASGI event loop or query executor. |
+| Where does blocking catalog I/O run? | On a bounded blocking executor owned by `ParqDBRuntime`, never on the ASGI event loop or query executor. |
 | How are index names scoped? | By source table. The durable identity is the table identifier plus index name, so different tables may use the same index name. |
 | Does client/server execution require session affinity? | No. Every request carries its query-affecting state. Server runtime state is shared but disposable. |
 | Is the first server horizontally stateless? | No. The first deployment is single-instance because it uses SQLite and process-local build coordination. The protocol does not preserve that limitation. |
@@ -70,10 +70,10 @@ References:
 Only connection construction changes between modes:
 
 ```python
-import relify
+import parqdb
 
-embedded = relify.connect("./relify-data")
-remote = relify.connect("https://relify.example.com")
+embedded = parqdb.connect("./parqdb-data")
+remote = parqdb.connect("https://parqdb.example.com")
 ```
 
 All ordinary operations are identical after connection:
@@ -91,7 +91,7 @@ documents.create_index(
     "document_embedding",
     column="embedding",
     key=["id"],
-    config=relify.IVF(nlist=4096, encoding="lvq8", metric="cosine"),
+    config=parqdb.IVF(nlist=4096, encoding="lvq8", metric="cosine"),
 )
 documents.wait_for_index("document_embedding")
 
@@ -115,10 +115,10 @@ and server administration are not additional application objects.
 
 | API | Result |
 | --- | --- |
-| `relify.connect(location, ...)` | One public `Session` facade backed by an in-process or HTTP transport. |
-| `await relify.connect_async(location, ...)` | The corresponding `AsyncSession` facade. |
+| `parqdb.connect(location, ...)` | One public `Session` facade backed by an in-process or HTTP transport. |
+| `await parqdb.connect_async(location, ...)` | The corresponding `AsyncSession` facade. |
 | `session.close()` | Release client or embedded resources. |
-| `with relify.connect(...) as session` | Close the session when the context exits. |
+| `with parqdb.connect(...) as session` | Close the session when the context exits. |
 
 Connection credentials, deadlines, and deployment configuration may differ by
 URI. They do not change the methods available after connection.
@@ -132,7 +132,7 @@ URI. They do not change the methods available after connection.
 | `session.list_tables()` | Return registered table identifiers. |
 | `session.table(identifier)` | Return a `SourceTable`. |
 
-Relify does not expose `session.catalog`, `session.catalogs`, or a storage-level
+ParqDB does not expose `session.catalog`, `session.catalogs`, or a storage-level
 catalog object. A session is already bound to one database catalog and acts as
 the table-discovery facade. Qualified identifiers may represent namespaces
 when the configured catalog supports them.
@@ -245,7 +245,7 @@ materializing a large result before consuming it.
 Asynchronous I/O is independent of the deployment mode:
 
 ```python
-session = await relify.connect_async("https://relify.example.com")
+session = await parqdb.connect_async("https://parqdb.example.com")
 try:
     documents = await session.table("documents")
     query = documents.search(vector, column="embedding").limit(10)
@@ -267,7 +267,7 @@ synchronous `Session` and `SourceTable` APIs invoke the same asynchronous
 service through a private, long-lived blocking bridge. They do not maintain a
 second service implementation or create a new event loop for each operation.
 
-Native awaitables schedule work on the process `RelifyRuntime`; they do not
+Native awaitables schedule work on the process `ParqDBRuntime`; they do not
 create an unrelated Tokio runtime. The Python event loop observes completion
 and cancellation without polling DataFusion work itself.
 
@@ -298,7 +298,7 @@ automatic build resumption, or persistent failure history.
 
 ### Reference SQL compiler
 
-Support for an external SQL engine does not require a Relify Session, plugin,
+Support for an external SQL engine does not require a ParqDB Session, plugin,
 capability matrix, or execution adapter. A separate reference compiler may
 consume a `VectorQuery`, published index metadata, a SQL dialect, and explicit
 relation bindings, and return generated SQL plus its result schema and required
@@ -317,9 +317,9 @@ The common `Session` must no longer inherit DataFusion `SessionContext`, and
 DataFusion plans, Python callbacks, UDF objects, and process-local providers
 cannot be serialized with stable semantics.
 
-This deliberately removes inherited DataFusion methods from the Relify API,
+This deliberately removes inherited DataFusion methods from the ParqDB API,
 including arbitrary UDF and `TableProvider` registration, direct runtime and
-plan manipulation, and DataFrame chaining after `session.sql`. Relify does not
+plan manipulation, and DataFrame chaining after `session.sql`. ParqDB does not
 proxy these methods or maintain a compatibility forwarding layer. In
 particular, `session.sql(statement)` returns a `pyarrow.Table`; it does not
 return a DataFusion `DataFrame`.
@@ -331,15 +331,15 @@ context = session.datafusion_context()
 ```
 
 This method raises `UnsupportedOperationError` on a client/server session. The
-returned object follows the bundled DataFusion API and is outside Relify's API
-compatibility and embedded/remote parity guarantees. Relify's own table, index,
+returned object follows the bundled DataFusion API and is outside ParqDB's API
+compatibility and embedded/remote parity guarantees. ParqDB's own table, index,
 and query implementations must not depend on applications using this escape
 hatch. The normal SQL surface remains portable and executes through the session
 service.
 
 ### URI and path semantics
 
-An `http://` or `https://` URL identifies a Relify server. A filesystem path or
+An `http://` or `https://` URL identifies a ParqDB server. A filesystem path or
 existing local catalog form selects embedded execution. Connection credentials
 and timeouts are transport options; they do not alter table or query behavior.
 
@@ -408,14 +408,14 @@ the same decoded stream through the private blocking bridge.
 
 ### HTTP protocol
 
-Relify follows the Lance REST Catalog's operation-oriented protocol design
+ParqDB follows the Lance REST Catalog's operation-oriented protocol design
 rather than translating the API into generic CRUD resources. Every public
 operation has one transport-neutral request and response model. The embedded
 transport calls that operation directly; the HTTP transport serializes the same
 model as JSON or Arrow IPC.
 
-This is a route-design precedent, not protocol compatibility. Relify operates
-on registered external sources, open Relify indexes, vector queries, and SQL;
+This is a route-design precedent, not protocol compatibility. ParqDB operates
+on registered external sources, open ParqDB indexes, vector queries, and SQL;
 it does not implement Lance table, version, transaction, or query models.
 
 Routes include the table identifier whenever an operation is table-scoped. This
@@ -484,7 +484,7 @@ flowchart LR
     L --> LS["LocalSession"]
     LS --> C["Catalog and Warehouse"]
     LS --> E["DataFusion SessionContext"]
-    LS --> RT["RelifyRuntime"]
+    LS --> RT["ParqDBRuntime"]
     RT --> X["Tokio Executor"]
     RT --> RE["DataFusion RuntimeEnv"]
     RT --> P["Shared Execution Resources"]
@@ -525,11 +525,11 @@ OpenAPI contract or public Python facades.
 
 ### Runtime and session ownership
 
-Relify uses the same execution objects in embedded and client/server modes. It
+ParqDB uses the same execution objects in embedded and client/server modes. It
 does not introduce a separate server runtime:
 
 ```text
-RelifyRuntime (process scoped)
+ParqDBRuntime (process scoped)
   -> Tokio executor and DataFusion RuntimeEnv
   -> memory budget, query admission, and waiting queue
   -> shared Parquet Page cache and bounded blocking executor
@@ -542,18 +542,18 @@ QueryContext (request scoped)
   -> query options, deadline, cancellation, and request identity
 ```
 
-`RelifyRuntime` contains only resources that are safe to share between
+`ParqDBRuntime` contains only resources that are safe to share between
 independent sessions. It owns exactly one Tokio executor; native awaitables are
 spawned on that executor and bridged to the Python event loop. `LocalSession`
 contains state whose meaning depends on one catalog and warehouse. It receives
-an `Arc<RelifyRuntime>` instead of constructing a DataFusion `RuntimeEnv`, Page
+an `Arc<ParqDBRuntime>` instead of constructing a DataFusion `RuntimeEnv`, Page
 cache, or async executor itself. A `QueryContext` is created for each operation
 and is discarded when that operation completes.
 
 An embedded connection creates a runtime and a local session by default. A
 server creates them once during startup and shares them across requests. A
 future process may attach multiple `LocalSession` instances to one
-`RelifyRuntime`; this ownership model does not require that capability to be a
+`ParqDBRuntime`; this ownership model does not require that capability to be a
 public API in the first release.
 
 SQLite operations and filesystem coordination currently use synchronous Rust
@@ -566,7 +566,7 @@ service.
 ### Server asynchronous execution
 
 One ASGI process accepts concurrent requests on an event loop. Each query
-passes through the `RelifyRuntime` admission controller before planning. An
+passes through the `ParqDBRuntime` admission controller before planning. An
 admitted query awaits asynchronous planning and pulls the result one
 RecordBatch at a time. DataFusion performs storage I/O and parallel execution
 on the shared Rust runtime; CPU work does not run on the ASGI event loop.
@@ -577,12 +577,12 @@ The first scheduler has the following process-level settings:
 
 | Setting | Meaning |
 | --- | --- |
-| `relify.execution.worker_threads` | Number of worker threads shared by all queries. Defaults to the CPU capacity visible to the process. |
-| `relify.execution.memory_limit` | Total memory budget for DataFusion execution and Relify's bounded runtime caches. |
-| `relify.execution.query_dop` | Target DataFusion execution parallelism of one query. It is not a strict CPU limit. |
-| `relify.execution.query_concurrency` | Maximum number of admitted queries, including queries waiting for I/O or client consumption. |
-| `relify.execution.query_queue_capacity` | Maximum number of additional queries waiting for admission. |
-| `relify.execution.query_queue_timeout` | Maximum time a query may wait for admission. |
+| `parqdb.execution.worker_threads` | Number of worker threads shared by all queries. Defaults to the CPU capacity visible to the process. |
+| `parqdb.execution.memory_limit` | Total memory budget for DataFusion execution and ParqDB's bounded runtime caches. |
+| `parqdb.execution.query_dop` | Target DataFusion execution parallelism of one query. It is not a strict CPU limit. |
+| `parqdb.execution.query_concurrency` | Maximum number of admitted queries, including queries waiting for I/O or client consumption. |
+| `parqdb.execution.query_queue_capacity` | Maximum number of additional queries waiting for admission. |
+| `parqdb.execution.query_queue_timeout` | Maximum time a query may wait for admission. |
 
 `query_dop` and `query_concurrency` are independent. For example, a runtime with
 32 workers may admit 16 queries with a DOP of 4. The queries share the 32-worker
@@ -612,7 +612,7 @@ until the result stream finishes, closes, or is cancelled.
 `LocalSession` owns a Rust build coordinator. The Python service submits a
 serializable build request and reads status; it does not own executor futures or
 builder objects. The first coordinator runs one build at a time and passes a
-deployment-controlled `relify.build.dop` to the installed builder. Build work
+deployment-controlled `parqdb.build.dop` to the installed builder. Build work
 is not charged as a query, and its CPU parallelism must be bounded independently
 so an index build cannot create an unrestricted all-core pool. Accepted builds
 survive client disconnects but remain process-scoped as described above.
@@ -623,7 +623,7 @@ still use multiple CPU cores within that process.
 
 ### Server state and horizontal scaling
 
-One server process owns one `RelifyRuntime` and one long-lived `LocalSession`.
+One server process owns one `ParqDBRuntime` and one long-lived `LocalSession`.
 Together they contain:
 
 - the catalog and warehouse configuration;
@@ -672,10 +672,10 @@ sequenceDiagram
     actor App
     participant API as Public Session
     participant Transport
-    participant Server as Relify Server
+    participant Server as ParqDB Server
     participant Service as SessionService
     participant Local as LocalSession
-    participant Runtime as RelifyRuntime
+    participant Runtime as ParqDBRuntime
 
     App->>API: collect(VectorQuery)
     API->>Transport: execute(query)
@@ -708,16 +708,16 @@ planning or catalog logic.
 
 ## Errors and Cancellation
 
-Both transports map failures to the same public Relify exception hierarchy.
-HTTP errors use the status code plus a JSON body containing a stable Relify error
+Both transports map failures to the same public ParqDB exception hierarchy.
+HTTP errors use the status code plus a JSON body containing a stable ParqDB error
 code, a safe message, and the request identifier. Python client code must not
-need to catch HTTP-library exceptions for ordinary Relify failures.
+need to catch HTTP-library exceptions for ordinary ParqDB failures.
 
 Validation, catalog lookup, and query planning complete before the server starts
 an Arrow response. Failures during that phase use the normal JSON error model.
 After the response headers and Arrow schema have been sent, the protocol cannot
 replace the response with JSON. A later execution failure terminates the IPC
-stream. The SDK converts a truncated or invalid stream into a Relify stream
+stream. The SDK converts a truncated or invalid stream into a ParqDB stream
 execution error carrying the response request identifier; detailed internal
 diagnostics remain in the server log under that identifier.
 
@@ -732,7 +732,7 @@ Query cancellation does not cancel an index build that the coordinator has
 accepted. Build status remains observable while that server process is alive.
 
 Transport failures such as an unreachable server are exposed as a dedicated
-Relify availability error with the original transport error as its cause.
+ParqDB availability error with the original transport error as its cause.
 
 ## Conformance
 
@@ -744,7 +744,7 @@ type in one mode.
 One parameterized conformance suite starts:
 
 1. an embedded session over a temporary database;
-2. a Relify server over an equivalent temporary database; and
+2. a ParqDB server over an equivalent temporary database; and
 3. a client/server session connected to that server.
 
 It runs the same source registration, index lifecycle, vector query, SQL,
@@ -785,7 +785,7 @@ the same in both modes. Transport implementations remain private.
 
 Implementation proceeds from the execution boundary outward:
 
-1. introduce the process-scoped `RelifyRuntime`, inject it into `LocalSession`,
+1. introduce the process-scoped `ParqDBRuntime`, inject it into `LocalSession`,
    and move RuntimeEnv, Page-cache, memory-budget, and blocking-I/O ownership to
    it;
 2. add query admission and `ManagedQueryStream`, then expose native catalog,
@@ -815,7 +815,7 @@ until the complete portable surface passes the same conformance suite.
 
 ## Alternatives
 
-### Separate `RelifyClient`
+### Separate `ParqDBClient`
 
 Rejected. It immediately creates two application APIs and makes every example,
 integration, and benchmark mode-aware.
@@ -825,7 +825,7 @@ integration, and benchmark mode-aware.
 Rejected. There is no second supported execution engine that justifies a
 versioned plugin API, capability matrix, native session types, and shared
 planner contract. Open index specifications and a narrow SQL compiler provide
-an integration boundary without making Relify own each engine's connection,
+an integration boundary without making ParqDB own each engine's connection,
 catalog, execution, and compatibility lifecycle.
 
 ### Proxy DataFusion `DataFrame` objects

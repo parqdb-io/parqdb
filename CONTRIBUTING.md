@@ -1,6 +1,6 @@
-# Contributing to Relify
+# Contributing to ParqDB
 
-Relify is an early-stage implementation of the formats and behavior in
+ParqDB is an early-stage implementation of the formats and behavior in
 [`spec/`](spec/README.md). Contributions should keep the portable contract and
 the implementation synchronized.
 

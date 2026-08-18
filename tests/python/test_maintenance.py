@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import unquote, urlparse
 
+import parqdb
 import pytest
-import relify
 from _support import (
     WAIT,
     build_index,
@@ -33,7 +33,7 @@ def _set_tree_mtime(root: Path, timestamp: float) -> None:
     os.utime(root, (timestamp, timestamp), follow_symlinks=False)
 
 
-def _set_tombstone_time(session: relify.Session, timestamp: datetime) -> None:
+def _set_tombstone_time(session: parqdb.Session, timestamp: datetime) -> None:
     with sqlite3.connect(session.root / "catalog.sqlite") as connection:
         connection.execute(
             "UPDATE catalog_tombstones SET unreachable_since_ms = ?",
@@ -44,7 +44,7 @@ def _set_tombstone_time(session: relify.Session, timestamp: datetime) -> None:
 def test_remove_orphans_preserves_all_reachable_objects(tmp_path: Path) -> None:
     source = tmp_path / "vectors.parquet"
     write_vectors(source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
     build_index(vectors, nlist=1)
     old = (datetime.now(UTC) - timedelta(days=30)).timestamp()
@@ -63,7 +63,7 @@ def test_refresh_exposes_only_superseded_metadata_as_an_orphan(
 ) -> None:
     source = tmp_path / "vectors.parquet"
     write_vectors(source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
     build_index(vectors, nlist=1)
     before = load_table_index(session, vectors, "vectors_embedding")
@@ -95,7 +95,7 @@ def test_remove_orphans_dry_run_and_delete_dropped_index_data(
 ) -> None:
     source = tmp_path / "vectors.parquet"
     write_vectors(source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
     build_index(vectors, nlist=1)
     old = (datetime.now(UTC) - timedelta(days=30)).timestamp()
@@ -128,7 +128,7 @@ def test_removed_metadata_cannot_be_registered_from_session_cache(
 ) -> None:
     source = tmp_path / "vectors.parquet"
     write_vectors(source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
     build_index(vectors, nlist=1)
     entry = load_table_index(session, vectors, "vectors_embedding")
@@ -142,7 +142,7 @@ def test_removed_metadata_cannot_be_registered_from_session_cache(
 
     assert any(candidate.kind == "metadata" for candidate in removed)
     assert not _uri_path(entry.metadata_location).exists()
-    with pytest.raises(relify.StorageError):
+    with pytest.raises(parqdb.StorageError):
         register_table_index(
             session,
             vectors,
@@ -157,7 +157,7 @@ def test_lazy_query_is_protected_by_retention_without_a_query_lease(
 ) -> None:
     source = tmp_path / "vectors.parquet"
     write_vectors(source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
     build_index(vectors, nlist=1)
     context = session.datafusion_context()
@@ -190,7 +190,7 @@ def test_temp_view_remains_readable_during_retention(
 ) -> None:
     source = tmp_path / "vectors.parquet"
     write_vectors(source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
     build_index(vectors, nlist=1)
     context = session.datafusion_context()
@@ -221,7 +221,7 @@ def test_temp_view_remains_readable_during_retention(
 
 
 def test_remove_orphans_ignores_recent_and_unknown_objects(tmp_path: Path) -> None:
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     source = tmp_path / "vectors.parquet"
     write_vectors(source, [0], [[0.0, 0.0]])
     vectors = register_source(session, source)
@@ -256,7 +256,7 @@ def test_remove_orphans_ignores_recent_and_unknown_objects(tmp_path: Path) -> No
 def test_remove_orphans_enforces_minimum_retention(
     tmp_path: Path,
 ) -> None:
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     source = tmp_path / "vectors.parquet"
     write_vectors(source, [0], [[0.0, 0.0]])
     vectors = register_source(session, source)
@@ -282,14 +282,14 @@ def test_remove_orphans_requires_a_datetime(
     tmp_path: Path,
     value: object,
 ) -> None:
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
 
     with pytest.raises(TypeError, match="must be a datetime"):
         session.maintenance.remove_orphans(older_than=cast(Any, value))
 
 
 def test_remove_orphans_validates_datetime_and_dry_run(tmp_path: Path) -> None:
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
 
     with pytest.raises(ValueError, match="timezone-aware"):
         session.maintenance.remove_orphans(older_than=datetime.now())

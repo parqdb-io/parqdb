@@ -32,7 +32,7 @@
         0.8633171250112355,
         0.8718767499085516
       ],
-      "implementation": "relify",
+      "implementation": "parqdb",
       "index_load_seconds": 0.04754804098047316,
       "index_resident_bytes": 278277344,
       "kmeans_max_iterations": 20,
@@ -422,7 +422,7 @@
     "processor": "arm",
     "pyarrow": "25.0.0",
     "python": "3.12.13",
-    "relify": "0.1.0",
+    "parqdb": "0.1.0",
     "rustc": "rustc 1.96.0 (ac68faa20 2026-05-25)",
     "total_memory_bytes": 17179869184
   }

@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import parqdb
 import pyarrow as pa
-import relify
 
 from benchmarks.tools.datasets import load_ground_truth
 from benchmarks.tools.harness import (
@@ -32,9 +32,9 @@ from benchmarks.tools.resources import (
     cgroup_snapshot,
 )
 from benchmarks.tools.search_adapters import (
-    configure_relify_session,
+    configure_parqdb_session,
     faiss_search,
-    relify_search,
+    parqdb_search,
 )
 
 GIB = 1024**3
@@ -72,7 +72,7 @@ def _load_index_root(root: Path) -> tuple[Path, dict[str, Any]]:
             root / implementation / "benchmark-artifact.json",
             implementation,
         )
-        for implementation in ("relify", "faiss")
+        for implementation in ("parqdb", "faiss")
         if (root / implementation / "benchmark-artifact.json").is_file()
     }
     if not artifacts:
@@ -97,12 +97,12 @@ def _load_index_root(root: Path) -> tuple[Path, dict[str, Any]]:
         raise ValueError("benchmark artifacts do not describe the same index workload")
 
     indexes: dict[str, dict[str, Any]] = {}
-    if "relify" in artifacts:
-        warehouse = root / "relify" / "relify-data"
+    if "parqdb" in artifacts:
+        warehouse = root / "parqdb" / "parqdb-data"
         payload = warehouse / "indexes"
         if not payload.is_dir():
-            raise ValueError(f"Relify benchmark index is missing: {payload}")
-        indexes["relify"] = {
+            raise ValueError(f"ParqDB benchmark index is missing: {payload}")
+        indexes["parqdb"] = {
             "root": str(warehouse),
             "table": "benchmark",
             "index": "benchmark_embedding",
@@ -110,7 +110,7 @@ def _load_index_root(root: Path) -> tuple[Path, dict[str, Any]]:
             "vector_column": expected["vector_column"],
             "payload_bytes": directory_bytes(payload),
             "encoding": expected["encoding"],
-            "artifact": str(root / "relify" / "benchmark-artifact.json"),
+            "artifact": str(root / "parqdb" / "benchmark-artifact.json"),
         }
     if "faiss" in artifacts:
         index = root / "faiss" / "benchmark.faiss"
@@ -174,7 +174,7 @@ def _validate_resources(
 
 
 def _evict_index(implementation: str, index: dict[str, Any]) -> list[str]:
-    if implementation == "relify":
+    if implementation == "parqdb":
         payload = Path(index["root"]) / "indexes"
         evict_tree(payload)
         return [str(payload)]
@@ -186,23 +186,23 @@ def _evict_index(implementation: str, index: dict[str, Any]) -> list[str]:
     return [str(path) for path in paths]
 
 
-def _open_relify(
+def _open_parqdb(
     implementation: dict[str, Any],
     *,
     threads: int,
 ) -> tuple[Any, dict[str, Any]]:
-    session = relify.connect(Path(implementation["root"]))
-    configure_relify_session(session, threads)
+    session = parqdb.connect(Path(implementation["root"]))
+    configure_parqdb_session(session, threads)
     table = session.table(implementation["table"])
-    if not isinstance(table, relify.SourceTable):
-        raise TypeError("prepared Relify table is not a source table")
-    return relify_search(
+    if not isinstance(table, parqdb.SourceTable):
+        raise TypeError("prepared ParqDB table is not a source table")
+    return parqdb_search(
         session,
         table,
         id_column=implementation.get("id_column", "id"),
         vector_column=implementation.get("vector_column", "embedding"),
     ), {
-        "version": importlib.metadata.version("relify"),
+        "version": importlib.metadata.version("parqdb"),
         "storage": "Parquet IVF with bounded decompressed Page cache",
     }
 
@@ -316,8 +316,8 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
         else []
     )
     opened_at = time.perf_counter()
-    if args.implementation == "relify":
-        search, runtime = _open_relify(implementation, threads=args.threads)
+    if args.implementation == "parqdb":
+        search, runtime = _open_parqdb(implementation, threads=args.threads)
     else:
         search, runtime = _open_faiss(implementation, threads=args.threads)
     open_seconds = time.perf_counter() - opened_at
@@ -414,7 +414,7 @@ def parser() -> argparse.ArgumentParser:
     )
     command.add_argument(
         "--implementation",
-        choices=("relify", "faiss"),
+        choices=("parqdb", "faiss"),
         required=True,
     )
     index = command.add_mutually_exclusive_group(required=True)

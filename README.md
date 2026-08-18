@@ -1,21 +1,21 @@
 <div align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/petrizhang/relify/docs/vision-centents/assets/parqdb/logo-dark.svg">
-    <img src="https://raw.githubusercontent.com/petrizhang/relify/docs/vision-centents/assets/parqdb/logo.svg" alt="ParqDB" width="520">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/parqdb-io/parqdb/docs/vision-centents/assets/parqdb/logo-dark.svg">
+    <img src="https://raw.githubusercontent.com/parqdb-io/parqdb/docs/vision-centents/assets/parqdb/logo.svg" alt="ParqDB" width="520">
   </picture>
   <p>
     English |
-    <a href="https://github.com/petrizhang/relify/blob/main/README.zh-CN.md">中文</a>
+    <a href="https://github.com/parqdb-io/parqdb/blob/main/README.zh-CN.md">中文</a>
   </p>
   <p>
     <strong>Billion-scale embedded vector database built entirely on Parquet and Arrow.</strong>
   </p>
   <p>
-    <a href="https://pypi.org/project/relify/"><img alt="PyPI" src="https://img.shields.io/pypi/v/relify.svg"></a>
-    <a href="https://github.com/petrizhang/relify/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/petrizhang/relify/actions/workflows/ci.yml/badge.svg?branch=main"></a>
-    <a href="https://github.com/petrizhang/relify/blob/main/pyproject.toml"><img alt="Python 3.11-3.14" src="https://img.shields.io/badge/python-3.11--3.14-blue.svg"></a>
-    <a href="https://github.com/petrizhang/relify/blob/main/Cargo.toml"><img alt="Rust 1.96" src="https://img.shields.io/badge/rust-1.96-orange.svg"></a>
-    <a href="https://github.com/petrizhang/relify/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT%20AND%20Apache--2.0-green.svg"></a>
+    <a href="https://pypi.org/project/parqdb/"><img alt="PyPI" src="https://img.shields.io/pypi/v/parqdb.svg"></a>
+    <a href="https://github.com/parqdb-io/parqdb/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/parqdb-io/parqdb/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+    <a href="https://github.com/parqdb-io/parqdb/blob/main/pyproject.toml"><img alt="Python 3.11-3.14" src="https://img.shields.io/badge/python-3.11--3.14-blue.svg"></a>
+    <a href="https://github.com/parqdb-io/parqdb/blob/main/Cargo.toml"><img alt="Rust 1.96" src="https://img.shields.io/badge/rust-1.96-orange.svg"></a>
+    <a href="https://github.com/parqdb-io/parqdb/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT%20AND%20Apache--2.0-green.svg"></a>
   </p>
   <p>
     <a href="#quick-start">Quick Start</a> |
@@ -46,28 +46,27 @@ on billion-scale multimodal data, with Parquet storage and Arrow-native executio
 
 ## Quick Start
 
-Relify supports standard CPython 3.11 through 3.14 on Linux x86_64 and macOS
-arm64. Install the embedded DataFusion and Parquet path:
+Install ParqDB:
 
 ```bash
-python -m pip install relify
+python -m pip install parqdb
 ```
 
 From a new working directory, build a source-encoded IVF index over the dataset
 included in the package and run a filtered vector query:
 
 ```python
-import relify
+import parqdb
 
-session = relify.connect("./relify-data")
-session.register_parquet("documents", relify.datasets.uri("documents"))
+session = parqdb.connect("./parqdb-data")
+session.register_parquet("documents", parqdb.datasets.uri("documents"))
 documents = session.table("documents")
 
 documents.create_index(
     "documents_embedding",
     column="embedding",
     key=["document_id"],
-    config=relify.IVF(nlist=3),
+    config=parqdb.IVF(nlist=3),
 )
 documents.wait_for_index("documents_embedding")
 
@@ -88,7 +87,7 @@ Compile it as a SQL subquery and compose it with the rest of the analysis:
 ```python
 session.register_parquet(
     "document_stats",
-    relify.datasets.uri("document_stats"),
+    parqdb.datasets.uri("document_stats"),
 )
 search_sql = session.to_sql(query)
 summary = session.sql(f"""
@@ -106,7 +105,7 @@ print(summary.to_pydict())
 ```
 
 The packaged dataset makes this example self-contained. The
-[getting-started guide](https://github.com/petrizhang/relify/blob/main/docs/getting-started.md)
+[getting-started guide](https://github.com/parqdb-io/parqdb/blob/main/docs/getting-started.md)
 covers persistent tables, existing indexes, query inspection, and source schema
 requirements.
 
@@ -122,27 +121,27 @@ The first supported product surface is the embedded DataFusion runtime. The
 index specification remains independent of that runtime; distributed engine
 adapters are no longer bundled into the Python package.
 
-See the [local guide](https://github.com/petrizhang/relify/blob/main/docs/guides/local.md)
+See the [local guide](https://github.com/parqdb-io/parqdb/blob/main/docs/guides/local.md)
 for installation and configuration.
 
 The experimental HTTP server is documented in the
-[server guide](https://github.com/petrizhang/relify/blob/main/docs/guides/server.md).
+[server guide](https://github.com/parqdb-io/parqdb/blob/main/docs/guides/server.md).
 
 ## Documentation
 
-- [Getting started](https://github.com/petrizhang/relify/blob/main/docs/getting-started.md)
-  and [Python examples](https://github.com/petrizhang/relify/tree/main/examples/python)
-- [Core concepts](https://github.com/petrizhang/relify/blob/main/docs/concepts.md),
-  [architecture](https://github.com/petrizhang/relify/blob/main/docs/architecture.md),
-  and [open index specification](https://github.com/petrizhang/relify/blob/main/spec/README.md)
-- [Python API](https://github.com/petrizhang/relify/blob/main/docs/python-api.md)
-  and [configuration](https://github.com/petrizhang/relify/blob/main/docs/configuration.md),
-  including the [server guide](https://github.com/petrizhang/relify/blob/main/docs/guides/server.md)
-- [Current limitations](https://github.com/petrizhang/relify/blob/main/docs/limitations.md),
-  [troubleshooting](https://github.com/petrizhang/relify/blob/main/docs/troubleshooting.md),
-  and [roadmap](https://github.com/petrizhang/relify/blob/main/docs/roadmap.md)
+- [Getting started](https://github.com/parqdb-io/parqdb/blob/main/docs/getting-started.md)
+  and [Python examples](https://github.com/parqdb-io/parqdb/tree/main/examples/python)
+- [Core concepts](https://github.com/parqdb-io/parqdb/blob/main/docs/concepts.md),
+  [architecture](https://github.com/parqdb-io/parqdb/blob/main/docs/architecture.md),
+  and [open index specification](https://github.com/parqdb-io/parqdb/blob/main/spec/README.md)
+- [Python API](https://github.com/parqdb-io/parqdb/blob/main/docs/python-api.md)
+  and [configuration](https://github.com/parqdb-io/parqdb/blob/main/docs/configuration.md),
+  including the [server guide](https://github.com/parqdb-io/parqdb/blob/main/docs/guides/server.md)
+- [Current limitations](https://github.com/parqdb-io/parqdb/blob/main/docs/limitations.md),
+  [troubleshooting](https://github.com/parqdb-io/parqdb/blob/main/docs/troubleshooting.md),
+  and [roadmap](https://github.com/parqdb-io/parqdb/blob/main/docs/roadmap.md)
 
-## TEngineDB-V and Relify
+## TEngineDB-V and ParqDB
 
 [TEngineDB-V: An OLAP-Native Vector Search System for Large-k Workloads at
 Tencent](https://arxiv.org/abs/2608.00650) is Tencent's production system for
@@ -150,18 +149,18 @@ large-k vector search. On a 10-billion-vector deployment, its deep integration
 with TEngineDB delivers up to a 52x speedup over the legacy system.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/petrizhang/relify/main/assets/tenginedb-v-figure-7.png" alt="Figure 7: Latency-Recall Trade-off Across Systems" width="760">
+  <img src="https://raw.githubusercontent.com/parqdb-io/parqdb/main/assets/tenginedb-v-figure-7.png" alt="Figure 7: Latency-Recall Trade-off Across Systems" width="760">
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/petrizhang/relify/main/assets/tenginedb-v-figure-13.png" alt="Figure 13: Production performance at 10-billion scale" width="760">
+  <img src="https://raw.githubusercontent.com/parqdb-io/parqdb/main/assets/tenginedb-v-figure-13.png" alt="Figure 13: Production performance at 10-billion scale" width="760">
 </p>
 
-Relify shares the idea, not the implementation. It rebuilds table-native vector
+ParqDB shares the idea, not the implementation. It rebuilds table-native vector
 search around open index formats and existing SQL engines, aiming for
 TEngineDB-V-class performance without requiring a proprietary engine.
 
-If you use Relify in your research, please cite our VLDB 2026 Industry Track
+If you use ParqDB in your research, please cite our VLDB 2026 Industry Track
 paper:
 
 ```bibtex
@@ -178,22 +177,22 @@ paper:
 
 ## Development
 
-Relify's next phase is being designed in public. We welcome concrete use cases,
+ParqDB's next phase is being designed in public. We welcome concrete use cases,
 benchmark results, design feedback, and implementation help:
 
-- [Narrow the product around an embedded vector lakehouse](https://github.com/petrizhang/relify/issues/9)
-- [Improve storage-backed Parquet search](https://github.com/petrizhang/relify/issues/8)
-  and [measure the online serving envelope](https://github.com/petrizhang/relify/issues/11)
-- [Add an extensible index-family framework](https://github.com/petrizhang/relify/issues/10)
-- [Design compute-storage separation](https://github.com/petrizhang/relify/issues/13)
-  and [build a complete DuckLake workflow](https://github.com/petrizhang/relify/issues/12)
+- [Narrow the product around an embedded vector lakehouse](https://github.com/parqdb-io/parqdb/issues/9)
+- [Improve storage-backed Parquet search](https://github.com/parqdb-io/parqdb/issues/8)
+  and [measure the online serving envelope](https://github.com/parqdb-io/parqdb/issues/11)
+- [Add an extensible index-family framework](https://github.com/parqdb-io/parqdb/issues/10)
+- [Design compute-storage separation](https://github.com/parqdb-io/parqdb/issues/13)
+  and [build a complete DuckLake workflow](https://github.com/parqdb-io/parqdb/issues/12)
 
 If you are working on RAG, agent trajectory storage, Parquet performance, or
 embedded lakehouse systems, share your workload and requirements in the
 relevant issue. Comment before starting a large change so that scope and
 interfaces can be agreed on first.
 
-Relify uses uv, Maturin, Cargo, and a small Makefile orchestration layer:
+ParqDB uses uv, Maturin, Cargo, and a small Makefile orchestration layer:
 
 ```bash
 make sync
@@ -201,15 +200,15 @@ make develop
 make check
 ```
 
-See [CONTRIBUTING.md](https://github.com/petrizhang/relify/blob/main/CONTRIBUTING.md)
+See [CONTRIBUTING.md](https://github.com/parqdb-io/parqdb/blob/main/CONTRIBUTING.md)
 for quality gates, fixtures, benchmarks, and contribution guidelines.
 
 ## License
 
-Relify's original code is available under the
-[MIT License](https://github.com/petrizhang/relify/blob/main/LICENSE). Wheels
+ParqDB's original code is available under the
+[MIT License](https://github.com/parqdb-io/parqdb/blob/main/LICENSE). Wheels
 include the vendored DataFusion Python binding under Apache-2.0; see the
-[third-party notices](https://github.com/petrizhang/relify/blob/main/THIRD_PARTY_NOTICES.md).
+[third-party notices](https://github.com/parqdb-io/parqdb/blob/main/THIRD_PARTY_NOTICES.md).
 
-Relify builds on work from LanceDB, DataFusion, DuckDB, StarRocks, Apache Spark,
+ParqDB builds on work from LanceDB, DataFusion, DuckDB, StarRocks, Apache Spark,
 and Apache Iceberg, with gratitude to their contributors and communities.

@@ -1,0 +1,52 @@
+[package]
+name = "parqdb-local"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Embedded DataFusion and Parquet implementation of ParqDB"
+repository.workspace = true
+publish = false
+
+[lib]
+name = "parqdb_local"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+arrow.workspace = true
+arrow-data.workspace = true
+arrow-ipc.workspace = true
+async-trait.workspace = true
+base64.workspace = true
+bytes.workspace = true
+datafusion.workspace = true
+datafusion-datasource-parquet.workspace = true
+futures.workspace = true
+hashlink.workspace = true
+humantime.workspace = true
+libc.workspace = true
+object_store.workspace = true
+parquet.workspace = true
+parallite = { version = "0.2.0-rc.1", path = "../parallite" }
+parqdb-catalog = { version = "0.2.0-rc.1", path = "../parqdb-catalog" }
+parqdb-core = { version = "0.2.0-rc.1", path = "../parqdb-core" }
+parqdb-index = { version = "0.2.0-rc.1", path = "../parqdb-index" }
+parqdb-iceberg = { version = "0.2.0-rc.1", path = "../parqdb-iceberg" }
+parqdb-kernels = { version = "0.2.0-rc.1", path = "../parqdb-kernels" }
+parqdb-kmeans = { version = "0.2.0-rc.1", path = "../parqdb-kmeans" }
+parqdb-meta = { version = "0.2.0-rc.1", path = "../parqdb-meta" }
+parqdb-storage = { version = "0.2.0-rc.1", path = "../parqdb-storage" }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+rusqlite.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros"] }

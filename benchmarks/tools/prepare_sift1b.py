@@ -1,4 +1,4 @@
-"""Prepare the BigANN SIFT1B files for the standard Relify benchmark runners."""
+"""Prepare the BigANN SIFT1B files for the standard ParqDB benchmark runners."""
 
 from __future__ import annotations
 

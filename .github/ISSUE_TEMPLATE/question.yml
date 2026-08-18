@@ -7,7 +7,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: Relify version
+      label: ParqDB version
       description: Package version, commit SHA, or branch.
       placeholder: Package version or commit SHA
     validations:

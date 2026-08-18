@@ -1,6 +1,6 @@
 # Release Process
 
-Relify releases the Python package as platform-specific wheels. The Rust
+ParqDB releases the Python package as platform-specific wheels. The Rust
 workspace crates are implementation components and are not released
 independently yet.
 
@@ -8,7 +8,7 @@ This document governs normal package releases from the public repository.
 
 ## Versioning
 
-Relify uses PEP 440 for the Python distribution and SemVer for the Cargo
+ParqDB uses PEP 440 for the Python distribution and SemVer for the Cargo
 workspace. A release candidate therefore has different canonical spellings in
 the two manifests:
 
@@ -17,7 +17,7 @@ the two manifests:
 | Python package | `0.1.0rc1` | `0.1.0` |
 | Cargo workspace | `0.1.0-rc.1` | `0.1.0` |
 | Git tag | `v0.1.0rc1` | `v0.1.0` |
-| GitHub release | `Relify 0.1.0rc1` (pre-release) | `Relify 0.1.0` |
+| GitHub release | `ParqDB 0.1.0rc1` (pre-release) | `ParqDB 0.1.0` |
 
 The first public package is `0.1.0rc1`. At that point the 0.1 feature and API
 scope is frozen; only release-blocking fixes are expected before `0.1.0`. A
@@ -26,10 +26,10 @@ the `0.1.0rc1` version.
 
 ## Branching Model
 
-Relify uses one development mainline. `main` is the only long-lived development
+ParqDB uses one development mainline. `main` is the only long-lived development
 branch and should remain releasable. Normal changes use short-lived branches,
 such as `feat/<topic>`, `fix/<topic>`, or `docs/<topic>`, and enter `main`
-through pull requests. Relify does not use a `develop` branch.
+through pull requests. ParqDB does not use a `develop` branch.
 
 Create `release/X.Y` from the latest `main` only when a release series needs a
 separate stabilization or maintenance line. The branch is not another
@@ -126,7 +126,7 @@ wheels and `SHA256SUMS` as one GitHub Actions artifact.
    from the changelog entry. Attach the two wheels and `SHA256SUMS`, and mark
    release candidates as pre-releases.
 4. Verify the exact version from PyPI in a new environment, for example with
-   `python -m pip install relify==0.1.0rc1`.
+   `python -m pip install parqdb==0.1.0rc1`.
 5. Restore an empty `Unreleased` section in the changelog.
 
 Do not rebuild artifacts after tagging. If verification fails, fix the issue

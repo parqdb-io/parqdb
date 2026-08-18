@@ -1,32 +1,32 @@
-# Relify Server
+# ParqDB Server
 
-The Relify server exposes the same table, index, vector-query, and SQL APIs as
+The ParqDB server exposes the same table, index, vector-query, and SQL APIs as
 an embedded session over HTTP. It is experimental and currently runs as one
 process with one ASGI worker.
 
 ## Install and Start
 
-Install Relify in the process that will own the catalog, index data, and
+Install ParqDB in the process that will own the catalog, index data, and
 storage credentials:
 
 ```bash
-python -m pip install relify
-mkdir relify-service
-cd relify-service
-relify config init
-relify serve
+python -m pip install parqdb
+mkdir parqdb-service
+cd parqdb-service
+parqdb config init
+parqdb serve
 ```
 
-`relify config init` writes `relify.toml`. `relify serve` loads that file from
+`parqdb config init` writes `parqdb.toml`. `parqdb serve` loads that file from
 the current directory by default. Without a file, it starts with the same
 safe defaults and prints how to materialize the template.
 
 The default configuration listens only on `127.0.0.1:8000`, stores persistent
-state in `./relify`, and permits no remote source registration:
+state in `./parqdb`, and permits no remote source registration:
 
 ```toml
 [server]
-root = "./relify"
+root = "./parqdb"
 host = "127.0.0.1"
 port = 8000
 allowed_source_prefixes = []
@@ -37,11 +37,11 @@ allowed_source_prefixes = []
 ```
 
 Set `allowed_source_prefixes` before clients register Parquet sources. Paths
-are resolved relative to `relify.toml`; object-store prefixes remain URIs:
+are resolved relative to `parqdb.toml`; object-store prefixes remain URIs:
 
 ```toml
 [server]
-root = "./relify"
+root = "./parqdb"
 host = "0.0.0.0"
 port = 8000
 allowed_source_prefixes = [
@@ -53,17 +53,17 @@ allowed_source_prefixes = [
 aws_region = "us-east-1"
 
 [session]
-"relify.execution.query_dop" = "8"
-"relify.execution.query_concurrency" = "16"
+"parqdb.execution.query_dop" = "8"
+"parqdb.execution.query_concurrency" = "16"
 ```
 
 Keep cloud credentials in the server process environment or its credential
-provider, rather than in `relify.toml`.
+provider, rather than in `parqdb.toml`.
 
 To use a different location, pass it explicitly:
 
 ```bash
-relify serve --config /etc/relify/relify.toml
+parqdb serve --config /etc/parqdb/parqdb.toml
 ```
 
 ## Connect
@@ -72,9 +72,9 @@ The client uses the normal session facade. Registered paths are resolved on the
 server and are never uploaded from the client:
 
 ```python
-import relify
+import parqdb
 
-session = relify.connect("http://127.0.0.1:8000")
+session = parqdb.connect("http://127.0.0.1:8000")
 session.register_parquet("documents", "/srv/lakehouse/documents/*.parquet")
 documents = session.table("documents")
 ```
@@ -83,13 +83,13 @@ documents = session.table("documents")
 
 Applications that already own an ASGI deployment can use the public factory
 directly. This is an embedding API; ordinary deployments should use
-`relify serve` instead.
+`parqdb serve` instead.
 
 ```python
-from relify.server import create_app
+from parqdb.server import create_app
 
 app = create_app(
-    "/srv/relify",
+    "/srv/parqdb",
     allowed_source_prefixes=["/srv/lakehouse"],
 )
 ```

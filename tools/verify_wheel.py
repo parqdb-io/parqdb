@@ -56,7 +56,7 @@ def verify_wheel(repository: Path, wheel: Path) -> None:
     expected_licenses = {
         relative: repository / relative for relative in project["license-files"]
     }
-    expected_sbom = repository / "sboms" / "relify-python.cyclonedx.json"
+    expected_sbom = repository / "sboms" / "parqdb-python.cyclonedx.json"
     with ZipFile(wheel) as archive:
         names = {info.filename for info in archive.infolist() if not info.is_dir()}
         for name in names:
@@ -116,12 +116,12 @@ def verify_wheel(repository: Path, wheel: Path) -> None:
         )
 
         required_package_files = {
-            "relify/_native.pyi",
-            "relify/datasets/document_stats.parquet",
-            "relify/datasets/documents.parquet",
-            "relify/py.typed",
-            "relify/datafusion/py.typed",
-            "relify/datafusion/LICENSE.txt",
+            "parqdb/_native.pyi",
+            "parqdb/datasets/document_stats.parquet",
+            "parqdb/datasets/documents.parquet",
+            "parqdb/py.typed",
+            "parqdb/datafusion/py.typed",
+            "parqdb/datafusion/LICENSE.txt",
         }
         require(
             required_package_files <= names,
@@ -130,7 +130,7 @@ def verify_wheel(repository: Path, wheel: Path) -> None:
         extensions = [
             name
             for name in names
-            if name.startswith("relify/_native.") and not name.endswith(".pyi")
+            if name.startswith("parqdb/_native.") and not name.endswith(".pyi")
         ]
         require(len(extensions) == 1, "wheel must contain one native extension")
 
@@ -142,7 +142,7 @@ def verify_wheel(repository: Path, wheel: Path) -> None:
                 f"packaged license differs from source: {relative}",
             )
         require(
-            archive.read("relify/datafusion/LICENSE.txt")
+            archive.read("parqdb/datafusion/LICENSE.txt")
             == expected_licenses["vendor/datafusion-python/LICENSE.txt"].read_bytes(),
             "package DataFusion license differs from its source",
         )
@@ -170,7 +170,7 @@ def verify_wheel(repository: Path, wheel: Path) -> None:
                 "object_store",
                 "parquet",
                 "pyo3",
-                "relify-core",
+                "parqdb-core",
             }
             <= component_names,
             "SBOM is missing required native components",

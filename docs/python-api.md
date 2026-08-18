@@ -1,22 +1,22 @@
 # Python API
 
-Relify exposes synchronous and asynchronous facades over one service contract.
+ParqDB exposes synchronous and asynchronous facades over one service contract.
 It selects embedded execution or the HTTP transport from the connection
 location.
 
 ## Connect
 
 ```python
-import relify
+import parqdb
 
-session = relify.connect("./relify-data")
+session = parqdb.connect("./parqdb-data")
 ```
 
 The path contains the SQLite catalog and, by default, the index warehouse.
 Use a context manager when session lifetime is scoped:
 
 ```python
-with relify.connect("./relify-data") as session:
+with parqdb.connect("./parqdb-data") as session:
     print(session.list_tables())
 ```
 
@@ -24,9 +24,9 @@ Index relations may be stored in a separate warehouse while catalog state stays
 under the local root:
 
 ```python
-session = relify.connect(
-    "/var/lib/relify",
-    warehouse="s3://bucket/relify/",
+session = parqdb.connect(
+    "/var/lib/parqdb",
+    warehouse="s3://bucket/parqdb/",
     storage_options={"aws_region": "us-east-1"},
 )
 ```
@@ -35,26 +35,26 @@ session = relify.connect(
 `session.datafusion_context()` only when an embedded-only DataFusion operation
 is intentionally required.
 
-### Connect to a Relify Server
+### Connect to a ParqDB Server
 
-Install Relify in the server environment:
+Install ParqDB in the server environment:
 
 ```bash
-python -m pip install relify
+python -m pip install parqdb
 ```
 
 Start the server with its default TOML configuration:
 
 ```bash
-relify config init
-relify serve
+parqdb config init
+parqdb serve
 ```
 
 See the [server guide](guides/server.md) for source authorization, storage,
 runtime settings, and the ASGI embedding API.
 
 ```python
-session = relify.connect("http://127.0.0.1:8000")
+session = parqdb.connect("http://127.0.0.1:8000")
 documents = session.table("documents")
 hits = session.collect(documents.search(vector).limit(10))
 ```
@@ -94,12 +94,12 @@ documents.create_index(
     "documents_embedding",
     column="embedding",
     key=["document_id"],
-    config=relify.IVF(
+    config=parqdb.IVF(
         nlist=4096,
         encoding="lvq8",
         metric="cosine",
     ),
-    writer_options=relify.WriteOptions(
+    writer_options=parqdb.WriteOptions(
         partitions=32,
         compression="zstd(3)",
         target_file_size=512 * 1024 * 1024,
@@ -148,7 +148,7 @@ for index in documents.list_indexes():
 
 documents.refresh_index(
     "documents_embedding",
-    config=relify.IVF(nlist=8192, encoding="lvq8", metric="cosine"),
+    config=parqdb.IVF(nlist=8192, encoding="lvq8", metric="cosine"),
 )
 documents.wait_for_index("documents_embedding")
 documents.drop_index("documents_embedding")
@@ -218,7 +218,7 @@ print(session.analyze(query))
 ## Asynchronous API
 
 ```python
-session = await relify.connect_async("./relify-data")
+session = await parqdb.connect_async("./parqdb-data")
 try:
     documents = await session.table("documents")
     query = documents.search(vector, column="embedding").limit(10)
@@ -236,18 +236,18 @@ path through one long-lived blocking bridge.
 
 ## Session Configuration
 
-Relify extends the bundled DataFusion configuration:
+ParqDB extends the bundled DataFusion configuration:
 
 ```python
 config = (
-    relify.SessionConfig()
-    .set("relify.execution.query_dop", "8")
-    .set("relify.execution.query_concurrency", "16")
-    .set("relify.execution.query_queue_capacity", "64")
-    .set("relify.parquet.page_cache.capacity", "4294967296")
+    parqdb.SessionConfig()
+    .set("parqdb.execution.query_dop", "8")
+    .set("parqdb.execution.query_concurrency", "16")
+    .set("parqdb.execution.query_queue_capacity", "64")
+    .set("parqdb.parquet.page_cache.capacity", "4294967296")
 )
 
-session = relify.connect("./relify-data", config=config)
+session = parqdb.connect("./parqdb-data", config=config)
 ```
 
 Runtime resource configuration is resolved when the embedded session is

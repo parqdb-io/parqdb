@@ -6,7 +6,7 @@ from examples.python._common import build_index, open_documents
 
 
 def main() -> None:
-    with TemporaryDirectory(prefix="relify-plans-") as workspace:
+    with TemporaryDirectory(prefix="parqdb-plans-") as workspace:
         session, documents, _source = open_documents(workspace)
         build_index(documents)
 

@@ -6,7 +6,7 @@
     "queries": 100,
     "query_file": "/home/share/vector_data/wikipedia/bin_file/wikipedia_query.bin",
     "rows": 35167820,
-    "source_parquet": "/storage_ssd/relify-benchmarks/wikipedia-35m/source",
+    "source_parquet": "/storage_ssd/parqdb-benchmarks/wikipedia-35m/source",
     "source_parquet_bytes": 55213480506
   },
   "generated_at_utc": "2026-08-02T09:26:15.048437+00:00",
@@ -32,7 +32,7 @@
     "implementations": [
       "faiss"
     ],
-    "index_root": "/storage_ssd/relify-benchmarks/indexes/wikipedia-35m-nlist8192",
+    "index_root": "/storage_ssd/parqdb-benchmarks/indexes/wikipedia-35m-nlist8192",
     "k": 20000,
     "nlist": 8192,
     "nprobe": 64,
@@ -1894,7 +1894,7 @@
     "platform": "Linux-6.8.0-114-generic-x86_64-with-glibc2.35",
     "machine": "x86_64",
     "python": "3.12.2",
-    "relify": "0.1.0",
+    "parqdb": "0.1.0",
     "numpy": "2.5.1",
     "pyarrow": "25.0.0",
     "rustc": "rustc 1.96.0 (ac68faa20 2026-05-25)"

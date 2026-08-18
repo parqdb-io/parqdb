@@ -3,10 +3,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+import parqdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-import relify
 from _support import register_source, vector_type, write_vectors
 
 
@@ -17,7 +17,7 @@ def test_exact_search_does_not_require_an_index(tmp_path: Path) -> None:
         [0, 1, 2],
         [[0.0, 0.0], [4.0, 0.0], [10.0, 0.0]],
     )
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
 
     result = session.to_arrow(
@@ -41,7 +41,7 @@ def test_exact_search_applies_prefilter_before_top_k(tmp_path: Path) -> None:
         [0, 1, 2],
         [[0.0, 0.0], [4.0, 0.0], [10.0, 0.0]],
     )
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
 
     result = session.to_arrow(
@@ -78,15 +78,15 @@ def test_exact_search_applies_prefilter_before_top_k(tmp_path: Path) -> None:
 )
 def test_exact_search_rejects_index_only_options(
     tmp_path: Path,
-    query: Callable[[relify.SourceTable], relify.VectorQuery],
+    query: Callable[[parqdb.SourceTable], parqdb.VectorQuery],
     message: str,
 ) -> None:
     source = tmp_path / "vectors.parquet"
     write_vectors(source, [0], [[0.0, 0.0]])
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
 
-    with pytest.raises(relify.InvalidArgumentError, match=message):
+    with pytest.raises(parqdb.InvalidArgumentError, match=message):
         session.to_arrow(query(vectors))
 
 
@@ -112,10 +112,10 @@ def test_exact_search_requires_column_for_multiple_vector_columns(
         ),
         source,
     )
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
 
-    with pytest.raises(relify.InvalidArgumentError, match="multiple vector columns"):
+    with pytest.raises(parqdb.InvalidArgumentError, match="multiple vector columns"):
         session.to_arrow(vectors.search([0.0, 0.0]).bypass_vector_index())
 
     result = session.to_arrow(
@@ -129,12 +129,12 @@ def test_exact_search_requires_column_for_multiple_vector_columns(
 def test_exact_search_explain_plan_contains_no_index_join(tmp_path: Path) -> None:
     source = tmp_path / "vectors.parquet"
     write_vectors(source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
 
     plan = session.explain(vectors.search([0.0, 0.0]).bypass_vector_index())
 
-    assert "relify_squared_l2" in plan
+    assert "parqdb_squared_l2" in plan
     assert "IvfTopKExec" in plan
     assert "HashJoinExec" not in plan
     assert "ivf_postings" not in plan

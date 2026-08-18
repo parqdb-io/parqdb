@@ -7,7 +7,7 @@
 
 The initial Rust implementation placed backend-neutral query models, embedded
 DataFusion execution, Parquet I/O, SQLite session composition, SIMD distance
-kernels, and K-means training in `relify-core`. That made the local
+kernels, and K-means training in `parqdb-core`. That made the local
 implementation usable, but it forced a future backend to depend on another
 backend's execution engine and storage stack.
 
@@ -19,19 +19,19 @@ depend on a clustering algorithm for generic distance computation.
 
 The workspace uses these dependency boundaries:
 
-- `relify-core` defines backend-neutral construction options, query intent,
+- `parqdb-core` defines backend-neutral construction options, query intent,
   portable build artifacts, and publication results.
-- `relify-local` implements embedded execution with DataFusion, Parquet, the
+- `parqdb-local` implements embedded execution with DataFusion, Parquet, the
   SQLite catalog, local coordination, caching, and maintenance.
-- `relify-kmeans` owns deterministic sampling, Lloyd training, centroid
+- `parqdb-kmeans` owns deterministic sampling, Lloyd training, centroid
   assignment, and empty-cluster recovery.
-- `relify-kernels` owns shared SIMD distance, row-norm, and GEMM primitives.
+- `parqdb-kernels` owns shared SIMD distance, row-norm, and GEMM primitives.
 - `parallite` remains the local partitioned execution runtime used by
-  `relify-kmeans`.
+  `parqdb-kmeans`.
 
-`relify-core` does not define a universal backend trait. Each execution backend
+`parqdb-core` does not define a universal backend trait. Each execution backend
 compiles the shared query intent into its own plan model. The SQLite
-implementation in `relify-catalog` is feature-gated so consumers of the catalog
+implementation in `parqdb-catalog` is feature-gated so consumers of the catalog
 interfaces and identifiers do not have to link SQLite.
 
 At the Python boundary, `VectorQuery` is an immutable logical value containing
@@ -40,10 +40,10 @@ Terminal compilation and execution methods belong to each concrete session.
 
 ## Consequences
 
-Future DataFusion-independent backends can depend on `relify-core`,
-`relify-meta`, and `relify-catalog` without pulling in DataFusion, Parquet,
+Future DataFusion-independent backends can depend on `parqdb-core`,
+`parqdb-meta`, and `parqdb-catalog` without pulling in DataFusion, Parquet,
 object stores, SQLite, or local numerical execution. The embedded Python
-extension depends on `relify-local`, while its public Python API remains
+extension depends on `parqdb-local`, while its public Python API remains
 backend-independent at the query-intent boundary.
 
 K-means can be tested and evolved independently of Arrow, metadata, catalogs,

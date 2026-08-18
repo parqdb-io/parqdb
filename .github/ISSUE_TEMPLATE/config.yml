@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: Report a security vulnerability
-    url: https://github.com/petrizhang/relify/blob/main/SECURITY.md
+    url: https://github.com/parqdb-io/parqdb/blob/main/SECURITY.md
     about: Read the private reporting instructions. Do not disclose details publicly.

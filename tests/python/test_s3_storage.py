@@ -6,11 +6,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import parqdb
 import pyarrow as pa
 import pyarrow.fs as fs
 import pyarrow.parquet as pq
 import pytest
-import relify
 from _support import WAIT, drop_table_index_entry, register_source, vector_type
 from support.config import S3Config
 
@@ -63,7 +63,7 @@ def test_s3_build_search_refresh_and_gc(
     s3: S3Config,
 ) -> None:
     filesystem = _s3_filesystem(s3)
-    base_uri = f"{s3.uri}/relify-{uuid.uuid4().hex}"
+    base_uri = f"{s3.uri}/parqdb-{uuid.uuid4().hex}"
     base = urlsplit(base_uri)
     base_path = f"{base.netloc}/{base.path.strip('/')}"
     source_path = f"{base_path}/source/documents.parquet"
@@ -72,7 +72,7 @@ def test_s3_build_search_refresh_and_gc(
     filesystem.create_dir(f"{base_path}/source", recursive=True)
     _write_source(filesystem, source_path, 4)
 
-    session = relify.connect(
+    session = parqdb.connect(
         tmp_path / "state",
         warehouse=index_root,
         storage_options=s3.storage_options,
@@ -86,7 +86,7 @@ def test_s3_build_search_refresh_and_gc(
         "documents_embedding",
         column="embedding",
         key=["id"],
-        config=relify.IVF(nlist=2),
+        config=parqdb.IVF(nlist=2),
         wait_timeout=WAIT,
     )
 

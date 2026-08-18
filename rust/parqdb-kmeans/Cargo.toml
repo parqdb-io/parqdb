@@ -1,0 +1,22 @@
+[package]
+name = "parqdb-kmeans"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Parallel dense K-means training for ParqDB index construction"
+repository.workspace = true
+publish = false
+
+[lib]
+name = "parqdb_kmeans"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+num-traits.workspace = true
+parallite = { version = "0.2.0-rc.1", path = "../parallite" }
+parqdb-kernels = { version = "0.2.0-rc.1", path = "../parqdb-kernels" }
+thiserror.workspace = true

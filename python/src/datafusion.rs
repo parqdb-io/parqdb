@@ -9,13 +9,13 @@ pub(crate) fn add_datafusion_bindings(module: &Bound<'_, PyModule>) -> PyResult<
 
 fn install_datafusion_bindings(module: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = module.py();
-    let internal = PyModule::new(py, "relify.datafusion._internal")?;
+    let internal = PyModule::new(py, "parqdb.datafusion._internal")?;
     datafusion_python::init_internal_module(py, &internal)?;
     relocate_type_modules(&internal, &mut HashSet::new())?;
 
     let sys = PyModule::import(py, "sys")?;
     let modules = sys.getattr("modules")?.cast_into::<PyDict>()?;
-    modules.set_item("relify.datafusion._internal", &internal)?;
+    modules.set_item("parqdb.datafusion._internal", &internal)?;
 
     // Keep an owning reference in the extension module as well as sys.modules.
     module.add("_datafusion_internal", internal)?;
@@ -34,7 +34,7 @@ fn relocate_type_modules(
         if let Ok(class) = value.cast::<PyType>() {
             let module_name = class.getattr("__module__")?.extract::<String>()?;
             if module_name == "datafusion" || module_name.starts_with("datafusion.") {
-                class.setattr("__module__", format!("relify.{}", module_name.as_str()))?;
+                class.setattr("__module__", format!("parqdb.{}", module_name.as_str()))?;
             }
         }
         if let Ok(child) = value.cast::<PyModule>() {

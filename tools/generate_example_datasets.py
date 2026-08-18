@@ -111,7 +111,7 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path(__file__).parents[1] / "python" / "relify" / "datasets",
+        default=Path(__file__).parents[1] / "python" / "parqdb" / "datasets",
     )
     args = parser.parse_args()
     generate(args.output)

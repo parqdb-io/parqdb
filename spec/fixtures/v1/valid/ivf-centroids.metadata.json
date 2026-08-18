@@ -2,7 +2,7 @@
   "artifact-uuid": "fe985f6d-3592-4385-a1ca-71347057a210",
   "centroids": {
     "profile": "parquet",
-    "uri": "s3://relify-fixtures/v1/valid/ivf_centroids/"
+    "uri": "s3://parqdb-fixtures/v1/valid/ivf_centroids/"
   },
   "created-at-ms": 1750000000000,
   "descriptor": {
@@ -12,11 +12,11 @@
     "nlist": 2,
     "source": {
       "profile": "parquet",
-      "uri": "s3://relify-fixtures/v1/valid/source/"
+      "uri": "s3://parqdb-fixtures/v1/valid/source/"
     },
     "vector-field": "embedding"
   },
-  "fingerprint": "4c774941-faf4-5e06-9a2a-03ffa111641f",
+  "fingerprint": "77f9b8f9-77fd-56de-9353-3d160ea0af7b",
   "format-version": 1,
-  "location": "s3://relify-fixtures/v1/valid/centroid-artifacts/fe985f6d-3592-4385-a1ca-71347057a210/"
+  "location": "s3://parqdb-fixtures/v1/valid/centroid-artifacts/fe985f6d-3592-4385-a1ca-71347057a210/"
 }

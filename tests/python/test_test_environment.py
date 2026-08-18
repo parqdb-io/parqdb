@@ -14,7 +14,7 @@ from support.config import (
     load_test_environment,
 )
 from support.config import (
-    TestEnvironment as RelifyTestEnvironment,
+    TestEnvironment as ParqDBTestEnvironment,
 )
 from support.config import (
     TestEnvironmentError as EnvironmentError,
@@ -64,7 +64,7 @@ def test_environment_rejects_an_unset_placeholder(tmp_path: Path) -> None:
 [s3]
 uri = "s3://bucket"
 endpoint = "http://127.0.0.1:9000"
-access_key = "${RELIFY_TEST_UNSET_ACCESS_KEY}"
+access_key = "${PARQDB_TEST_UNSET_ACCESS_KEY}"
 secret_key = "secret"
 """,
         encoding="utf-8",
@@ -72,7 +72,7 @@ secret_key = "secret"
 
     with pytest.raises(
         EnvironmentError,
-        match="RELIFY_TEST_UNSET_ACCESS_KEY",
+        match="PARQDB_TEST_UNSET_ACCESS_KEY",
     ):
         load_test_environment(path)
 
@@ -80,7 +80,7 @@ secret_key = "secret"
 def test_capability_registry_distinguishes_missing_available_and_failed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    environment = RelifyTestEnvironment(
+    environment = ParqDBTestEnvironment(
         path=None,
         hdfs=HdfsConfig(uri=None, mode="managed"),
     )
@@ -88,7 +88,7 @@ def test_capability_registry_distinguishes_missing_available_and_failed(
     assert registry.probe("file").state == CapabilityState.AVAILABLE
     assert registry.probe("s3").state == CapabilityState.MISSING
 
-    def fail_probe(environment: RelifyTestEnvironment) -> None:
+    def fail_probe(environment: ParqDBTestEnvironment) -> None:
         del environment
         raise RuntimeError("unreachable")
 
@@ -99,7 +99,7 @@ def test_capability_registry_distinguishes_missing_available_and_failed(
 
 
 def test_capability_registry_rejects_unknown_names() -> None:
-    registry = CapabilityRegistry(RelifyTestEnvironment(path=None))
+    registry = CapabilityRegistry(ParqDBTestEnvironment(path=None))
 
     with pytest.raises(ValueError, match="unknown test capability"):
         registry.configured("unknown")

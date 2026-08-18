@@ -11,7 +11,7 @@ from urllib.parse import SplitResult, unquote, urlsplit
 from markdown_it import MarkdownIt
 
 EXCLUDED_DIRECTORIES = {".git", ".uv-cache", ".venv", "target"}
-GITHUB_REPOSITORY = ("petrizhang", "relify")
+GITHUB_REPOSITORY = ("petrizhang", "parqdb")
 GITHUB_DEFAULT_BRANCH = "main"
 
 

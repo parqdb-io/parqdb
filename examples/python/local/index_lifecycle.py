@@ -20,7 +20,7 @@ NEW_DOCUMENT = {
 
 
 def main() -> None:
-    with TemporaryDirectory(prefix="relify-lifecycle-") as workspace:
+    with TemporaryDirectory(prefix="parqdb-lifecycle-") as workspace:
         _session, documents, source = open_documents(workspace)
         build_index(documents)
         before = documents.list_indexes()[0]

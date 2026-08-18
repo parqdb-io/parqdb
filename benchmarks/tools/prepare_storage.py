@@ -10,7 +10,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-import relify
+import parqdb
 
 from benchmarks.tools.datasets import (
     ParquetSource,
@@ -28,12 +28,12 @@ from benchmarks.tools.harness import (
 )
 from benchmarks.tools.ivf import (
     FAISS_ENCODINGS,
-    RELIFY_ENCODINGS,
+    PARQDB_ENCODINGS,
     create_faiss_index,
 )
 
 
-def prepare_relify(
+def prepare_parqdb(
     source: ParquetSource,
     destination: Path,
     *,
@@ -42,21 +42,21 @@ def prepare_relify(
     threads: int,
 ) -> dict[str, Any]:
     if destination.exists():
-        raise FileExistsError(f"Relify destination already exists: {destination}")
+        raise FileExistsError(f"ParqDB destination already exists: {destination}")
     try:
-        session = relify.connect(destination)
+        session = parqdb.connect(destination)
         session.datafusion_context().sql(
             f"SET datafusion.execution.target_partitions = '{threads}'"
         ).collect()
         session.register_parquet("benchmark", source.path)
         table = session.table("benchmark")
-        assert isinstance(table, relify.SourceTable)
+        assert isinstance(table, parqdb.SourceTable)
         started = time.perf_counter()
         table.create_index(
             "benchmark_embedding",
             column="embedding",
             key=["id"],
-            config=relify.IVF(nlist=nlist, encoding=encoding),
+            config=parqdb.IVF(nlist=nlist, encoding=encoding),
             wait_timeout=timedelta(hours=24),
         )
         sync_tree(destination)
@@ -187,7 +187,7 @@ def _write_metadata(path: Path, metadata: dict[str, Any]) -> None:
 
 
 def prepare(args: argparse.Namespace) -> dict[str, Any]:
-    supported = RELIFY_ENCODINGS if args.implementation == "relify" else FAISS_ENCODINGS
+    supported = PARQDB_ENCODINGS if args.implementation == "parqdb" else FAISS_ENCODINGS
     encoding = args.encoding or supported[0]
     if encoding not in supported:
         raise ValueError(f"unsupported {args.implementation} encoding: {encoding}")
@@ -230,10 +230,10 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
     if args.implementation in metadata["indexes"]:
         raise ValueError(f"{args.implementation} is already prepared")
 
-    if args.implementation == "relify":
-        result = prepare_relify(
+    if args.implementation == "parqdb":
+        result = prepare_parqdb(
             source,
-            output / "relify",
+            output / "parqdb",
             nlist=args.nlist,
             encoding=encoding,
             threads=args.threads,
@@ -260,7 +260,7 @@ def parser() -> argparse.ArgumentParser:
     )
     command.add_argument(
         "--implementation",
-        choices=("relify", "faiss"),
+        choices=("parqdb", "faiss"),
         required=True,
     )
     command.add_argument("--source-parquet", type=Path, required=True)
@@ -268,8 +268,8 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--nlist", type=int, default=8_192)
     command.add_argument(
         "--encoding",
-        choices=tuple(dict.fromkeys((*RELIFY_ENCODINGS, *FAISS_ENCODINGS))),
-        help="defaults to lvq8 for Relify and sq8 for Faiss",
+        choices=tuple(dict.fromkeys((*PARQDB_ENCODINGS, *FAISS_ENCODINGS))),
+        help="defaults to lvq8 for ParqDB and sq8 for Faiss",
     )
     command.add_argument("--threads", type=int, default=32)
     command.add_argument("--shard-rows", type=int, default=1_048_576)

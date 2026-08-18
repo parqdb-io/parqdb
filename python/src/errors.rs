@@ -1,92 +1,92 @@
+use parqdb_catalog::Error as CatalogErrorKind;
+use parqdb_index::Error as IndexError;
+use parqdb_local::{BuildFailureKind, Error as LocalError};
 use pyo3::create_exception;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use relify_catalog::Error as CatalogErrorKind;
-use relify_index::Error as IndexError;
-use relify_local::{BuildFailureKind, Error as LocalError};
 
 create_exception!(
     _native,
-    RelifyError,
+    ParqDBError,
     PyRuntimeError,
-    "Base class for errors reported by Relify."
+    "Base class for errors reported by ParqDB."
 );
 create_exception!(
     _native,
     InvalidArgumentError,
-    RelifyError,
-    "A Relify operation received an invalid argument."
+    ParqDBError,
+    "A ParqDB operation received an invalid argument."
 );
 create_exception!(
     _native,
     InvalidSchemaError,
-    RelifyError,
+    ParqDBError,
     "A source or index table has an invalid schema or value."
 );
 create_exception!(
     _native,
     IndexNotFoundError,
-    RelifyError,
+    ParqDBError,
     "The requested index does not exist."
 );
 create_exception!(
     _native,
     AlreadyExistsError,
-    RelifyError,
+    ParqDBError,
     "The requested index already exists."
 );
 create_exception!(
     _native,
     BuildAlreadyRunningError,
-    RelifyError,
+    ParqDBError,
     "Another process is already building the requested index."
 );
 create_exception!(
     _native,
     AmbiguousIndexError,
-    RelifyError,
+    ParqDBError,
     "More than one index matches the request."
 );
 create_exception!(
     _native,
     InvalidMetadataError,
-    RelifyError,
+    ParqDBError,
     "An index metadata document is invalid."
 );
 create_exception!(
     _native,
     CatalogError,
-    RelifyError,
+    ParqDBError,
     "An index catalog operation failed."
 );
 create_exception!(
     _native,
     StorageError,
-    RelifyError,
+    ParqDBError,
     "A storage operation failed."
 );
 create_exception!(
     _native,
     BackendError,
-    RelifyError,
+    ParqDBError,
     "A query backend operation failed."
 );
 create_exception!(
     _native,
     QueryQueueFullError,
-    RelifyError,
+    ParqDBError,
     "The bounded query queue has no free entry."
 );
 create_exception!(
     _native,
     QueryQueueTimeoutError,
-    RelifyError,
+    ParqDBError,
     "A query timed out while waiting for runtime admission."
 );
 
 pub(crate) fn add_exceptions(module: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = module.py();
-    module.add("RelifyError", py.get_type::<RelifyError>())?;
+    module.add("ParqDBError", py.get_type::<ParqDBError>())?;
     module.add(
         "InvalidArgumentError",
         py.get_type::<InvalidArgumentError>(),
@@ -159,7 +159,7 @@ pub(crate) fn index_error(error: &IndexError) -> PyErr {
         IndexError::AmbiguousIndex(_) => AmbiguousIndexError::new_err(message),
         IndexError::Catalog(error) => catalog_error(error, message),
         IndexError::Storage(_) | IndexError::Json(_) => StorageError::new_err(message),
-        _ => RelifyError::new_err(message),
+        _ => ParqDBError::new_err(message),
     }
 }
 
@@ -175,5 +175,5 @@ fn catalog_error(error: &CatalogErrorKind, message: String) -> PyErr {
 }
 
 pub(crate) fn runtime_error(error: impl std::fmt::Display) -> PyErr {
-    RelifyError::new_err(error.to_string())
+    ParqDBError::new_err(error.to_string())
 }

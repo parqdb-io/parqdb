@@ -1,19 +1,19 @@
 from __future__ import annotations
 
-import relify
+import parqdb
 
 
-def test_public_errors_share_the_relify_base_class() -> None:
+def test_public_errors_share_the_parqdb_base_class() -> None:
     for error_type in [
-        relify.InvalidArgumentError,
-        relify.InvalidSchemaError,
-        relify.IndexNotFoundError,
-        relify.AlreadyExistsError,
-        relify.AmbiguousIndexError,
-        relify.InvalidMetadataError,
-        relify.CatalogError,
-        relify.StorageError,
-        relify.BackendError,
-        relify.BuildAlreadyRunningError,
+        parqdb.InvalidArgumentError,
+        parqdb.InvalidSchemaError,
+        parqdb.IndexNotFoundError,
+        parqdb.AlreadyExistsError,
+        parqdb.AmbiguousIndexError,
+        parqdb.InvalidMetadataError,
+        parqdb.CatalogError,
+        parqdb.StorageError,
+        parqdb.BackendError,
+        parqdb.BuildAlreadyRunningError,
     ]:
-        assert issubclass(error_type, relify.RelifyError)
+        assert issubclass(error_type, parqdb.ParqDBError)

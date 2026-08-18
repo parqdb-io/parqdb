@@ -5,7 +5,7 @@
 
 ## Context
 
-Relify metadata already identifies every source and index table with a portable
+ParqDB metadata already identifies every source and index table with a portable
 `RelationReference`. The first DataFusion implementation nevertheless assumed
 that every reference was Parquet, while the first Spark implementation assumed
 that every reference was Iceberg. The metadata was portable, but a physical
@@ -15,7 +15,7 @@ index could not actually move between the two query runtimes.
 
 Query sessions resolve each relation from its metadata profile:
 
-- DataFusion reads Parquet URIs through `relify-storage` and reads Iceberg
+- DataFusion reads Parquet URIs through `parqdb-storage` and reads Iceberg
   references through a native Iceberg `TableProvider` compiled into the same
   DataFusion extension.
 - Spark reads Parquet URIs through `SparkSession.read.parquet` and reads
@@ -23,7 +23,7 @@ Query sessions resolve each relation from its metadata profile:
   catalog.
 
 Iceberg reads verify the table UUID and select the exact referenced snapshot.
-Parquet reads preserve the canonical URI as the relation state. The Relify
+Parquet reads preserve the canonical URI as the relation state. The ParqDB
 catalog stores neither engine-specific plans nor converted copies of index
 tables.
 
@@ -37,7 +37,7 @@ conforming external builder.
 
 A compatible Iceberg index can be queried by DataFusion, and a locally built
 Parquet index can be queried by Spark, provided both sessions use the same
-Relify index catalog and can access the referenced storage. Cross-backend
+ParqDB index catalog and can access the referenced storage. Cross-backend
 interoperability does not require another index format, export step, or metadata
 field.
 

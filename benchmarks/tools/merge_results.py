@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-IMPLEMENTATION_ORDER = ("relify", "faiss")
+IMPLEMENTATION_ORDER = ("parqdb", "faiss")
 PER_IMPLEMENTATION_PARAMETERS = {"implementation", "encoding", "index_root"}
 COMMON_SOFTWARE = ("platform", "machine", "python", "numpy", "pyarrow", "rustc")
 

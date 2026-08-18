@@ -1,4 +1,4 @@
-# Relify RFCs
+# ParqDB RFCs
 
 RFCs describe substantial changes before implementation. They are reviewed as
 standalone pull requests so that design feedback remains separate from code

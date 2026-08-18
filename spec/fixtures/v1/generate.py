@@ -85,12 +85,12 @@ def fingerprint(descriptor: dict[str, object]) -> str:
 
 
 def metadata() -> dict[str, object]:
-    source_uri = "s3://relify-fixtures/v1/valid/source/"
+    source_uri = "s3://parqdb-fixtures/v1/valid/source/"
     descriptor = ivf_centroids_descriptor(source_uri)
     return {
         "format-version": 1,
         "index-uuid": INDEX_UUID,
-        "location": f"s3://relify-fixtures/v1/metadata/{INDEX_UUID}/",
+        "location": f"s3://parqdb-fixtures/v1/metadata/{INDEX_UUID}/",
         "last-updated-ms": 1_750_000_000_000,
         "last-sequence-number": 1,
         "current-snapshot-id": SNAPSHOT_ID,
@@ -117,17 +117,17 @@ def metadata() -> dict[str, object]:
                     "ivf_centroids_fingerprint": fingerprint(descriptor),
                     "ivf_centroids_uuid": IVF_CENTROIDS_UUID,
                     "ivf_centroids_metadata_location": (
-                        "s3://relify-fixtures/v1/valid/ivf-centroids.metadata.json"
+                        "s3://parqdb-fixtures/v1/valid/ivf-centroids.metadata.json"
                     ),
                 },
                 "index-relations": {
                     "ivf_centroids": {
                         "profile": "parquet",
-                        "uri": "s3://relify-fixtures/v1/valid/ivf_centroids/",
+                        "uri": "s3://parqdb-fixtures/v1/valid/ivf_centroids/",
                     },
                     "ivf_postings": {
                         "profile": "parquet",
-                        "uri": "s3://relify-fixtures/v1/valid/ivf_postings/",
+                        "uri": "s3://parqdb-fixtures/v1/valid/ivf_postings/",
                     },
                 },
             }
@@ -193,8 +193,8 @@ def catalog_operations() -> dict[str, object]:
             "next": "valid/metadata-next.json",
         },
         "locations": {
-            "base": "s3://relify-fixtures/v1/catalog/metadata-v1.json",
-            "next": "s3://relify-fixtures/v1/catalog/metadata-next.json",
+            "base": "s3://parqdb-fixtures/v1/catalog/metadata-v1.json",
+            "next": "s3://parqdb-fixtures/v1/catalog/metadata-next.json",
         },
         "operations": [
             {
@@ -307,7 +307,7 @@ def write_tables() -> None:
 def composite_metadata() -> dict[str, object]:
     value = metadata()
     value["index-uuid"] = COMPOSITE_INDEX_UUID
-    value["location"] = f"s3://relify-fixtures/v1/metadata/{COMPOSITE_INDEX_UUID}/"
+    value["location"] = f"s3://parqdb-fixtures/v1/metadata/{COMPOSITE_INDEX_UUID}/"
     value["current-snapshot-id"] = COMPOSITE_SNAPSHOT_ID
     value["snapshot-log"] = [
         {
@@ -320,23 +320,23 @@ def composite_metadata() -> dict[str, object]:
     snapshot["snapshot-id"] = COMPOSITE_SNAPSHOT_ID
     snapshot["source"] = {
         "profile": "parquet",
-        "uri": "s3://relify-fixtures/v1/valid/composite/source/",
+        "uri": "s3://parqdb-fixtures/v1/valid/composite/source/",
     }
     snapshot["source-key-fields"] = ["tenant_id", "document_id"]
     descriptor = ivf_centroids_descriptor(snapshot["source"]["uri"])
     snapshot["parameters"]["ivf_centroids_fingerprint"] = fingerprint(descriptor)
     snapshot["parameters"]["ivf_centroids_uuid"] = COMPOSITE_IVF_CENTROIDS_UUID
     snapshot["parameters"]["ivf_centroids_metadata_location"] = (
-        "s3://relify-fixtures/v1/valid/composite/ivf-centroids.metadata.json"
+        "s3://parqdb-fixtures/v1/valid/composite/ivf-centroids.metadata.json"
     )
     snapshot["index-relations"] = {
         "ivf_centroids": {
             "profile": "parquet",
-            "uri": ("s3://relify-fixtures/v1/valid/composite/ivf_centroids/"),
+            "uri": ("s3://parqdb-fixtures/v1/valid/composite/ivf_centroids/"),
         },
         "ivf_postings": {
             "profile": "parquet",
-            "uri": ("s3://relify-fixtures/v1/valid/composite/ivf_postings/"),
+            "uri": ("s3://parqdb-fixtures/v1/valid/composite/ivf_postings/"),
         },
     }
     return value
@@ -407,7 +407,7 @@ def write_invalid_documents(base: dict[str, object]) -> None:
 
     noncanonical = copy.deepcopy(base)
     noncanonical["snapshots"][0]["source"]["uri"] = (  # type: ignore[index]
-        "S3://relify-fixtures/v1/valid/source/"
+        "S3://parqdb-fixtures/v1/valid/source/"
     )
     write_case(
         "noncanonical-parquet-uri.metadata.json",
@@ -418,7 +418,7 @@ def write_invalid_documents(base: dict[str, object]) -> None:
     unknown_role = copy.deepcopy(base)
     unknown_role["snapshots"][0]["index-relations"]["unknown"] = {  # type: ignore[index]
         "profile": "parquet",
-        "uri": "s3://relify-fixtures/v1/valid/unknown/",
+        "uri": "s3://parqdb-fixtures/v1/valid/unknown/",
     }
     write_case(
         "unknown-ivf-role.metadata.json",
@@ -603,12 +603,12 @@ def main() -> None:
     write_json(VALID / "metadata.json", base)
     write_json(VALID / "metadata-next.json", next_metadata(base))
     source_descriptor = ivf_centroids_descriptor(
-        "s3://relify-fixtures/v1/valid/source/"
+        "s3://parqdb-fixtures/v1/valid/source/"
     )
     write_json(
         VALID / "ivf-centroids.metadata.json",
         ivf_centroids_metadata(
-            "s3://relify-fixtures/v1/valid",
+            "s3://parqdb-fixtures/v1/valid",
             IVF_CENTROIDS_UUID,
             source_descriptor,
         ),
@@ -689,12 +689,12 @@ def main() -> None:
     )
     write_json(COMPOSITE / "metadata.json", composite_metadata())
     composite_descriptor = ivf_centroids_descriptor(
-        "s3://relify-fixtures/v1/valid/composite/source/"
+        "s3://parqdb-fixtures/v1/valid/composite/source/"
     )
     write_json(
         COMPOSITE / "ivf-centroids.metadata.json",
         ivf_centroids_metadata(
-            "s3://relify-fixtures/v1/valid/composite",
+            "s3://parqdb-fixtures/v1/valid/composite",
             COMPOSITE_IVF_CENTROIDS_UUID,
             composite_descriptor,
         ),

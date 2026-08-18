@@ -3,19 +3,19 @@
 import os
 from tempfile import TemporaryDirectory
 
+import parqdb
 import pyarrow as pa
 import pyarrow.parquet as pq
-import relify
 
 from examples.python._common import DOCUMENT_SCHEMA, DOCUMENTS, build_index
 
 
 def main() -> None:
-    with TemporaryDirectory(prefix="relify-parquet-roundtrip-") as workspace:
-        root = os.path.join(workspace, "relify-data")
+    with TemporaryDirectory(prefix="parqdb-parquet-roundtrip-") as workspace:
+        root = os.path.join(workspace, "parqdb-data")
         source = os.path.join(workspace, "documents.parquet")
 
-        session = relify.connect(root)
+        session = parqdb.connect(root)
         pq.write_table(
             pa.Table.from_pylist(list(DOCUMENTS), schema=DOCUMENT_SCHEMA),
             source,
@@ -24,12 +24,12 @@ def main() -> None:
 
         session.register_parquet("documents", source)
         documents = session.table("documents")
-        assert isinstance(documents, relify.SourceTable)
+        assert isinstance(documents, parqdb.SourceTable)
         build_index(documents)
 
-        reopened = relify.connect(root)
+        reopened = parqdb.connect(root)
         recovered = reopened.table("documents")
-        assert isinstance(recovered, relify.SourceTable)
+        assert isinstance(recovered, parqdb.SourceTable)
         query = (
             recovered.search([0.2, 0.0], column="embedding")
             .where("tenant_id = 42 AND status = 'published'")

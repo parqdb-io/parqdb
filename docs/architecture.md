@@ -1,6 +1,6 @@
 # Architecture
 
-Relify separates the public API, transport boundary, execution service,
+ParqDB separates the public API, transport boundary, execution service,
 catalog, immutable storage, and vector kernels.
 
 ```text
@@ -20,7 +20,7 @@ private embedded host
         |
         +--> LocalSession --> DataFusion
         |        |
-        |        +--> RelifyRuntime
+        |        +--> ParqDBRuntime
         |        +--> Parquet page cache
         |        +--> query admission
         |
@@ -55,27 +55,27 @@ The service never accepts client-supplied storage credentials. Index builds use
 the same process-scoped coordinator as embedded sessions; HTTP create and
 refresh calls acknowledge submission, while clients poll portable index status.
 
-The Python package mirrors those ownership boundaries: `relify.server` owns
-the public ASGI factory and server-only deployment policy; `relify.transport`
+The Python package mirrors those ownership boundaries: `parqdb.server` owns
+the public ASGI factory and server-only deployment policy; `parqdb.transport`
 owns the portable HTTP, Arrow IPC, and in-process transports; and
-`relify.runtime` owns the transport-neutral session service and repository
-bridge. The public `relify.server` import remains stable while its server
+`parqdb.runtime` owns the transport-neutral session service and repository
+bridge. The public `parqdb.server` import remains stable while its server
 implementation evolves behind that package boundary.
 
 ## Rust Components
 
-- `relify-local` owns the embedded DataFusion session, query planning, Parquet
+- `parqdb-local` owns the embedded DataFusion session, query planning, Parquet
   access, caches, query admission, index construction runtime, and maintenance.
-- `relify-index` loads, validates, discovers, and publishes immutable index
+- `parqdb-index` loads, validates, discovers, and publishes immutable index
   metadata.
-- `relify-catalog` owns structured table/index identifiers and atomic SQLite
+- `parqdb-catalog` owns structured table/index identifiers and atomic SQLite
   publication operations.
-- `relify-meta` defines the portable metadata model.
-- `relify-storage` resolves canonical `file`, S3, and HDFS locations under a
+- `parqdb-meta` defines the portable metadata model.
+- `parqdb-storage` resolves canonical `file`, S3, and HDFS locations under a
   managed warehouse root.
-- `relify-kmeans` owns sampling, training, assignment, and cluster recovery.
-- `relify-kernels` owns runtime-selected SIMD and GEMM kernels.
-- `relify-iceberg` binds exact Iceberg snapshots to DataFusion providers.
+- `parqdb-kmeans` owns sampling, training, assignment, and cluster recovery.
+- `parqdb-kernels` owns runtime-selected SIMD and GEMM kernels.
+- `parqdb-iceberg` binds exact Iceberg snapshots to DataFusion providers.
 - `parallite` provides partitioned local execution for index construction.
 
 Lower-level crates do not depend on Python API types. Metadata and catalog
@@ -83,7 +83,7 @@ crates do not depend on DataFusion or numerical kernels.
 
 ## Query Runtime
 
-Each process owns one `RelifyRuntime`, shared by embedded sessions. It contains
+Each process owns one `ParqDBRuntime`, shared by embedded sessions. It contains
 the Tokio runtime, DataFusion runtime environment, memory budget, Parquet page
 cache, and query admission controller. Query concurrency and queue limits are
 process resources rather than per-request state.

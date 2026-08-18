@@ -1,1 +1,1 @@
-"""Python examples for Relify."""
+"""Python examples for ParqDB."""

@@ -9,41 +9,41 @@ from datetime import timedelta
 from pathlib import Path
 
 import numpy as np
+import parqdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-import relify
 
 
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process signals")
 def test_process_exit_never_publishes_an_interrupted_build(tmp_path: Path) -> None:
     source = tmp_path / "vectors.parquet"
-    root = tmp_path / "relify-data"
+    root = tmp_path / "parqdb-data"
     _write_large_source(source)
 
-    session = relify.connect(root)
+    session = parqdb.connect(root)
     session.register_parquet("vectors", source)
     vectors = session.table("vectors")
     vectors.create_index(
         "stable",
         column="embedding",
         key=["id"],
-        config=relify.IVF(nlist=1),
+        config=parqdb.IVF(nlist=1),
         wait_timeout=timedelta(minutes=2),
     )
     stable_snapshot = vectors.index_status("stable").current_snapshot_id
     session.close()
 
     _interrupt_build(root, "create", "interrupted")
-    reopened = relify.connect(root)
+    reopened = parqdb.connect(root)
     vectors = reopened.table("vectors")
-    with pytest.raises(relify.IndexNotFoundError):
+    with pytest.raises(parqdb.IndexNotFoundError):
         vectors.index_status("interrupted")
     assert vectors.index_status("stable").current_snapshot_id == stable_snapshot
     reopened.close()
 
     _interrupt_build(root, "refresh", "stable")
-    reopened = relify.connect(root)
+    reopened = parqdb.connect(root)
     vectors = reopened.table("vectors")
     status = vectors.index_status("stable")
     assert status.state == "ready"
@@ -60,13 +60,13 @@ def _interrupt_build(root: Path, operation: str, index: str) -> None:
         import sys
         import time
 
-        import relify
+        import parqdb
 
         root, operation, index = sys.argv[1:]
-        config = relify.SessionConfig().set("relify.build.dop", "1")
-        session = relify.connect(root, config=config)
+        config = parqdb.SessionConfig().set("parqdb.build.dop", "1")
+        session = parqdb.connect(root, config=config)
         vectors = session.table("vectors")
-        build_config = relify.IVF(nlist=4096)
+        build_config = parqdb.IVF(nlist=4096)
         if operation == "create":
             vectors.create_index(
                 index,

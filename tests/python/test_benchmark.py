@@ -50,15 +50,15 @@ def test_build_benchmark_smoke(tmp_path: Path) -> None:
     assert result["dataset"]["dimension"] == 4
     assert result["dataset"]["queries"] is None
     assert result["dataset"]["source_parquet_bytes"] > 0
-    relify_result = result["results"][0]
-    assert relify_result["implementation"] == "relify"
-    assert relify_result["preparation_seconds"] > 0
-    assert relify_result["build_seconds"] > 0
-    assert relify_result["build_points_per_second"] > 0
-    assert relify_result["managed_bytes"] > 0
-    assert relify_result["training_rows"] == 64
-    assert len(relify_result["build_seconds_samples"]) == 1
-    assert len(relify_result["preparation_seconds_samples"]) == 1
+    parqdb_result = result["results"][0]
+    assert parqdb_result["implementation"] == "parqdb"
+    assert parqdb_result["preparation_seconds"] > 0
+    assert parqdb_result["build_seconds"] > 0
+    assert parqdb_result["build_points_per_second"] > 0
+    assert parqdb_result["managed_bytes"] > 0
+    assert parqdb_result["training_rows"] == 64
+    assert len(parqdb_result["build_seconds_samples"]) == 1
+    assert len(parqdb_result["preparation_seconds_samples"]) == 1
     assert result["benchmark_revision"]
     assert result["implementation_revision"]
     assert result["software"]["rustc"].startswith("rustc ")
@@ -290,7 +290,7 @@ def test_search_curve_chart_is_valid_svg(tmp_path: Path) -> None:
         "resources": {"cpus": 10, "memory_limit_bytes": 16 * 1024**3},
         "software": {"machine": "arm64"},
         "results": [
-            {"implementation": "relify", "encoding": "lvq8", "search_curve": points},
+            {"implementation": "parqdb", "encoding": "lvq8", "search_curve": points},
             {"implementation": "faiss", "encoding": "sq8", "search_curve": points},
         ],
     }
@@ -319,7 +319,7 @@ def test_search_curve_chart_is_valid_svg(tmp_path: Path) -> None:
     assert "Recall@100K" in encoded
     assert "intra-query parallel" in encoded
     assert "10 vCPUs" in encoded
-    assert "Relify (LVQ8)" in encoded
+    assert "ParqDB (LVQ8)" in encoded
     assert "Faiss (SQ8)" in encoded
 
 
@@ -332,7 +332,7 @@ def test_build_time_chart_is_valid_svg(tmp_path: Path) -> None:
         "resources": {"cpus": 10, "memory_limit_bytes": 16 * 1024**3},
         "software": {"machine": "arm64"},
         "results": [
-            {"implementation": "relify", "encoding": "lvq8", "build_seconds": 28.7},
+            {"implementation": "parqdb", "encoding": "lvq8", "build_seconds": 28.7},
             {"implementation": "faiss", "encoding": "sq8", "build_seconds": 49.3},
         ],
     }
@@ -355,7 +355,7 @@ def test_build_time_chart_is_valid_svg(tmp_path: Path) -> None:
     root = ET.fromstring(encoded)
     assert root.tag == "{http://www.w3.org/2000/svg}svg"
     assert "Persisted IVF Build Time" in encoded
-    assert "Relify (LVQ8)" in encoded
+    assert "ParqDB (LVQ8)" in encoded
     assert "Faiss (SQ8)" in encoded
     assert "49.30s" in encoded
     assert "10 vCPUs" in encoded
@@ -396,25 +396,25 @@ def test_merge_results_requires_one_comparable_run_per_implementation() -> None:
             ],
         }
 
-    relify_run = run("relify", "lvq8")
+    parqdb_run = run("parqdb", "lvq8")
     faiss_run = run("faiss", "sq8")
-    merged = merge([faiss_run, relify_run])
+    merged = merge([faiss_run, parqdb_run])
     assert [result["implementation"] for result in merged["results"]] == [
-        "relify",
+        "parqdb",
         "faiss",
     ]
     assert merged["parameters"]["encodings"] == {
-        "relify": "lvq8",
+        "parqdb": "lvq8",
         "faiss": "sq8",
     }
     assert merged["implementation_revisions"] == {
-        "relify": "relify-revision",
+        "parqdb": "parqdb-revision",
         "faiss": "faiss-revision",
     }
 
     faiss_run["resources"] = {"cpus": 4, "memory_limit_bytes": 1024}
     with pytest.raises(ValueError, match="resources"):
-        merge([relify_run, faiss_run])
+        merge([parqdb_run, faiss_run])
 
 
 def test_committed_benchmark_charts_match_raw_results(tmp_path: Path) -> None:

@@ -6,7 +6,7 @@ claims.
 
 ## Configuration
 
-- Relify source revision: `b07e2892f83000494d9d86d5ed4a775628a5b221`
+- ParqDB source revision: `b07e2892f83000494d9d86d5ed4a775628a5b221`
 - Dataset: 35,167,820 Wikipedia vectors, dimension 384
 - Queries: 100, with published exact GT@20,000
 - IVF: `nlist=8,192`, `k=20,000`
@@ -14,20 +14,20 @@ claims.
 - Sweep: `nprobe=1,2,4,8,16,32,64,128,256,512,1,024,2,048,4,096`
 - Search: one repetition per query after five warmup queries
 - Query resources: 32 CPU workers; memory was not container-limited
-- Software: Python 3.12.2, Rust 1.96.0, Relify 0.1.0, Faiss 1.14.3
+- Software: Python 3.12.2, Rust 1.96.0, ParqDB 0.1.0, Faiss 1.14.3
 
 This run predates the 32 vCPU, 128 GiB query-container specification and should
 be rerun in that container before publication.
 
 ## Method
 
-Relify and Faiss ran in separate processes and reused previously built indexes.
+ParqDB and Faiss ran in separate processes and reused previously built indexes.
 Index loading and five warmup queries are outside query latency. Each point
 contains 100 samples and an exact Recall@20,000 measurement.
 
 ## Results
 
-| nprobe | Relify Recall | Relify p50 ms | Faiss Recall | Faiss p50 ms |
+| nprobe | ParqDB Recall | ParqDB p50 ms | Faiss Recall | Faiss p50 ms |
 |---:|---:|---:|---:|---:|
 | 1 | 0.094114 | 4.282 | 0.097021 | 2.474 |
 | 2 | 0.156719 | 4.681 | 0.158420 | 3.391 |
@@ -43,12 +43,12 @@ contains 100 samples and an exact Recall@20,000 measurement.
 | 2,048 | 0.992684 | 115.001 | 0.993711 | 113.536 |
 | 4,096 | 0.998802 | 217.179 | 0.998920 | 214.265 |
 
-At equal `nprobe`, Relify has slightly lower recall, so latency should be read
+At equal `nprobe`, ParqDB has slightly lower recall, so latency should be read
 together with recall rather than as an equal-work quality comparison.
 
 ## Raw Data
 
-- [`wikipedia-35m-relify.json`](wikipedia-35m-relify.json): Relify result and
+- [`wikipedia-35m-parqdb.json`](wikipedia-35m-parqdb.json): ParqDB result and
   all 1,300 measured query samples.
 - [`wikipedia-35m-faiss.json`](wikipedia-35m-faiss.json): Faiss result and all
   1,300 measured query samples.

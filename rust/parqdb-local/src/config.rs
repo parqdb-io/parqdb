@@ -1,0 +1,566 @@
+use std::any::Any;
+use std::fmt::Display;
+use std::sync::Arc;
+
+use datafusion::common::config::{
+    ConfigEntry, ConfigExtension, ConfigField, ExtensionOptions, Visit,
+};
+use datafusion::common::{DataFusionError, Result as DataFusionResult, config_namespace};
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+use datafusion::prelude::SessionConfig;
+use parqdb_index::{
+    DEFAULT_METADATA_CACHE_BYTES, DEFAULT_METADATA_CACHE_ENTRIES, MetadataCacheConfig,
+};
+
+use crate::Result;
+use crate::runtime::{ParqDBRuntime, QueryAdmissionOptions};
+
+const DEFAULT_MANIFEST_CACHE_ENTRIES: usize = 128;
+const DEFAULT_MANIFEST_CACHE_BYTES: usize = 128 * 1024 * 1024;
+const DEFAULT_CENTROID_CACHE_ENTRIES: usize = 128;
+const DEFAULT_CENTROID_CACHE_BYTES: usize = 256 * 1024 * 1024;
+const DEFAULT_QUERY_CONCURRENCY: usize = 1;
+const DEFAULT_QUERY_QUEUE_CAPACITY: usize = 64;
+
+config_namespace! {
+    /// Options for runtime query admission.
+    #[allow(clippy::struct_field_names)]
+    pub struct ExecutionOptions {
+        /// Target DataFusion execution parallelism for one query.
+        pub query_dop: Option<usize>, default = None
+
+        /// Maximum number of admitted queries.
+        pub query_concurrency: usize, default = DEFAULT_QUERY_CONCURRENCY
+
+        /// Maximum number of queries waiting for admission.
+        pub query_queue_capacity: usize, default = DEFAULT_QUERY_QUEUE_CAPACITY
+
+        /// Maximum admission wait in a human-readable duration such as `500ms` or `30s`.
+        pub query_queue_timeout: String, default = "30s".into()
+    }
+}
+
+config_namespace! {
+    /// Resource options for index construction.
+    pub struct BuildOptions {
+        /// Worker count for one index build, or available parallelism when unset.
+        pub dop: Option<usize>, default = None
+    }
+}
+
+config_namespace! {
+    /// Options for index metadata caching.
+    pub struct MetadataCacheOptions {
+        /// Maximum number of cached metadata documents.
+        pub max_entries: usize, default = DEFAULT_METADATA_CACHE_ENTRIES
+
+        /// Maximum serialized bytes represented by cached metadata documents.
+        pub max_bytes: usize, default = DEFAULT_METADATA_CACHE_BYTES
+    }
+}
+
+config_namespace! {
+    /// Options for the decompressed Parquet Page cache.
+    pub struct ParquetPageCacheOptions {
+        /// Cache capacity in bytes. `None` uses 20% of the effective memory limit; zero disables the cache.
+        pub capacity: Option<usize>, default = None
+    }
+}
+
+config_namespace! {
+    /// Options for Parquet reads.
+    pub struct ParquetOptions {
+        /// Local index I/O mode: `buffered` or `direct`.
+        pub index_io: String, default = "buffered".into()
+
+        /// Decompressed Page-cache options.
+        pub page_cache: ParquetPageCacheOptions, default = ParquetPageCacheOptions::default()
+    }
+}
+
+config_namespace! {
+    /// Options for index metadata.
+    pub struct MetadataOptions {
+        /// Metadata cache options.
+        pub cache: MetadataCacheOptions, default = MetadataCacheOptions::default()
+    }
+}
+
+config_namespace! {
+    /// Options for immutable index-relation manifests.
+    pub struct ManifestCacheOptions {
+        /// Maximum number of cached manifests.
+        pub max_entries: usize, default = DEFAULT_MANIFEST_CACHE_ENTRIES
+
+        /// Maximum estimated bytes retained by cached manifests.
+        pub max_bytes: usize, default = DEFAULT_MANIFEST_CACHE_BYTES
+    }
+}
+
+config_namespace! {
+    /// Options for index-relation manifest planning.
+    pub struct ManifestOptions {
+        /// Manifest cache options.
+        pub cache: ManifestCacheOptions, default = ManifestCacheOptions::default()
+    }
+}
+
+config_namespace! {
+    /// Options for native centroid routing matrices.
+    pub struct CentroidCacheOptions {
+        /// Maximum number of cached centroid matrices.
+        pub max_entries: usize, default = DEFAULT_CENTROID_CACHE_ENTRIES
+
+        /// Maximum bytes retained by cached centroid values.
+        pub max_bytes: usize, default = DEFAULT_CENTROID_CACHE_BYTES
+    }
+}
+
+config_namespace! {
+    /// Options for centroid routing.
+    pub struct CentroidOptions {
+        /// Centroid matrix cache options.
+        pub cache: CentroidCacheOptions, default = CentroidCacheOptions::default()
+    }
+}
+
+config_namespace! {
+    /// Options for query planning and routing.
+    pub struct QueryOptions {
+        /// Index-relation manifest options.
+        pub manifest: ManifestOptions, default = ManifestOptions::default()
+
+        /// Centroid routing options.
+        pub centroid: CentroidOptions, default = CentroidOptions::default()
+    }
+}
+
+/// `ParqDB` options carried by `DataFusion`'s session configuration.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ParqDBConfig {
+    /// Index-construction resource options.
+    pub build: BuildOptions,
+    /// Runtime execution options.
+    pub execution: ExecutionOptions,
+    /// Index metadata options.
+    pub metadata: MetadataOptions,
+    /// Parquet reader options.
+    pub parquet: ParquetOptions,
+    /// Query planning and routing options.
+    pub query: QueryOptions,
+}
+
+impl ConfigExtension for ParqDBConfig {
+    const PREFIX: &'static str = "parqdb";
+}
+
+impl ExtensionOptions for ParqDBConfig {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn cloned(&self) -> Box<dyn ExtensionOptions> {
+        Box::new(self.clone())
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> DataFusionResult<()> {
+        ConfigField::set(self, key, value)
+    }
+
+    fn entries(&self) -> Vec<ConfigEntry> {
+        struct EntryVisitor(Vec<ConfigEntry>);
+
+        impl Visit for EntryVisitor {
+            fn some<V: Display>(&mut self, key: &str, value: V, description: &'static str) {
+                self.0.push(ConfigEntry {
+                    key: key.to_owned(),
+                    value: Some(value.to_string()),
+                    description,
+                });
+            }
+
+            fn none(&mut self, key: &str, description: &'static str) {
+                self.0.push(ConfigEntry {
+                    key: key.to_owned(),
+                    value: None,
+                    description,
+                });
+            }
+        }
+
+        let mut visitor = EntryVisitor(Vec::new());
+        ConfigField::visit(self, &mut visitor, "parqdb", "");
+        visitor.0
+    }
+}
+
+impl ConfigField for ParqDBConfig {
+    fn visit<V: Visit>(&self, visitor: &mut V, key_prefix: &str, _description: &'static str) {
+        self.build.visit(
+            visitor,
+            &format!("{key_prefix}.build"),
+            "Index-construction resource options.",
+        );
+        self.execution.visit(
+            visitor,
+            &format!("{key_prefix}.execution"),
+            "Runtime execution options.",
+        );
+        self.metadata.visit(
+            visitor,
+            &format!("{key_prefix}.metadata"),
+            "Index metadata options.",
+        );
+        self.parquet.visit(
+            visitor,
+            &format!("{key_prefix}.parquet"),
+            "Parquet reader options.",
+        );
+        self.query.visit(
+            visitor,
+            &format!("{key_prefix}.query"),
+            "Query planning and routing options.",
+        );
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> DataFusionResult<()> {
+        let (section, remainder) = key.split_once('.').unwrap_or((key, ""));
+        match section {
+            "build" => self.build.set(remainder, value),
+            "execution" => self.execution.set(remainder, value),
+            "metadata" => self.metadata.set(remainder, value),
+            "parquet" => self.parquet.set(remainder, value),
+            "query" => self.query.set(remainder, value),
+            _ => Err(DataFusionError::Configuration(format!(
+                "Config value \"{section}\" not found on ParqDBConfig"
+            ))),
+        }
+    }
+}
+
+/// `DataFusion` initialization options for one local `ParqDB` session.
+#[derive(Clone)]
+pub struct LocalSessionOptions {
+    config: SessionConfig,
+    runtime: LocalRuntimeOptions,
+}
+
+#[derive(Clone)]
+enum LocalRuntimeOptions {
+    Automatic,
+    Builder(RuntimeEnvBuilder),
+    Shared(Arc<ParqDBRuntime>),
+}
+
+impl LocalSessionOptions {
+    /// Creates options using `ParqDB`'s automatically bounded runtime.
+    #[must_use]
+    pub const fn automatic(config: SessionConfig) -> Self {
+        Self {
+            config,
+            runtime: LocalRuntimeOptions::Automatic,
+        }
+    }
+
+    /// Creates options from `DataFusion`'s native configuration types.
+    #[must_use]
+    pub const fn new(config: SessionConfig, runtime: RuntimeEnvBuilder) -> Self {
+        Self {
+            config,
+            runtime: LocalRuntimeOptions::Builder(runtime),
+        }
+    }
+
+    /// Creates session options that reuse process-scoped execution resources.
+    #[must_use]
+    pub fn with_runtime(config: SessionConfig, runtime: Arc<ParqDBRuntime>) -> Self {
+        Self {
+            config,
+            runtime: LocalRuntimeOptions::Shared(runtime),
+        }
+    }
+
+    pub(crate) fn into_parts(self) -> Result<(SessionConfig, Arc<ParqDBRuntime>)> {
+        let mut config = ensure_parqdb_config(self.config);
+        if let Some(query_dop) = query_dop(&config)? {
+            config = config.with_target_partitions(query_dop);
+        }
+        let _ = build_dop(&config)?;
+        let _ = index_io_mode(&config)?;
+        let runtime = match self.runtime {
+            LocalRuntimeOptions::Automatic => Arc::new(ParqDBRuntime::automatic(
+                parquet_page_cache_capacity(&config),
+                query_admission_options(&config)?,
+            )?),
+            LocalRuntimeOptions::Builder(builder) => Arc::new(ParqDBRuntime::with_query_admission(
+                builder,
+                parquet_page_cache_capacity(&config),
+                query_admission_options(&config)?,
+            )?),
+            LocalRuntimeOptions::Shared(runtime) => runtime,
+        };
+        Ok((config, runtime))
+    }
+}
+
+impl Default for LocalSessionOptions {
+    fn default() -> Self {
+        Self::automatic(parqdb_session_config())
+    }
+}
+
+/// Creates a `DataFusion` session configuration with `ParqDB` options installed.
+#[must_use]
+pub fn parqdb_session_config() -> SessionConfig {
+    ensure_parqdb_config(SessionConfig::new())
+}
+
+fn ensure_parqdb_config(mut config: SessionConfig) -> SessionConfig {
+    if config.options().extensions.get::<ParqDBConfig>().is_none() {
+        config
+            .options_mut()
+            .extensions
+            .insert(ParqDBConfig::default());
+    }
+    config
+}
+
+pub(crate) fn metadata_cache_config(config: &SessionConfig) -> MetadataCacheConfig {
+    let cache = &config
+        .options()
+        .extensions
+        .get::<ParqDBConfig>()
+        .expect("ParqDB config extension must be installed")
+        .metadata
+        .cache;
+    MetadataCacheConfig::new(cache.max_entries, cache.max_bytes)
+}
+
+pub(crate) fn parquet_page_cache_capacity(config: &SessionConfig) -> Option<usize> {
+    config
+        .options()
+        .extensions
+        .get::<ParqDBConfig>()
+        .expect("ParqDB config extension must be installed")
+        .parquet
+        .page_cache
+        .capacity
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IndexIoMode {
+    Buffered,
+    Direct,
+}
+
+pub(crate) fn index_io_mode(config: &SessionConfig) -> Result<IndexIoMode> {
+    let mode = config
+        .options()
+        .extensions
+        .get::<ParqDBConfig>()
+        .expect("ParqDB config extension must be installed")
+        .parquet
+        .index_io
+        .as_str();
+    match mode {
+        "buffered" => Ok(IndexIoMode::Buffered),
+        "direct" => Ok(IndexIoMode::Direct),
+        _ => Err(crate::Error::InvalidArgument(format!(
+            "parqdb.parquet.index_io must be 'buffered' or 'direct', got {mode:?}"
+        ))),
+    }
+}
+
+pub(crate) fn query_admission_options(config: &SessionConfig) -> Result<QueryAdmissionOptions> {
+    let execution = &config
+        .options()
+        .extensions
+        .get::<ParqDBConfig>()
+        .expect("ParqDB config extension must be installed")
+        .execution;
+    let queue_timeout =
+        humantime::parse_duration(&execution.query_queue_timeout).map_err(|error| {
+            crate::Error::InvalidArgument(format!(
+                "invalid parqdb.execution.query_queue_timeout: {error}"
+            ))
+        })?;
+    Ok(QueryAdmissionOptions {
+        max_active: execution.query_concurrency,
+        max_queued: execution.query_queue_capacity,
+        queue_timeout,
+    })
+}
+
+pub(crate) fn build_dop(config: &SessionConfig) -> Result<Option<usize>> {
+    let dop = config
+        .options()
+        .extensions
+        .get::<ParqDBConfig>()
+        .expect("ParqDB config extension must be installed")
+        .build
+        .dop;
+    if dop == Some(0) {
+        return Err(crate::Error::InvalidArgument(
+            "parqdb.build.dop must be positive".into(),
+        ));
+    }
+    Ok(dop)
+}
+
+fn query_dop(config: &SessionConfig) -> Result<Option<usize>> {
+    let query_dop = config
+        .options()
+        .extensions
+        .get::<ParqDBConfig>()
+        .expect("ParqDB config extension must be installed")
+        .execution
+        .query_dop;
+    if query_dop == Some(0) {
+        return Err(crate::Error::InvalidArgument(
+            "parqdb.execution.query_dop must be positive".into(),
+        ));
+    }
+    Ok(query_dop)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct IndexRelationCacheConfig {
+    pub(crate) manifest_max_entries: usize,
+    pub(crate) manifest_max_bytes: usize,
+    pub(crate) centroid_max_entries: usize,
+    pub(crate) centroid_max_bytes: usize,
+}
+
+impl Default for IndexRelationCacheConfig {
+    fn default() -> Self {
+        Self {
+            manifest_max_entries: DEFAULT_MANIFEST_CACHE_ENTRIES,
+            manifest_max_bytes: DEFAULT_MANIFEST_CACHE_BYTES,
+            centroid_max_entries: DEFAULT_CENTROID_CACHE_ENTRIES,
+            centroid_max_bytes: DEFAULT_CENTROID_CACHE_BYTES,
+        }
+    }
+}
+
+pub(crate) fn index_relation_cache_config(config: &SessionConfig) -> IndexRelationCacheConfig {
+    let query = &config
+        .options()
+        .extensions
+        .get::<ParqDBConfig>()
+        .expect("ParqDB config extension must be installed")
+        .query;
+    IndexRelationCacheConfig {
+        manifest_max_entries: query.manifest.cache.max_entries,
+        manifest_max_bytes: query.manifest.cache.max_bytes,
+        centroid_max_entries: query.centroid.cache.max_entries,
+        centroid_max_bytes: query.centroid.cache.max_bytes,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parqdb_config_uses_hierarchical_datafusion_keys() {
+        let config = parqdb_session_config()
+            .set_str("parqdb.execution.query_dop", "2")
+            .set_str("parqdb.execution.query_concurrency", "3")
+            .set_str("parqdb.execution.query_queue_capacity", "5")
+            .set_str("parqdb.execution.query_queue_timeout", "750ms")
+            .set_str("parqdb.build.dop", "4")
+            .set_str("parqdb.metadata.cache.max_entries", "7")
+            .set_str("parqdb.metadata.cache.max_bytes", "4096")
+            .set_str("parqdb.parquet.index_io", "buffered")
+            .set_str("parqdb.parquet.page_cache.capacity", "8192")
+            .set_str("parqdb.query.manifest.cache.max_entries", "3")
+            .set_str("parqdb.query.manifest.cache.max_bytes", "1024")
+            .set_str("parqdb.query.centroid.cache.max_entries", "5")
+            .set_str("parqdb.query.centroid.cache.max_bytes", "2048");
+        let (config, _) = LocalSessionOptions::new(config, RuntimeEnvBuilder::default())
+            .into_parts()
+            .unwrap();
+
+        assert_eq!(
+            query_admission_options(&config).unwrap(),
+            QueryAdmissionOptions {
+                max_active: 3,
+                max_queued: 5,
+                queue_timeout: std::time::Duration::from_millis(750),
+            }
+        );
+        assert_eq!(config.target_partitions(), 2);
+        assert_eq!(build_dop(&config).unwrap(), Some(4));
+        assert_eq!(index_io_mode(&config).unwrap(), IndexIoMode::Buffered);
+        assert_eq!(
+            metadata_cache_config(&config),
+            MetadataCacheConfig::new(7, 4096)
+        );
+        assert_eq!(parquet_page_cache_capacity(&config), Some(8192));
+        assert_eq!(
+            index_relation_cache_config(&config),
+            IndexRelationCacheConfig {
+                manifest_max_entries: 3,
+                manifest_max_bytes: 1024,
+                centroid_max_entries: 5,
+                centroid_max_bytes: 2048,
+            }
+        );
+    }
+
+    #[test]
+    fn session_rejects_unknown_index_io_mode() {
+        let config = parqdb_session_config().set_str("parqdb.parquet.index_io", "unknown");
+        let error = LocalSessionOptions::new(config, RuntimeEnvBuilder::default())
+            .into_parts()
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("parqdb.parquet.index_io"));
+    }
+
+    #[test]
+    fn prepared_parqdb_config_accepts_runtime_mutation() {
+        let (mut config, _) = LocalSessionOptions::default().into_parts().unwrap();
+        config
+            .options_mut()
+            .set("parqdb.metadata.cache.max_entries", "7")
+            .unwrap();
+
+        assert_eq!(metadata_cache_config(&config).max_entries, 7);
+    }
+
+    #[test]
+    fn invalid_query_admission_config_fails_session_initialization() {
+        let zero_concurrency =
+            parqdb_session_config().set_str("parqdb.execution.query_concurrency", "0");
+        assert!(matches!(
+            LocalSessionOptions::new(zero_concurrency, RuntimeEnvBuilder::default()).into_parts(),
+            Err(crate::Error::InvalidArgument(message))
+                if message.contains("at least one active slot")
+        ));
+
+        let zero_dop = parqdb_session_config().set_str("parqdb.execution.query_dop", "0");
+        assert!(matches!(
+            LocalSessionOptions::new(zero_dop, RuntimeEnvBuilder::default()).into_parts(),
+            Err(crate::Error::InvalidArgument(message)) if message.contains("query_dop")
+        ));
+
+        let zero_build_dop = parqdb_session_config().set_str("parqdb.build.dop", "0");
+        assert!(matches!(
+            LocalSessionOptions::new(zero_build_dop, RuntimeEnvBuilder::default()).into_parts(),
+            Err(crate::Error::InvalidArgument(message)) if message.contains("build.dop")
+        ));
+
+        let invalid_timeout =
+            parqdb_session_config().set_str("parqdb.execution.query_queue_timeout", "soon");
+        assert!(matches!(
+            LocalSessionOptions::new(invalid_timeout, RuntimeEnvBuilder::default()).into_parts(),
+            Err(crate::Error::InvalidArgument(message))
+                if message.contains("query_queue_timeout")
+        ));
+    }
+}

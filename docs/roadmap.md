@@ -1,6 +1,6 @@
 # Roadmap
 
-Relify develops one narrow path at a time. Current priorities follow the
+ParqDB develops one narrow path at a time. Current priorities follow the
 [unified embedded and client/server API RFC](rfcs/20260815-unified-embedded-client-server-api.md).
 
 ## Current Foundation

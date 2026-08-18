@@ -1,1 +1,1 @@
-"""Reproducible Relify benchmarks."""
+"""Reproducible ParqDB benchmarks."""

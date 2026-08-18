@@ -6,9 +6,9 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import parqdb
 import pyarrow.parquet as pq
 import pytest
-import relify
 from _support import register_source
 
 FIXTURES = Path(__file__).parents[2] / "spec" / "fixtures" / "v1"
@@ -127,7 +127,7 @@ def reference_lvq_search(
     return sorted(candidates, key=lambda row: row["_distance"])[: case["k"]]
 
 
-def register_fixture(session: relify.Session, fixture: Path, name: str) -> None:
+def register_fixture(session: parqdb.Session, fixture: Path, name: str) -> None:
     destination = session.root / fixture.name
     shutil.copyfile(fixture, destination)
     session._indexes.register(name, destination.as_uri())
@@ -218,7 +218,7 @@ def localize_lvq_fixture(warehouse: Path, directory: Path) -> tuple[Path, Path]:
 def test_valid_metadata_fixture_is_accepted_by_the_native_reader(
     tmp_path: Path,
 ) -> None:
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     register_fixture(session, VALID / "metadata.json", "fixture")
 
     entry = session._indexes.load("fixture")
@@ -229,7 +229,7 @@ def test_valid_metadata_fixture_is_accepted_by_the_native_reader(
 def test_composite_metadata_fixture_is_accepted_by_the_native_reader(
     tmp_path: Path,
 ) -> None:
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     register_fixture(session, COMPOSITE / "metadata.json", "composite")
 
     entry = session._indexes.load("composite")
@@ -243,7 +243,7 @@ def test_lvq_metadata_fixtures_are_accepted_by_the_native_reader(
     tmp_path: Path,
     encoding: str,
 ) -> None:
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     register_fixture(session, VALID / encoding / "metadata.json", encoding)
 
     entry = session._indexes.load(encoding)
@@ -258,7 +258,7 @@ def test_lvq_pyarrow_fixtures_are_queryable_by_the_native_reader(
     encoding: str,
 ) -> None:
     directory = VALID / encoding
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     source, metadata = localize_lvq_fixture(session.root, directory)
     documents = register_source(session, source, "documents")
     session._indexes.register(
@@ -292,9 +292,9 @@ def test_invalid_metadata_fixtures_are_rejected(
     tmp_path: Path,
     case: dict[str, str],
 ) -> None:
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
 
-    with pytest.raises(relify.InvalidMetadataError):
+    with pytest.raises(parqdb.InvalidMetadataError):
         register_fixture(session, INVALID / case["file"], "invalid")
 
 

@@ -4,13 +4,13 @@ from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
+import parqdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-import relify
 from _support import build_index, register_source, vector_type, write_vectors
 
-SOURCE = relify.TableIdentifier("datafusion", ("public",), "documents")
+SOURCE = parqdb.TableIdentifier("datafusion", ("public",), "documents")
 
 
 @pytest.mark.parametrize(
@@ -23,14 +23,14 @@ SOURCE = relify.TableIdentifier("datafusion", ("public",), "documents")
 )
 def test_table_search_accepts_one_dimensional_vector_inputs(
     query: object,
-    indexed_documents: tuple[relify.Session, relify.SourceTable],
+    indexed_documents: tuple[parqdb.Session, parqdb.SourceTable],
 ) -> None:
     _, documents = indexed_documents
     assert documents.search(cast(Any, query)).query == (0.0, 1.0)
 
 
 def test_table_search_uses_array_like_tolist(
-    indexed_documents: tuple[relify.Session, relify.SourceTable],
+    indexed_documents: tuple[parqdb.Session, parqdb.SourceTable],
 ) -> None:
     class ArrayLike:
         ndim = 1
@@ -46,7 +46,7 @@ def test_table_search_uses_array_like_tolist(
 
 
 def test_table_search_rejects_batch_query_arrays(
-    indexed_documents: tuple[relify.Session, relify.SourceTable],
+    indexed_documents: tuple[parqdb.Session, parqdb.SourceTable],
 ) -> None:
     _, documents = indexed_documents
     query = np.asarray([[0.0, 1.0]], dtype=np.float32)
@@ -57,20 +57,20 @@ def test_table_search_rejects_batch_query_arrays(
 
 @pytest.mark.parametrize("value", [True, 0, -1, 1.5, "10", None])
 def test_vector_query_limit_requires_a_positive_integer(value: object) -> None:
-    query = relify.VectorQuery(source=SOURCE, query=(1.0, 2.0))
+    query = parqdb.VectorQuery(source=SOURCE, query=(1.0, 2.0))
     with pytest.raises(ValueError, match="limit must be a positive integer"):
         query.limit(cast(Any, value))
 
 
 @pytest.mark.parametrize("value", [True, 0, -1, 1.5, "10", None])
 def test_vector_query_nprobes_requires_a_positive_integer(value: object) -> None:
-    query = relify.VectorQuery(source=SOURCE, query=(1.0, 2.0))
+    query = parqdb.VectorQuery(source=SOURCE, query=(1.0, 2.0))
     with pytest.raises(ValueError, match="nprobes must be a positive integer"):
         query.nprobes(cast(Any, value))
 
 
 def test_vector_query_builder_is_immutable() -> None:
-    query = relify.VectorQuery(source=SOURCE, query=(1.0, 2.0))
+    query = parqdb.VectorQuery(source=SOURCE, query=(1.0, 2.0))
 
     configured = (
         query.select(["id"]).where("id > 10").limit(5).nprobes(3).bypass_vector_index()
@@ -89,25 +89,25 @@ def test_vector_query_builder_is_immutable() -> None:
 
 
 def test_vector_query_is_portable_across_sessions_with_the_same_table(
-    indexed_documents: tuple[relify.Session, relify.SourceTable],
+    indexed_documents: tuple[parqdb.Session, parqdb.SourceTable],
 ) -> None:
     session, documents = indexed_documents
     query = documents.search([0.0, 0.0]).limit(1).select(["id"])
 
-    assert query.source == relify.TableIdentifier(
+    assert query.source == parqdb.TableIdentifier(
         "datafusion",
         ("public",),
         "documents",
     )
     assert not hasattr(query, "table")
 
-    reopened = relify.connect(session.root)
+    reopened = parqdb.connect(session.root)
     assert reopened.to_arrow(query)["id"].to_pylist() == [0]
 
 
 @pytest.mark.parametrize("value", [None, 1, True, [], object()])
 def test_vector_query_where_requires_a_string(value: object) -> None:
-    query = relify.VectorQuery(source=SOURCE, query=(1.0, 2.0))
+    query = parqdb.VectorQuery(source=SOURCE, query=(1.0, 2.0))
 
     with pytest.raises(TypeError, match="predicate must be a string"):
         query.where(cast(Any, value))
@@ -115,7 +115,7 @@ def test_vector_query_where_requires_a_string(value: object) -> None:
 
 @pytest.mark.parametrize("value", ["", " ", "\t\n"])
 def test_vector_query_where_rejects_empty_predicates(value: str) -> None:
-    query = relify.VectorQuery(source=SOURCE, query=(1.0, 2.0))
+    query = parqdb.VectorQuery(source=SOURCE, query=(1.0, 2.0))
 
     with pytest.raises(ValueError, match="predicate must not be empty"):
         query.where(value)
@@ -124,22 +124,22 @@ def test_vector_query_where_rejects_empty_predicates(value: str) -> None:
 @pytest.mark.parametrize(
     ("query", "nprobe", "projection", "error_type", "message"),
     [
-        ([0.0], None, None, relify.InvalidArgumentError, "exactly 2"),
-        ([float("nan"), 0.0], None, None, relify.InvalidArgumentError, "finite"),
-        ([0.0, 0.0], 3, None, relify.InvalidArgumentError, "nprobe"),
-        ([0.0, 0.0], None, [], relify.InvalidArgumentError, "projection"),
-        ([0.0, 0.0], None, ["id", "id"], relify.InvalidArgumentError, "projection"),
+        ([0.0], None, None, parqdb.InvalidArgumentError, "exactly 2"),
+        ([float("nan"), 0.0], None, None, parqdb.InvalidArgumentError, "finite"),
+        ([0.0, 0.0], 3, None, parqdb.InvalidArgumentError, "nprobe"),
+        ([0.0, 0.0], None, [], parqdb.InvalidArgumentError, "projection"),
+        ([0.0, 0.0], None, ["id", "id"], parqdb.InvalidArgumentError, "projection"),
         (
             [0.0, 0.0],
             None,
             ["missing"],
-            relify.InvalidArgumentError,
+            parqdb.InvalidArgumentError,
             "column not found",
         ),
     ],
 )
 def test_query_validation_reaches_native_execution(
-    indexed_documents: tuple[relify.Session, relify.SourceTable],
+    indexed_documents: tuple[parqdb.Session, parqdb.SourceTable],
     query: list[float],
     nprobe: int | None,
     projection: list[str] | None,
@@ -158,15 +158,15 @@ def test_query_validation_reaches_native_execution(
 
 
 def test_index_selection_reports_missing_and_mismatched_indexes(
-    indexed_documents: tuple[relify.Session, relify.SourceTable],
+    indexed_documents: tuple[parqdb.Session, parqdb.SourceTable],
 ) -> None:
     session, documents = indexed_documents
 
-    with pytest.raises(relify.IndexNotFoundError):
+    with pytest.raises(parqdb.IndexNotFoundError):
         session.to_arrow(documents.search([0.0, 0.0], index="missing"))
-    with pytest.raises(relify.IndexNotFoundError):
+    with pytest.raises(parqdb.IndexNotFoundError):
         session.to_arrow(documents.search([0.0, 0.0], column="missing"))
-    with pytest.raises(relify.IndexNotFoundError):
+    with pytest.raises(parqdb.IndexNotFoundError):
         session.to_arrow(
             documents.search(
                 [0.0, 0.0],
@@ -196,13 +196,13 @@ def test_multiple_indexes_require_disambiguation(tmp_path: Path) -> None:
         ),
         source,
     )
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
     build_index(vectors, "index_a", column="embedding_a")
     build_index(vectors, "index_b", column="embedding_b")
 
     assert [index.name for index in vectors.list_indexes()] == ["index_a", "index_b"]
-    with pytest.raises(relify.AmbiguousIndexError, match="index_a, index_b"):
+    with pytest.raises(parqdb.AmbiguousIndexError, match="index_a, index_b"):
         session.to_arrow(vectors.search([0.0, 0.0]))
 
     from_column = session.to_arrow(
@@ -218,11 +218,11 @@ def test_explicit_index_remains_bound_to_its_source(tmp_path: Path) -> None:
     second = tmp_path / "second.parquet"
     write_vectors(first, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
     write_vectors(second, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     first_table = register_source(session, first, "first")
     build_index(first_table)
 
-    with pytest.raises(relify.IndexNotFoundError):
+    with pytest.raises(parqdb.IndexNotFoundError):
         session.to_arrow(
             register_source(session, second, "second").search(
                 [0.0, 0.0],
@@ -232,7 +232,7 @@ def test_explicit_index_remains_bound_to_its_source(tmp_path: Path) -> None:
 
 
 def test_where_filters_source_rows_before_top_k(
-    indexed_documents: tuple[relify.Session, relify.SourceTable],
+    indexed_documents: tuple[parqdb.Session, parqdb.SourceTable],
 ) -> None:
     session, documents = indexed_documents
 
@@ -244,7 +244,7 @@ def test_where_filters_source_rows_before_top_k(
 
 
 def test_where_supports_source_string_columns(
-    indexed_documents: tuple[relify.Session, relify.SourceTable],
+    indexed_documents: tuple[parqdb.Session, parqdb.SourceTable],
 ) -> None:
     session, documents = indexed_documents
 
@@ -281,7 +281,7 @@ def test_where_excludes_null_predicate_results(tmp_path: Path) -> None:
         ),
         source,
     )
-    session = relify.connect(tmp_path / "relify-data")
+    session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
     build_index(vectors, nlist=1)
 
@@ -293,16 +293,16 @@ def test_where_excludes_null_predicate_results(tmp_path: Path) -> None:
 
 
 def test_where_rejects_invalid_backend_expressions(
-    indexed_documents: tuple[relify.Session, relify.SourceTable],
+    indexed_documents: tuple[parqdb.Session, parqdb.SourceTable],
 ) -> None:
     session, documents = indexed_documents
 
-    with pytest.raises(relify.InvalidArgumentError, match="invalid filter"):
+    with pytest.raises(parqdb.InvalidArgumentError, match="invalid filter"):
         session.to_arrow(documents.search([0.0, 0.0]).where("missing = 1"))
 
 
 def test_arrow_results_can_be_registered_in_the_native_context(
-    indexed_documents: tuple[relify.Session, relify.SourceTable],
+    indexed_documents: tuple[parqdb.Session, parqdb.SourceTable],
 ) -> None:
     session, documents = indexed_documents
     query = documents.search([0.0, 0.0]).limit(1).select(["id"])

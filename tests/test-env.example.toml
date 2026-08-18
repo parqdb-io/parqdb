@@ -2,15 +2,15 @@
 # Omit any section for a capability that should be skipped.
 
 [s3]
-uri = "s3://relify-test"
+uri = "s3://parqdb-test"
 endpoint = "http://127.0.0.1:9000"
 access_key = "${AWS_ACCESS_KEY_ID}"
 secret_key = "${AWS_SECRET_ACCESS_KEY}"
 region = "us-east-1"
 
 [hdfs]
-uri = "hdfs://127.0.0.1:9000/relify-test"
+uri = "hdfs://127.0.0.1:9000/parqdb-test"
 
 [iceberg]
 name = "lakehouse"
-properties_json = "${RELIFY_ICEBERG_PROPERTIES}"
+properties_json = "${PARQDB_ICEBERG_PROPERTIES}"

@@ -11,9 +11,9 @@ from typing import Any
 
 WIDTH = 1280
 HEIGHT = 430
-IMPLEMENTATIONS = ("relify", "faiss")
-COLORS = {"relify": "#0f766e", "faiss": "#f59e0b"}
-LABELS = {"relify": "Relify", "faiss": "Faiss"}
+IMPLEMENTATIONS = ("parqdb", "faiss")
+COLORS = {"parqdb": "#0f766e", "faiss": "#f59e0b"}
+LABELS = {"parqdb": "ParqDB", "faiss": "Faiss"}
 
 
 def implementation_label(implementation: str, result: dict[str, Any]) -> str:
@@ -36,7 +36,7 @@ def validate(run: dict[str, Any]) -> None:
         raise ValueError("benchmark result schema_version must be 1")
     results = results_by_implementation(run)
     if set(results) != set(IMPLEMENTATIONS):
-        raise ValueError("build chart requires Relify and Faiss results")
+        raise ValueError("build chart requires ParqDB and Faiss results")
     if any(result["build_seconds"] <= 0 for result in results.values()):
         raise ValueError("build time must be positive")
 
@@ -68,7 +68,7 @@ def render(run: dict[str, Any]) -> str:
     plot_left = 224
     plot_right = 1190
     plot_width = plot_right - plot_left
-    row_y = {"relify": 190, "faiss": 280}
+    row_y = {"parqdb": 190, "faiss": 280}
     bar_height = 46
     excludes_preparation = all(
         "preparation_seconds" in result for result in results.values()

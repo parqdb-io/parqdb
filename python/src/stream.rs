@@ -6,10 +6,10 @@ use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
 use arrow::ffi_stream::FFI_ArrowArrayStream;
 use arrow::pyarrow::ToPyArrow;
+use parqdb_local::ManagedQueryStream;
 use pyo3::exceptions::PyStopAsyncIteration;
 use pyo3::prelude::*;
 use pyo3::types::PyCapsule;
-use relify_local::ManagedQueryStream;
 use tokio::runtime::Runtime;
 use tokio::sync::Mutex;
 use tokio::task::AbortHandle;
@@ -52,7 +52,7 @@ impl PyNativeQueryStream {
     ) -> PyResult<Bound<'py, PyCapsule>> {
         if requested_schema.is_some() {
             return Err(pyo3::exceptions::PyNotImplementedError::new_err(
-                "schema projection is not supported for Relify query streams",
+                "schema projection is not supported for ParqDB query streams",
             ));
         }
         let stream = self.runtime.block_on(async {
@@ -106,7 +106,7 @@ impl PyNativeQueryStream {
                 }
                 Err(error) => {
                     cancel_on_drop.disarm();
-                    let error = relify_local::Error::from(error);
+                    let error = parqdb_local::Error::from(error);
                     Err(core_error(&error))
                 }
             }
