@@ -208,7 +208,7 @@
         <h1>THIS QUERY NEVER HITS A VECTOR DATABASE.</h1>
         <p class="boot-copy">It runs in this tab. ParqDB reads selected Parquet byte ranges straight from object storage, ranks candidates in WASM, and accounts for every transferred byte below. <b>Change the query and execute it yourself.</b></p>
         <div class="routes" aria-label="Architecture comparison">
-          <div class="route legacy"><span class="route-name">LEGACY</span><span class="route-path">browser ──RPC──&gt; <del>vector DB</del> ──GET──&gt; object storage</span><span class="route-state">VECTOR DB ×</span></div>
+          <div class="route legacy"><span class="route-name">LEGACY</span><span class="route-path">browser ──<del>RPC──&gt; vector DB</del> ──GET──&gt; object storage</span><span class="route-state">RPC + DB ×</span></div>
           <div class="route direct"><span class="route-name">PARQDB</span><span class="route-path">browser + WASM ──HTTP RANGE──&gt; object storage / Parquet</span><span class="route-state">DIRECT</span></div>
         </div>
       </section>
