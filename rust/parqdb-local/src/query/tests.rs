@@ -209,7 +209,7 @@ fn datafusion_cluster_filter_builds_relational_centroid_top_k() {
 
     assert!(sql.contains("FROM \"centroids\" AS c"));
     assert!(sql.contains(
-        "ORDER BY parqdb_squared_l2(c.\"centroid\", make_array(CAST(0 AS REAL), CAST(0 AS REAL))) \
+        "ORDER BY parqdb_lvq8_l2(c.\"code\", c.\"offset\", c.\"scale\", make_array(CAST(0 AS REAL), CAST(0 AS REAL))) \
          ASC, c.\"cid\" ASC"
     ));
     assert!(sql.contains("LIMIT 64"));
@@ -235,6 +235,7 @@ async fn relational_cluster_routing_matches_native_routing() {
         selected_cluster_ids(&snapshot, &artifacts.centroids, &[0.0, 0.0], Some(1)).unwrap();
     let context = SessionContext::new();
     context.register_udf(squared_l2_udf());
+    context.register_udf(lvq_squared_l2_udf(LvqBits::Eight));
     context.register_batch("source", source).unwrap();
     context
         .register_batch("centroids", artifacts.centroids)

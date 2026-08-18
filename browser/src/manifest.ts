@@ -37,6 +37,7 @@ export interface PackageManifest {
   hierarchy: {
     rootCount: number
     cidOffsets: number[]
+    centroidEncoding: 'lvq8'
     roots: PackageObject
     centroids: PackageObject
   }
@@ -89,7 +90,7 @@ export function parseManifest(bytes: ArrayBuffer): PackageManifest {
   }
 
   const hierarchy = object(root.hierarchy, 'hierarchy')
-  exactKeys(hierarchy, ['root-count', 'cid-offsets', 'roots', 'centroids'])
+  exactKeys(hierarchy, ['root-count', 'cid-offsets', 'centroid-encoding', 'roots', 'centroids'])
   const rootCount = integer(hierarchy['root-count'], 'hierarchy.root-count', 1)
   const cidOffsets = array(hierarchy['cid-offsets'], 'hierarchy.cid-offsets').map(
     (entry, position) => integer(entry, `hierarchy.cid-offsets[${position}]`, 0),
@@ -102,6 +103,8 @@ export function parseManifest(bytes: ArrayBuffer): PackageManifest {
   ) {
     invalid('cid-offsets must strictly partition [0, nlist)')
   }
+  const centroidEncoding = string(hierarchy['centroid-encoding'], 'hierarchy.centroid-encoding')
+  if (centroidEncoding !== 'lvq8') invalid('static packages require lvq8 leaf centroids')
   const roots = packageObject(hierarchy.roots, 'hierarchy.roots')
   const centroids = packageObject(hierarchy.centroids, 'hierarchy.centroids')
   if (roots.path === centroids.path) invalid('roots and centroids paths must differ')
@@ -143,7 +146,7 @@ export function parseManifest(bytes: ArrayBuffer): PackageManifest {
     formatVersion: 1,
     packageUuid,
     index: { metric, postingEncoding, dimension, nlist, ntotal, sourceKeyFields },
-    hierarchy: { rootCount, cidOffsets, roots, centroids },
+    hierarchy: { rootCount, cidOffsets, centroidEncoding, roots, centroids },
     postings: { files },
   }
 }

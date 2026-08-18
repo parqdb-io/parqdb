@@ -169,17 +169,23 @@ def write_fixture(encoding: str) -> None:
             ]
         ),
     )
+    centroid_values = [[1.0, 1.0, 1.0], [10.0, 11.0, 12.0]]
+    encoded_centroids = [encode(vector, 8) for vector in centroid_values]
     centroids = pa.Table.from_arrays(
         [
             pa.array([0, 1], type=pa.int32()),
             pa.array([0, 0], type=pa.int32()),
-            pa.array([[1.0, 1.0, 1.0], [10.0, 11.0, 12.0]], type=vector_type),
+            pa.array([row[0] for row in encoded_centroids], type=pa.float32()),
+            pa.array([row[1] for row in encoded_centroids], type=pa.float32()),
+            pa.array([row[2] for row in encoded_centroids], type=pa.binary()),
         ],
         schema=pa.schema(
             [
                 pa.field("cid", pa.int32(), nullable=False),
                 pa.field("cid_bucket", pa.int32(), nullable=False),
-                pa.field("centroid", vector_type, nullable=False),
+                pa.field("offset", pa.float32(), nullable=False),
+                pa.field("scale", pa.float32(), nullable=False),
+                pa.field("code", pa.binary(), nullable=False),
             ]
         ),
     )
@@ -290,6 +296,7 @@ def write_fixture(encoding: str) -> None:
             "hierarchy": {
                 "root-count": 1,
                 "cid-offsets": [0, 2],
+                "centroid-encoding": "lvq8",
                 "roots": static_object("roots.parquet"),
                 "centroids": static_object("centroids.parquet"),
             },

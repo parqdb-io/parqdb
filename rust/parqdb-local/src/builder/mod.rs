@@ -843,6 +843,7 @@ async fn write_static_package(
                         .map_err(|_| Error::InvalidSchema("CID offset exceeds int32".into()))
                 })
                 .collect::<Result<Vec<_>>>()?,
+            centroid_encoding: PostingEncoding::Lvq8,
             roots,
             centroids,
         },
@@ -1048,7 +1049,7 @@ fn assignment_udf(
     let navigator = Arc::new(CentroidNavigator::new_parallel(
         trained.nlist,
         trained.dimension,
-        Arc::clone(&trained.centroids),
+        &trained.centroids,
         parallel,
     )?);
     Ok(ScalarUDF::new_from_impl(AssignIvf {
@@ -1365,27 +1366,26 @@ fn centroids_batch(
             "IVF CID offsets do not cover every leaf centroid".into(),
         ));
     }
-    let mut builder = ListBuilder::new(Float32Builder::new()).with_field(Arc::new(Field::new(
-        "element",
-        DataType::Float32,
-        false,
-    )));
-    for centroid in centroids.chunks_exact(dimension) {
-        builder.values().append_slice(centroid);
-        builder.append(true);
-    }
-    let centroid_array = builder.finish();
+    let encoded = encode_lvq_rows(centroids, dimension, LvqBits::Eight)
+        .map_err(|error| Error::InvalidSchema(error.to_string()))?;
+    let (codes, offsets, scales) = encoded.into_parts();
+    let codes = binary_view_codes(codes, dimension)
+        .map_err(|error| Error::InvalidSchema(error.to_string()))?;
     let schema = Arc::new(Schema::new(vec![
         Field::new("cid", DataType::Int32, false),
         Field::new("cid_bucket", DataType::Int32, false),
-        Field::new("centroid", centroid_array.data_type().clone(), false),
+        Field::new("offset", DataType::Float32, false),
+        Field::new("scale", DataType::Float32, false),
+        Field::new("code", codes.data_type().clone(), false),
     ]));
     Ok(RecordBatch::try_new(
         schema,
         vec![
             Arc::new(cids),
             Arc::new(cid_buckets),
-            Arc::new(centroid_array),
+            Arc::new(Float32Array::from(offsets)),
+            Arc::new(Float32Array::from(scales)),
+            Arc::new(codes),
         ],
     )?)
 }

@@ -516,11 +516,7 @@ impl LocalSession {
                 .get_or_load_centroids(cache_key, || async {
                     let centroids = self.read_index_relation(loaded, "ivf_centroids").await?;
                     let values = crate::ivf::read_centroids(&centroids, nlist, dimension)?;
-                    super::index_relation::CentroidNavigator::new(
-                        nlist,
-                        dimension,
-                        Arc::from(values),
-                    )
+                    super::index_relation::CentroidNavigator::new(nlist, dimension, &values)
                 })
                 .await?;
             centroids.validate_shape(nlist, dimension)?;
@@ -564,14 +560,14 @@ impl LocalSession {
             )),
             None,
         );
-        let distance = self.context.udf("parqdb_squared_l2")?;
+        let distance = self.context.udf("parqdb_lvq8_l2")?;
         let batches = self
             .index_relation_dataframe(relation_key, IndexRelationLayout::Plain)
             .await?
             .select(vec![
                 col("cid"),
                 distance
-                    .call(vec![col("centroid"), query])
+                    .call(vec![col("code"), col("offset"), col("scale"), query])
                     .alias("__parqdb_distance"),
             ])?
             .sort(vec![

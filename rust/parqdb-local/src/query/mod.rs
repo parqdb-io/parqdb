@@ -698,7 +698,7 @@ fn datafusion_selected_clusters_cte(
     Ok(format!(
         "parqdb_selected_clusters AS (\n        SELECT c.\"cid\"\n        \
          FROM {centroids} AS c\n        ORDER BY \
-         parqdb_squared_l2(c.\"centroid\", make_array({query_literal})) ASC, c.\"cid\" ASC\n        \
+         parqdb_lvq8_l2(c.\"code\", c.\"offset\", c.\"scale\", make_array({query_literal})) ASC, c.\"cid\" ASC\n        \
          LIMIT {nprobe}\n    )"
     ))
 }

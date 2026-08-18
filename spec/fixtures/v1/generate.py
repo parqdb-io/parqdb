@@ -10,7 +10,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
-from generate_lvq import write_lvq_fixtures
+from generate_lvq import encode, write_lvq_fixtures
 
 ROOT = Path(__file__).parent
 VALID = ROOT / "valid"
@@ -31,6 +31,28 @@ def write_json(path: Path, value: object) -> None:
     path.write_text(
         json.dumps(value, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
+    )
+
+
+def leaf_centroids(values: list[list[float]]) -> pa.Table:
+    encoded = [encode(value, 8) for value in values]
+    return pa.Table.from_arrays(
+        [
+            pa.array(range(len(values)), type=pa.int32()),
+            pa.array([0] * len(values), type=pa.int32()),
+            pa.array([row[0] for row in encoded], type=pa.float32()),
+            pa.array([row[1] for row in encoded], type=pa.float32()),
+            pa.array([row[2] for row in encoded], type=pa.binary()),
+        ],
+        schema=pa.schema(
+            [
+                pa.field("cid", pa.int32(), nullable=False),
+                pa.field("cid_bucket", pa.int32(), nullable=False),
+                pa.field("offset", pa.float32(), nullable=False),
+                pa.field("scale", pa.float32(), nullable=False),
+                pa.field("code", pa.binary(), nullable=False),
+            ]
+        ),
     )
 
 
@@ -269,20 +291,7 @@ def write_tables() -> None:
         ],
         schema=source_schema,
     )
-    centroids = pa.Table.from_arrays(
-        [
-            pa.array([0, 1], type=pa.int32()),
-            pa.array([0, 0], type=pa.int32()),
-            pa.array([[0.5, 0.0], [10.0, 0.0]], type=vector),
-        ],
-        schema=pa.schema(
-            [
-                pa.field("cid", pa.int32(), nullable=False),
-                pa.field("cid_bucket", pa.int32(), nullable=False),
-                pa.field("centroid", vector, nullable=False),
-            ]
-        ),
-    )
+    centroids = leaf_centroids([[0.5, 0.0], [10.0, 0.0]])
     roots = pa.Table.from_arrays(
         [
             pa.array([0], type=pa.int32()),
@@ -365,20 +374,7 @@ def write_composite_tables() -> None:
             ]
         ),
     )
-    centroids = pa.Table.from_arrays(
-        [
-            pa.array([0, 1], type=pa.int32()),
-            pa.array([0, 0], type=pa.int32()),
-            pa.array([[0.0, 0.0], [10.0, 0.0]], type=vector),
-        ],
-        schema=pa.schema(
-            [
-                pa.field("cid", pa.int32(), nullable=False),
-                pa.field("cid_bucket", pa.int32(), nullable=False),
-                pa.field("centroid", vector, nullable=False),
-            ]
-        ),
-    )
+    centroids = leaf_centroids([[0.0, 0.0], [10.0, 0.0]])
     roots = pa.Table.from_arrays(
         [
             pa.array([0], type=pa.int32()),

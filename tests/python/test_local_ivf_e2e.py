@@ -139,14 +139,15 @@ def test_local_build_publish_and_search(tmp_path: Path) -> None:
         "ivf_centroids",
         "ivf_postings",
     }
-    required_vector = vector_type()
     assert pq.read_schema(
         relation_path(snapshot["index-relations"]["ivf_centroids"], session.warehouse)
     ) == pa.schema(
         [
             pa.field("cid", pa.int32(), nullable=False),
             pa.field("cid_bucket", pa.int32(), nullable=False),
-            pa.field("centroid", required_vector, nullable=False),
+            pa.field("offset", pa.float32(), nullable=False),
+            pa.field("scale", pa.float32(), nullable=False),
+            pa.field("code", pa.binary_view(), nullable=False),
         ]
     )
     assert pq.read_schema(

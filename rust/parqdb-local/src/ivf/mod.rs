@@ -16,7 +16,9 @@ use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, SortField};
 
 use crate::{Error, Result};
+#[cfg(test)]
 use parqdb_kernels::detect;
+use parqdb_kernels::{LvqBatchView, LvqBits};
 
 pub(crate) fn borrow_vectors(array: &ArrayRef) -> Result<(&[f32], usize)> {
     borrow_vectors_with_element_nullability(array, false)
@@ -154,23 +156,34 @@ pub(crate) fn read_centroids(
     nlist: usize,
     dimension: usize,
 ) -> Result<Vec<f32>> {
-    let centroid_index = table
-        .schema()
-        .index_of("centroid")
-        .map_err(|_| Error::InvalidSchema("ivf_centroids is missing centroid".into()))?;
     let cids = required_int32(table, "cid", "ivf_centroids")?;
     let _ = required_int32(table, "cid_bucket", "ivf_centroids")?;
-    if table.schema().field(centroid_index).is_nullable() {
+    let offsets = required_float32(table, "offset", "ivf_centroids")?;
+    let scales = required_float32(table, "scale", "ivf_centroids")?;
+    let code_index = table
+        .schema()
+        .index_of("code")
+        .map_err(|_| Error::InvalidSchema("ivf_centroids is missing code".into()))?;
+    if table.schema().field(code_index).is_nullable() {
         return Err(Error::InvalidSchema(
-            "ivf_centroids.centroid must be required".into(),
+            "ivf_centroids.code must be required".into(),
         ));
     }
-    let (values, actual_dimension) = borrow_vectors(table.column(centroid_index))?;
-    if table.num_rows() != nlist || actual_dimension != dimension {
+    if table.num_rows() != nlist {
         return Err(Error::InvalidSchema(
             "ivf_centroids shape does not match metadata".into(),
         ));
     }
+    let codes = crate::query::lvq_code_rows(table.column(code_index).as_ref(), dimension)
+        .map_err(|error| Error::InvalidSchema(error.to_string()))?;
+    let centroids = LvqBatchView::try_new_rows(
+        LvqBits::Eight,
+        dimension,
+        codes,
+        offsets.values(),
+        scales.values(),
+    )
+    .map_err(|error| Error::InvalidSchema(error.to_string()))?;
     let mut reordered = vec![0.0_f32; nlist * dimension];
     let mut seen = vec![false; nlist];
     for row in 0..table.num_rows() {
@@ -182,10 +195,38 @@ pub(crate) fn read_centroids(
             ));
         }
         seen[cid] = true;
-        reordered[cid * dimension..(cid + 1) * dimension]
-            .copy_from_slice(&values[row * dimension..(row + 1) * dimension]);
+        centroids
+            .decode_row(row, &mut reordered[cid * dimension..(cid + 1) * dimension])
+            .map_err(|error| Error::InvalidSchema(error.to_string()))?;
     }
     Ok(reordered)
+}
+
+fn required_float32<'a>(
+    table: &'a RecordBatch,
+    name: &str,
+    relation: &str,
+) -> Result<&'a Float32Array> {
+    let index = table
+        .schema()
+        .index_of(name)
+        .map_err(|_| Error::InvalidSchema(format!("{relation} is missing {name}")))?;
+    if table.schema().field(index).is_nullable() {
+        return Err(Error::InvalidSchema(format!(
+            "{relation}.{name} must be required"
+        )));
+    }
+    let array = table
+        .column(index)
+        .as_any()
+        .downcast_ref::<Float32Array>()
+        .ok_or_else(|| Error::InvalidSchema(format!("{relation}.{name} must be FLOAT32")))?;
+    if array.null_count() != 0 {
+        return Err(Error::InvalidSchema(format!(
+            "{relation}.{name} must not contain nulls"
+        )));
+    }
+    Ok(array)
 }
 
 pub(crate) fn validate_centroid_buckets(table: &RecordBatch, cid_offsets: &[usize]) -> Result<()> {
@@ -263,6 +304,7 @@ pub(crate) fn read_roots(
     Ok((centroids.to_vec(), cid_offsets))
 }
 
+#[cfg(test)]
 pub(crate) fn select_clusters(
     query: &[f32],
     centroids: &[f32],

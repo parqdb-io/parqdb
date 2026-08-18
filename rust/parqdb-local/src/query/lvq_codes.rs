@@ -7,7 +7,7 @@ use parqdb_kernels::{KernelError, LvqCodeRows};
 pub(crate) fn lvq_code_rows(codes: &dyn Array, code_size: usize) -> Result<LvqCodeRows<'_>> {
     if codes.null_count() != 0 {
         return Err(DataFusionError::Execution(
-            "LVQ posting columns must not contain nulls".into(),
+            "LVQ columns must not contain nulls".into(),
         ));
     }
     match codes.data_type() {

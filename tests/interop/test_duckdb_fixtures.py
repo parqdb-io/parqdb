@@ -44,6 +44,7 @@ def execute_fixture_query(
         for position, field in enumerate(key_fields, start=1)
     )
     distance_vector = f"s.{quote_identifier(snapshot['vector-field'])}"
+    dimension = int(snapshot["parameters"]["dimension"])
     filters = case["filter"] or {}
     filter_sql = " AND ".join(f"s.{quote_identifier(field)} = ?" for field in filters)
     where_clause = f"WHERE {filter_sql}" if filter_sql else ""
@@ -51,7 +52,15 @@ def execute_fixture_query(
         WITH selected_clusters AS (
             SELECT cid
             FROM read_parquet(?)
-            ORDER BY list_distance(centroid, ?::FLOAT[]), cid
+            ORDER BY list_distance(
+                list_transform(
+                    range(0, ?),
+                    i -> "offset" + "scale" * (
+                        '0x' || substr(hex("code"), i * 2 + 1, 2)
+                    )::INTEGER
+                ),
+                ?::FLOAT[]
+            ), cid
             LIMIT ?
         ),
         candidates AS (
@@ -70,6 +79,7 @@ def execute_fixture_query(
     """
     parameters = [
         str(directory / "ivf_centroids.parquet"),
+        dimension,
         case["query-vector"],
         case["nprobe"],
         case["query-vector"],

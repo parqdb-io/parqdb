@@ -51,13 +51,13 @@ mod tests {
         let cache = CentroidCache::new(2, 1024);
         let navigator = cache
             .get_or_load("centroids", || async {
-                CentroidNavigator::new(1, 2, Arc::from([0.0, 1.0]))
+                CentroidNavigator::new(1, 2, &[0.0, 1.0])
             })
             .await
             .unwrap();
 
         navigator.validate_shape(1, 2).unwrap();
         assert!(navigator.validate_shape(2, 1).is_err());
-        assert_eq!(cache.stats(), (1, 2 * size_of::<f32>()));
+        assert_eq!(cache.stats(), (1, 2 + 2 * size_of::<f32>()));
     }
 }

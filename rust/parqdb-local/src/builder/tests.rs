@@ -66,7 +66,13 @@ fn builds_ivf_relations_with_source_keys_in_postings() {
             .iter()
             .map(|field| (field.name().as_str(), field.is_nullable()))
             .collect::<Vec<_>>(),
-        [("cid", false), ("cid_bucket", false), ("centroid", false),]
+        [
+            ("cid", false),
+            ("cid_bucket", false),
+            ("offset", false),
+            ("scale", false),
+            ("code", false),
+        ]
     );
     assert_eq!(
         artifacts
