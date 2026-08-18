@@ -1,4 +1,4 @@
-import { parquetMetadataAsync, parquetReadObjects } from 'hyparquet'
+import { parquetMetadata, parquetMetadataAsync, parquetReadObjects } from 'hyparquet'
 import type { FileMetaData, RowGroup } from 'hyparquet'
 import { compressors } from 'hyparquet-compressors'
 
@@ -24,6 +24,7 @@ export interface SearchOptions {
   k: number
   signal?: AbortSignal
   maxCandidateRows?: number
+  maxConcurrentReads?: number
   trace?: (event: QueryTraceEvent) => void
 }
 
@@ -92,6 +93,10 @@ export class ParqDB {
     if (!Number.isSafeInteger(options.k) || options.k <= 0) {
       throw new Error('k must be a positive portable integer')
     }
+    const maxConcurrentReads = options.maxConcurrentReads ?? 8
+    if (!Number.isSafeInteger(maxConcurrentReads) || maxConcurrentReads <= 0 || maxConcurrentReads > 64) {
+      throw new Error('maxConcurrentReads must be a portable integer in [1, 64]')
+    }
     const effectiveNprobe = Math.min(options.nprobe, nlist)
     const effectiveK = Math.min(options.k, this.manifest.index.ntotal, 100)
     const rawQuery = Float32Array.from(query)
@@ -123,47 +128,50 @@ export class ParqDB {
       files: files.length,
       candidateRows,
     })
-    const candidates: Candidate[] = []
-    let order = 0
-    let scoringStarted = false
-    for (const { file, planned } of plannedFiles) {
+    const readJobs = plannedFiles.flatMap(({ file, planned }) => {
       const rangeFile = new HttpRangeBuffer(
         objectUrl(this.manifestUrl, file.path),
         file.size,
         requestOptions,
       )
-      for (const span of planned.spans) {
-        const rows = await parquetReadObjects({
-          file: rangeFile,
-          metadata: planned.metadata,
-          rowStart: span.start,
-          rowEnd: span.end,
-          columns: [
-            'cid',
-            ...this.manifest.index.sourceKeyFields.map((_, position) => `key_${position + 1}`),
-            'offset',
-            'scale',
-            'code',
-          ],
-          compressors,
-          utf8: false,
-        })
-        const batch = lvqBatch(rows, selected, dimension, this.manifest.index.postingEncoding)
-        if (!scoringStarted) {
-          scoringStarted = true
-          options.trace?.({ phase: 'scoring', status: 'start', candidateRows })
-        }
-        for (const hit of this.kernel.lvqTopk(
-          batch.codes,
-          batch.offsets,
-          batch.scales,
-          transformedQuery,
-          this.manifest.index.postingEncoding === 'lvq4' ? 4 : 8,
-          effectiveK,
-        )) {
-          candidates.push({ row: rows[hit.row]!, distance: hit.distance, order })
-          order += 1
-        }
+      return planned.spans.map(span => ({ rangeFile, metadata: planned.metadata, span }))
+    })
+    const batches = await mapConcurrent(readJobs, maxConcurrentReads, job =>
+      parquetReadObjects({
+        file: job.rangeFile,
+        metadata: job.metadata,
+        rowStart: job.span.start,
+        rowEnd: job.span.end,
+        columns: [
+          'cid',
+          ...this.manifest.index.sourceKeyFields.map((_, position) => `key_${position + 1}`),
+          'offset',
+          'scale',
+          'code',
+        ],
+        compressors,
+        utf8: false,
+      }),
+    )
+    const candidates: Candidate[] = []
+    let order = 0
+    let scoringStarted = false
+    for (const rows of batches) {
+      const batch = lvqBatch(rows, selected, dimension, this.manifest.index.postingEncoding)
+      if (!scoringStarted) {
+        scoringStarted = true
+        options.trace?.({ phase: 'scoring', status: 'start', candidateRows })
+      }
+      for (const hit of this.kernel.lvqTopk(
+        batch.codes,
+        batch.offsets,
+        batch.scales,
+        transformedQuery,
+        this.manifest.index.postingEncoding === 'lvq4' ? 4 : 8,
+        effectiveK,
+      )) {
+        candidates.push({ row: rows[hit.row]!, distance: hit.distance, order })
+        order += 1
       }
     }
     options.trace?.({ phase: 'scoring', status: 'complete', candidateRows })
@@ -204,7 +212,13 @@ export class ParqDB {
   }> {
     const descriptor = this.manifest.hierarchy.centroids
     const file = new HttpRangeBuffer(objectUrl(this.manifestUrl, descriptor.path), descriptor.size, options)
-    const metadata = await parquetMetadataAsync(file)
+    const maxRangeBytes = options.maxRangeBytes ?? 64 * 1024 * 1024
+    const centroidFile: ArrayBuffer | HttpRangeBuffer =
+      descriptor.size <= maxRangeBytes ? await file.slice(0, descriptor.size) : file
+    const metadata =
+      centroidFile instanceof ArrayBuffer
+        ? parquetMetadata(centroidFile)
+        : await parquetMetadataAsync(centroidFile)
     if (metadata.num_rows !== BigInt(this.manifest.index.nlist)) {
       throw new Error('leaf centroid count does not match manifest nlist')
     }
@@ -212,7 +226,7 @@ export class ParqDB {
       throw new Error('leaf centroid row groups do not match root-count')
     }
     const rows = await parquetReadObjects({
-      file,
+      file: centroidFile,
       metadata,
       columns: ['cid', 'cid_bucket', 'offset', 'scale', 'code'],
       compressors,
@@ -291,6 +305,24 @@ function appendSpan(spans: RowSpan[], start: number, end: number): void {
   const previous = spans.at(-1)
   if (previous?.end === start) previous.end = end
   else spans.push({ start, end })
+}
+
+async function mapConcurrent<T, U>(
+  values: T[],
+  concurrency: number,
+  mapper: (value: T) => Promise<U>,
+): Promise<U[]> {
+  const results = new Array<U>(values.length)
+  let next = 0
+  const worker = async () => {
+    while (next < values.length) {
+      const position = next
+      next += 1
+      results[position] = await mapper(values[position]!)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, worker))
+  return results
 }
 
 function rowGroupCid(rowGroup: RowGroup): number {

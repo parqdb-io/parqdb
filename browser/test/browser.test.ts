@@ -80,6 +80,9 @@ describe('HTTP Range query', () => {
     expect(requests.some(request => request.range !== undefined)).toBe(true)
     expect(requests.some(request => request.path === 'ivf_postings/manifest.json')).toBe(false)
     expect(requests.some(request => request.path.includes('cid_bucket=000000/part-00000.parquet'))).toBe(true)
+    expect(requests.filter(request => request.path === 'centroids.parquet')).toEqual([
+      { path: 'centroids.parquet' },
+    ])
   })
 
   test('returns all available candidates when k exceeds the index size', async () => {
