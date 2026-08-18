@@ -18,9 +18,9 @@ fn valid_snapshot() -> IndexSnapshot {
         sequence_number: 1,
         timestamp_ms: 1_750_000_000_000,
         summary: BTreeMap::from([("operation".into(), "create".into())]),
-        source: parquet("file:///tmp/source.parquet"),
         vector_field: "embedding".into(),
         source_key_fields: vec!["document_id".into()],
+        indexed_rows: 4,
         index_family: "ivf".into(),
         index_schema_version: 1,
         metric: "l2_squared".into(),
@@ -39,18 +39,12 @@ fn valid_snapshot() -> IndexSnapshot {
             ),
             (
                 "ivf_centroids_metadata_location".into(),
-                "file:///tmp/parqdb/centroid-artifacts/v1.metadata.json".into(),
+                "metadata/centroid-artifacts/v1.metadata.json".into(),
             ),
         ]),
         index_relations: BTreeMap::from([
-            (
-                "ivf_centroids".into(),
-                parquet("file:///tmp/centroids.parquet"),
-            ),
-            (
-                "ivf_postings".into(),
-                parquet("file:///tmp/postings.parquet"),
-            ),
+            ("ivf_centroids".into(), "centroids/".into()),
+            ("ivf_postings".into(), "postings/".into()),
         ]),
     }
 }
@@ -59,7 +53,6 @@ fn valid_metadata() -> IndexMetadata {
     IndexMetadata {
         format_version: 1,
         index_uuid: Uuid::parse_str("2f1c7f5e-3c43-4a44-8f2a-cf560c4db8d1").unwrap(),
-        location: "file:///tmp/parqdb/index".into(),
         last_updated_ms: 1_750_000_000_000,
         last_sequence_number: 1,
         current_snapshot_id: 701,
@@ -161,7 +154,7 @@ fn rejects_replacing_logical_identity_with_the_same_uuid() {
     let base = valid_metadata();
     let mut update = valid_update(&base);
     update.snapshots.remove(0);
-    update.snapshots[0].source = parquet("file:///tmp/other-source.parquet");
+    update.snapshots[0].vector_field = "other_embedding".into();
     update.snapshot_log = vec![SnapshotLogEntry {
         timestamp_ms: update.last_updated_ms,
         snapshot_id: update.current_snapshot_id,
@@ -203,7 +196,7 @@ fn rejects_unknown_ivf_relation_role() {
     let mut metadata = valid_metadata();
     metadata.snapshots[0]
         .index_relations
-        .insert("future_role".into(), parquet("file:///tmp/future.parquet"));
+        .insert("future_role".into(), "future/".into());
 
     assert!(metadata.validate().is_err());
 }

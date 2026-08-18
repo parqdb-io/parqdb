@@ -15,7 +15,8 @@ identify an exact table UUID and snapshot when a PyIceberg catalog is bound.
 
 ## Open Vector Index
 
-An index consists of immutable JSON metadata and ordinary relations. The IVF
+An index consists of immutable JSON metadata and warehouse-relative Parquet
+relations. The IVF
 family stores:
 
 - centroids used to choose candidate clusters; and
@@ -31,7 +32,7 @@ schemas independently of the Python runtime.
 
 The catalog maps a registered source and index name to the current immutable
 metadata document. The embedded implementation uses SQLite. Posting rows and
-vectors remain in Parquet or Iceberg rather than in the catalog.
+vectors remain in Parquet rather than in the catalog.
 
 Every successful build or refresh publishes a new immutable snapshot. The
 catalog update is the publication point, so readers see either the previous
@@ -39,6 +40,14 @@ snapshot or the complete replacement, never partially written relations.
 
 Parquet locations do not provide source snapshot isolation. Applications must
 not replace registered Parquet files in place while an index depends on them.
+
+## Warehouse
+
+Each session has one warehouse URI. Index metadata, centroid data, and postings
+all live below it, and portable metadata stores only warehouse-relative paths.
+Catalog entries do not carry separate roots. Multiple catalogs can attach the
+same published index by using the same warehouse and binding it to their own
+registered source table.
 
 ## Session and Execution
 

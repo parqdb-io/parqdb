@@ -10,26 +10,23 @@ pub(crate) fn file_uri(path: &Path) -> String {
     Url::from_file_path(path).unwrap().into()
 }
 
-pub(crate) fn directory_uri(path: &Path) -> String {
-    Url::from_directory_path(path).unwrap().into()
+pub(crate) fn source(root: &Path) -> RelationReference {
+    RelationReference::Parquet {
+        uri: file_uri(&root.join("source.parquet")),
+    }
 }
 
-pub(crate) fn metadata(root: &Path) -> IndexMetadata {
+pub(crate) fn metadata(_root: &Path) -> IndexMetadata {
     let index_uuid = Uuid::parse_str("2f1c7f5e-3c43-4a44-8f2a-cf560c4db8d1").unwrap();
     let timestamp_ms = 1_750_000_000_000;
-    let relation = |name: &str| RelationReference::Parquet {
-        uri: directory_uri(&root.join(name)),
-    };
     let snapshot = IndexSnapshot {
         snapshot_id: 701,
         sequence_number: 1,
         timestamp_ms,
         summary: BTreeMap::new(),
-        source: RelationReference::Parquet {
-            uri: file_uri(&root.join("source.parquet")),
-        },
         vector_field: "embedding".into(),
         source_key_fields: vec!["document_id".into()],
+        indexed_rows: 4,
         index_family: "ivf".into(),
         index_schema_version: 1,
         metric: "l2_squared".into(),
@@ -48,18 +45,17 @@ pub(crate) fn metadata(root: &Path) -> IndexMetadata {
             ),
             (
                 "ivf_centroids_metadata_location".into(),
-                directory_uri(&root.join("centroid-artifacts").join("metadata")),
+                "centroid-artifacts/metadata.json".into(),
             ),
         ]),
         index_relations: BTreeMap::from([
-            ("ivf_centroids".into(), relation("centroids")),
-            ("ivf_postings".into(), relation("postings")),
+            ("ivf_centroids".into(), "centroids/".into()),
+            ("ivf_postings".into(), "postings/".into()),
         ]),
     };
     IndexMetadata {
         format_version: 1,
         index_uuid,
-        location: directory_uri(&root.join("metadata").join(index_uuid.to_string())),
         last_updated_ms: timestamp_ms,
         last_sequence_number: 1,
         current_snapshot_id: snapshot.snapshot_id,
@@ -92,13 +88,16 @@ pub(crate) fn refreshed(base: &IndexMetadata, snapshot_id: i64) -> IndexMetadata
 pub(crate) fn assert_index_catalog_contract(catalog: &dyn IndexCatalog, root: &Path) {
     let identifier = IndexIdentifier::new(vec!["analytics".into()], "documents").unwrap();
     let metadata = metadata(root);
+    let source = source(root);
     let location = file_uri(&root.join("v1.metadata.json"));
 
     assert!(matches!(
         catalog.list(identifier.namespace()),
         Err(Error::NamespaceNotFound(_))
     ));
-    catalog.register(&identifier, &location, &metadata).unwrap();
+    catalog
+        .register(&identifier, &source, &location, &metadata)
+        .unwrap();
     assert_eq!(
         catalog.list(identifier.namespace()).unwrap(),
         std::slice::from_ref(&identifier)
@@ -108,9 +107,8 @@ pub(crate) fn assert_index_catalog_contract(catalog: &dyn IndexCatalog, root: &P
     assert_eq!(loaded.identifier, identifier);
     assert_eq!(loaded.metadata_location, location);
 
-    let source = &metadata.current_snapshot().unwrap().source;
     let discovered = catalog
-        .find_by_source(identifier.namespace(), source)
+        .find_by_source(identifier.namespace(), &source)
         .unwrap();
     assert_eq!(discovered.len(), 1);
     assert_eq!(discovered[0].identifier, identifier);
@@ -118,7 +116,14 @@ pub(crate) fn assert_index_catalog_contract(catalog: &dyn IndexCatalog, root: &P
     let next = refreshed(&metadata, 702);
     let next_location = file_uri(&root.join("v2.metadata.json"));
     catalog
-        .commit(&identifier, &location, &next_location, &metadata, &next)
+        .commit(
+            &identifier,
+            &source,
+            &location,
+            &next_location,
+            &metadata,
+            &next,
+        )
         .unwrap();
     assert_eq!(
         catalog.load(&identifier).unwrap().metadata_location,

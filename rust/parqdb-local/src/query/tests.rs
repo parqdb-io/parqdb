@@ -15,7 +15,7 @@ use datafusion::common::ScalarValue;
 use datafusion::logical_expr::registry::FunctionRegistry;
 use datafusion::prelude::{Expr, SessionContext, col};
 use object_store::local::LocalFileSystem;
-use parqdb_meta::{DistanceMetric, IndexMetadata, PostingEncoding, RelationReference};
+use parqdb_meta::{DistanceMetric, IndexMetadata, PostingEncoding};
 use parqdb_storage::StorageRegistry;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -65,20 +65,21 @@ fn source() -> RecordBatch {
 
 fn shared_query_fixture() -> (TempDir, ParquetStore, IndexMetadata) {
     let temporary = TempDir::new().unwrap();
-    for relation in ["source", "ivf_centroids"] {
-        let destination = temporary.path().join("v1/valid").join(relation);
-        create_dir_all(&destination).unwrap();
-        copy(
-            format!(
-                "{}/../../spec/fixtures/v1/valid/{relation}.parquet",
-                env!("CARGO_MANIFEST_DIR")
-            ),
-            destination.join("part-00000.parquet"),
-        )
-        .unwrap();
-    }
-    let postings_source =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/fixtures/v1/valid/ivf_postings");
+    let fixture_source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/fixtures/v1/valid");
+    let fixture_destination = temporary.path().join("v1/valid");
+    let source_destination = fixture_destination.join("source");
+    create_dir_all(&source_destination).unwrap();
+    copy(
+        fixture_source.join("source.parquet"),
+        source_destination.join("part-00000.parquet"),
+    )
+    .unwrap();
+    copy(
+        fixture_source.join("ivf_centroids.parquet"),
+        fixture_destination.join("ivf_centroids.parquet"),
+    )
+    .unwrap();
+    let postings_source = fixture_source.join("ivf_postings");
     let postings_destination = temporary.path().join("v1/valid/ivf_postings");
     for partition in read_dir(postings_source).unwrap() {
         let partition = partition.unwrap();
@@ -423,23 +424,17 @@ fn assert_fixture_result(case: &Value, result: &[RecordBatch]) {
 async fn datafusion_execution_matches_the_shared_query_fixtures() {
     let (_temporary, parquet, metadata) = shared_query_fixture();
     let snapshot = metadata.current_snapshot().unwrap();
-    let RelationReference::Parquet { uri: source_uri } = &snapshot.source else {
-        panic!("fixture source must be Parquet");
-    };
-    let RelationReference::Parquet { uri: centroids_uri } =
-        &snapshot.index_relations["ivf_centroids"]
-    else {
-        panic!("fixture centroids must be Parquet");
-    };
-    let RelationReference::Parquet { uri: postings_uri } =
-        &snapshot.index_relations["ivf_postings"]
-    else {
-        panic!("fixture postings must be Parquet");
-    };
-    let centroids = parquet.read(centroids_uri, None).await.unwrap();
-    let source = parquet.read(source_uri, None).await.unwrap();
+    let fixture_root = "s3://parqdb-fixtures/v1/valid/";
+    let source_uri = format!("{fixture_root}source/");
+    let centroids_uri = format!(
+        "{fixture_root}{}",
+        snapshot.index_relations["ivf_centroids"]
+    );
+    let postings_uri = format!("{fixture_root}{}", snapshot.index_relations["ivf_postings"]);
+    let centroids = parquet.read(&centroids_uri, None).await.unwrap();
+    let source = parquet.read(&source_uri, None).await.unwrap();
     let postings = parquet
-        .partitioned_dataframe(postings_uri, vec![("cid".into(), DataType::Int32)])
+        .partitioned_dataframe(&postings_uri, vec![("cid".into(), DataType::Int32)])
         .await
         .unwrap();
     let postings_schema = Arc::clone(postings.schema().inner());
@@ -508,11 +503,9 @@ fn snapshot(artifacts: &IvfTables) -> IndexSnapshot {
         sequence_number: 1,
         timestamp_ms: 1,
         summary: BTreeMap::new(),
-        source: RelationReference::Parquet {
-            uri: "file:///tmp/source/".into(),
-        },
         vector_field: "embedding".into(),
         source_key_fields: vec!["id".into()],
+        indexed_rows: i64::try_from(artifacts.ntotal).unwrap(),
         index_family: "ivf".into(),
         index_schema_version: 1,
         metric: "l2_squared".into(),
@@ -531,7 +524,7 @@ fn snapshot(artifacts: &IvfTables) -> IndexSnapshot {
             ),
             (
                 "ivf_centroids_metadata_location".into(),
-                "file:///metadata/fe985f6d-3592-4385-a1ca-71347057a210/v1.metadata.json".into(),
+                "metadata/fe985f6d-3592-4385-a1ca-71347057a210/v1.metadata.json".into(),
             ),
         ]),
         index_relations: BTreeMap::new(),

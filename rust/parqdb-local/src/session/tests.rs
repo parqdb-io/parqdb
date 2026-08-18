@@ -32,7 +32,6 @@ use crate::{ParqDBRuntime, QueryAdmissionOptions, QueryAdmissionStats};
 
 struct MemoryEntry {
     entry: CatalogEntry,
-    source_identity: String,
 }
 
 fn age_catalog_tombstones(session: &LocalSession) {
@@ -305,7 +304,7 @@ async fn managed_query_stream_holds_and_releases_admission() {
 #[derive(Default)]
 struct MemoryCatalog {
     entries: Mutex<BTreeMap<IndexIdentifier, MemoryEntry>>,
-    ivf_centroids: Mutex<BTreeMap<String, IvfCentroidsCatalogEntry>>,
+    ivf_centroids: Mutex<BTreeMap<(String, String), IvfCentroidsCatalogEntry>>,
 }
 
 impl IndexCatalog for MemoryCatalog {
@@ -321,6 +320,7 @@ impl IndexCatalog for MemoryCatalog {
     fn register(
         &self,
         identifier: &IndexIdentifier,
+        source: &RelationReference,
         metadata_location: &str,
         metadata: &IndexMetadata,
     ) -> parqdb_catalog::Result<()> {
@@ -335,8 +335,8 @@ impl IndexCatalog for MemoryCatalog {
                 entry: CatalogEntry {
                     identifier: identifier.clone(),
                     metadata_location: metadata_location.to_owned(),
+                    source: source.clone(),
                 },
-                source_identity: metadata.current_snapshot()?.source.exact_state_key(),
             },
         );
         Ok(())
@@ -369,40 +369,44 @@ impl IndexCatalog for MemoryCatalog {
             .unwrap()
             .values()
             .filter(|entry| entry.entry.identifier.namespace() == namespace)
-            .filter(|entry| entry.source_identity == source_identity)
+            .filter(|entry| entry.entry.source.exact_state_key() == source_identity)
             .map(|entry| entry.entry.clone())
             .collect())
     }
 
     fn load_ivf_centroids(
         &self,
+        source: &RelationReference,
         fingerprint: &str,
     ) -> parqdb_catalog::Result<IvfCentroidsCatalogEntry> {
         self.ivf_centroids
             .lock()
             .unwrap()
-            .get(fingerprint)
+            .get(&(source.exact_state_key(), fingerprint.to_owned()))
             .cloned()
             .ok_or_else(|| CatalogError::IvfCentroidsNotFound(fingerprint.into()))
     }
 
     fn claim_ivf_centroids(
         &self,
+        source: &RelationReference,
         descriptor: &IvfCentroidsDescriptor,
         owner: Uuid,
         _lease_duration_ms: i64,
     ) -> parqdb_catalog::Result<IvfCentroidsClaimResult> {
         let fingerprint = descriptor.fingerprint()?;
+        let source_identity = source.exact_state_key();
         if let Some(entry) = self
             .ivf_centroids
             .lock()
             .unwrap()
-            .get(&fingerprint)
+            .get(&(source_identity.clone(), fingerprint.clone()))
             .cloned()
         {
             return Ok(IvfCentroidsClaimResult::Ready(entry));
         }
         Ok(IvfCentroidsClaimResult::Claimed(IvfCentroidsClaim {
+            source_identity,
             fingerprint,
             owner,
         }))
@@ -423,14 +427,15 @@ impl IndexCatalog for MemoryCatalog {
         metadata: &IvfCentroidsMetadata,
     ) -> parqdb_catalog::Result<IvfCentroidsCatalogEntry> {
         let entry = IvfCentroidsCatalogEntry {
+            source_identity: claim.source_identity.clone(),
             fingerprint: claim.fingerprint.clone(),
             artifact_uuid: metadata.artifact_uuid,
             metadata_location: metadata_location.into(),
         };
-        self.ivf_centroids
-            .lock()
-            .unwrap()
-            .insert(claim.fingerprint.clone(), entry.clone());
+        self.ivf_centroids.lock().unwrap().insert(
+            (claim.source_identity.clone(), claim.fingerprint.clone()),
+            entry.clone(),
+        );
         Ok(entry)
     }
 
@@ -440,6 +445,29 @@ impl IndexCatalog for MemoryCatalog {
         _error: &str,
     ) -> parqdb_catalog::Result<()> {
         Ok(())
+    }
+
+    fn list_ivf_centroids(&self) -> parqdb_catalog::Result<Vec<IvfCentroidsCatalogEntry>> {
+        Ok(self
+            .ivf_centroids
+            .lock()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect())
+    }
+
+    fn purge_ivf_centroids(
+        &self,
+        entry: &IvfCentroidsCatalogEntry,
+    ) -> parqdb_catalog::Result<bool> {
+        let key = (entry.source_identity.clone(), entry.fingerprint.clone());
+        let mut entries = self.ivf_centroids.lock().unwrap();
+        if entries.get(&key) != Some(entry) {
+            return Ok(false);
+        }
+        entries.remove(&key);
+        Ok(true)
     }
 }
 
@@ -568,7 +596,7 @@ async fn write_direct_pid_relations(store: &ParquetStore, root: &Path) -> (PathB
 
 fn direct_pid_metadata(
     session: &LocalSession,
-    source_path: &Path,
+    _source_path: &Path,
     centroids_path: &Path,
     postings_path: &Path,
     centroids: &IvfCentroidsReference,
@@ -581,11 +609,9 @@ fn direct_pid_metadata(
         sequence_number: 1,
         timestamp_ms,
         summary: BTreeMap::new(),
-        source: RelationReference::Parquet {
-            uri: directory_to_file_uri(&source_path.canonicalize().unwrap()).unwrap(),
-        },
         vector_field: "embedding".into(),
         source_key_fields: vec!["source_pid".into()],
+        indexed_rows: 3,
         index_family: "ivf".into(),
         index_schema_version: 1,
         metric: "l2_squared".into(),
@@ -610,26 +636,25 @@ fn direct_pid_metadata(
         index_relations: BTreeMap::from([
             (
                 "ivf_centroids".into(),
-                RelationReference::Parquet {
-                    uri: directory_to_file_uri(centroids_path).unwrap(),
-                },
+                session
+                    .indexes
+                    .metadata_store()
+                    .relative_location(&directory_to_file_uri(centroids_path).unwrap())
+                    .unwrap(),
             ),
             (
                 "ivf_postings".into(),
-                RelationReference::Parquet {
-                    uri: directory_to_file_uri(postings_path).unwrap(),
-                },
+                session
+                    .indexes
+                    .metadata_store()
+                    .relative_location(&directory_to_file_uri(postings_path).unwrap())
+                    .unwrap(),
             ),
         ]),
     };
     IndexMetadata {
         format_version: 1,
         index_uuid,
-        location: session
-            .indexes
-            .metadata_store()
-            .index_location(index_uuid)
-            .unwrap(),
         last_updated_ms: timestamp_ms,
         last_sequence_number: 1,
         current_snapshot_id: snapshot_id,
@@ -647,13 +672,13 @@ async fn direct_pid_fixture() -> (TempDir, LocalSession, PathBuf) {
     let session = LocalSession::open(temporary.path().join("parqdb")).unwrap();
     let source_path = temporary.path().join("source");
     write_direct_pid_source(&session.parquet, &source_path).await;
+    let artifact_path = file_uri_to_path(session.warehouse_root()).unwrap();
     let (centroids_path, postings_path) =
-        write_direct_pid_relations(&session.parquet, temporary.path()).await;
+        write_direct_pid_relations(&session.parquet, &artifact_path).await;
     let source = RelationReference::Parquet {
         uri: directory_to_file_uri(&source_path.canonicalize().unwrap()).unwrap(),
     };
     let descriptor = IvfCentroidsDescriptor {
-        source,
         vector_field: "embedding".into(),
         dimension: 2,
         metric: DistanceMetric::L2Squared,
@@ -665,16 +690,13 @@ async fn direct_pid_fixture() -> (TempDir, LocalSession, PathBuf) {
         format_version: 1,
         artifact_uuid,
         fingerprint: descriptor.fingerprint().unwrap(),
-        location: session
-            .indexes
-            .metadata_store()
-            .ivf_centroids_location(artifact_uuid)
-            .unwrap(),
         created_at_ms: 1_750_000_000_000,
         descriptor,
-        centroids: RelationReference::Parquet {
-            uri: directory_to_file_uri(&centroids_path).unwrap(),
-        },
+        centroids: session
+            .indexes
+            .metadata_store()
+            .relative_location(&directory_to_file_uri(&centroids_path).unwrap())
+            .unwrap(),
     };
     let centroid_location = session
         .indexes
@@ -685,7 +707,11 @@ async fn direct_pid_fixture() -> (TempDir, LocalSession, PathBuf) {
     let centroids = IvfCentroidsReference::new(
         centroid_metadata.fingerprint,
         artifact_uuid,
-        centroid_location,
+        session
+            .indexes
+            .metadata_store()
+            .relative_location(&centroid_location)
+            .unwrap(),
     )
     .unwrap();
     let metadata = direct_pid_metadata(
@@ -704,7 +730,7 @@ async fn direct_pid_fixture() -> (TempDir, LocalSession, PathBuf) {
     let identifier = IndexIdentifier::root("direct_index").unwrap();
     session
         .catalog
-        .register(&identifier, &metadata_location, &metadata)
+        .register(&identifier, &source, &metadata_location, &metadata)
         .unwrap();
     (temporary, session, source_path)
 }
@@ -842,7 +868,11 @@ async fn manages_published_indexes_through_catalog_and_source_scoped_operations(
     assert_eq!(session.list_indexes().unwrap(), Vec::<String>::new());
 
     session
-        .register_index("direct_index", &metadata_location)
+        .register_source_index(
+            source_path.to_str().unwrap(),
+            "direct_index",
+            &metadata_location,
+        )
         .await
         .unwrap();
     assert_eq!(session.list_indexes().unwrap(), ["direct_index"]);
@@ -1014,18 +1044,21 @@ async fn lvq_indexes_build_and_query_through_parquet() {
         lvq8.index_relations["ivf_postings"]
     );
 
-    let RelationReference::Parquet { uri: centroids } = &lvq4.index_relations["ivf_centroids"]
-    else {
-        panic!("local centroids must use Parquet");
-    };
-    let RelationReference::Parquet { uri: lvq4_postings } = &lvq4.index_relations["ivf_postings"]
-    else {
-        panic!("local postings must use Parquet");
-    };
-    let RelationReference::Parquet { uri: lvq8_postings } = &lvq8.index_relations["ivf_postings"]
-    else {
-        panic!("local postings must use Parquet");
-    };
+    let centroids = session
+        .indexes
+        .metadata_store()
+        .resolve_location(&lvq4.index_relations["ivf_centroids"], true)
+        .unwrap();
+    let lvq4_postings = session
+        .indexes
+        .metadata_store()
+        .resolve_location(&lvq4.index_relations["ivf_postings"], true)
+        .unwrap();
+    let lvq8_postings = session
+        .indexes
+        .metadata_store()
+        .resolve_location(&lvq8.index_relations["ivf_postings"], true)
+        .unwrap();
     let roots = [centroids, lvq4_postings, lvq8_postings];
     let objects = session.warehouse.list("indexes").await.unwrap();
     assert!(!objects.is_empty());
@@ -1058,12 +1091,14 @@ async fn assert_lvq_index(
     let snapshot = published.metadata.current_snapshot().unwrap();
     assert_eq!(snapshot.index_schema_version, 1);
     assert_eq!(PostingEncoding::from_snapshot(snapshot).unwrap(), encoding);
-    let RelationReference::Parquet { uri } = &snapshot.index_relations["ivf_postings"] else {
-        panic!("local postings must use Parquet");
-    };
+    let uri = session
+        .indexes
+        .metadata_store()
+        .resolve_location(&snapshot.index_relations["ivf_postings"], true)
+        .unwrap();
     let postings = session
         .parquet
-        .partitioned_dataframe(uri, vec![("cid".into(), DataType::Int32)])
+        .partitioned_dataframe(&uri, vec![("cid".into(), DataType::Int32)])
         .await
         .unwrap();
     assert_lvq_postings_schema(postings.schema().inner());
@@ -1205,7 +1240,16 @@ async fn refresh_reuses_identity_and_publishes_a_new_snapshot() {
     assert_ne!(refreshed.metadata_location, before.0);
     assert_eq!(refreshed.metadata.snapshots.len(), 2);
     assert_eq!(refreshed.metadata.index_uuid, before_metadata.index_uuid);
-    assert_eq!(refreshed.metadata.location, before_metadata.location);
+    let entry = session
+        .load_entry(&IndexIdentifier::root("direct_index").unwrap())
+        .await
+        .unwrap();
+    assert!(
+        session
+            .warehouse
+            .managed(&entry.entry.metadata_location)
+            .is_ok()
+    );
     assert_eq!(
         refreshed.metadata.snapshots[0],
         before_metadata.snapshots[0]
@@ -1255,7 +1299,7 @@ async fn orphan_removal_preserves_reachable_data_and_removes_dropped_data() {
             .iter()
             .map(|candidate| candidate.kind.as_str())
             .collect::<Vec<_>>(),
-        ["index_data", "metadata"]
+        ["index_data", "index_data", "metadata", "metadata"]
     );
     assert!(source_path.is_dir());
 
@@ -1263,6 +1307,7 @@ async fn orphan_removal_preserves_reachable_data_and_removes_dropped_data() {
         session.remove_orphans(i64::MAX, false).await.unwrap(),
         candidates
     );
+    assert!(session.catalog.list_ivf_centroids().unwrap().is_empty());
     assert!(source_path.is_dir());
     assert!(
         session
@@ -1275,7 +1320,7 @@ async fn orphan_removal_preserves_reachable_data_and_removes_dropped_data() {
 
 #[tokio::test]
 async fn orphan_removal_invalidates_deleted_metadata_before_registration() {
-    let (_temporary, session, _source_path) = direct_pid_fixture().await;
+    let (_temporary, session, source_path) = direct_pid_fixture().await;
     let metadata_location = session.load_index_entry("direct_index").await.unwrap().0;
     session.drop_index("direct_index").unwrap();
     age_catalog_tombstones(&session);
@@ -1290,7 +1335,11 @@ async fn orphan_removal_invalidates_deleted_metadata_before_registration() {
 
     assert!(
         session
-            .register_index("resurrected", &metadata_location)
+            .register_source_index(
+                source_path.to_str().unwrap(),
+                "resurrected",
+                &metadata_location,
+            )
             .await
             .is_err()
     );
@@ -1407,11 +1456,13 @@ async fn published_builds_use_final_immutable_snapshot_paths() {
         .index_relations
         .values()
     {
-        let RelationReference::Parquet { uri } = reference else {
-            panic!("native build must publish Parquet relations");
-        };
+        let uri = session
+            .indexes
+            .metadata_store()
+            .resolve_location(reference, true)
+            .unwrap();
         assert!(!uri.contains(".tmp-"));
-        assert!(file_uri_to_path(uri).unwrap().is_dir());
+        assert!(file_uri_to_path(&uri).unwrap().is_dir());
         assert!(uri.starts_with(session.warehouse_root()));
     }
     assert!(

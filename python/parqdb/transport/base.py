@@ -62,6 +62,14 @@ class SessionTransport(Protocol):
         wait_timeout: timedelta | None,
     ) -> None: ...
 
+    async def register_index(
+        self,
+        identifier: TableIdentifier,
+        index: str,
+        *,
+        metadata_location: str,
+    ) -> None: ...
+
     async def refresh_index(
         self,
         identifier: TableIdentifier,
@@ -224,6 +232,19 @@ class InProcessTransport:
 
     async def list_indexes(self, identifier: TableIdentifier) -> list[IndexInfo]:
         return await self._service.list_indexes(identifier)
+
+    async def register_index(
+        self,
+        identifier: TableIdentifier,
+        index: str,
+        *,
+        metadata_location: str,
+    ) -> None:
+        await self._service.register_index(
+            identifier,
+            index,
+            metadata_location=metadata_location,
+        )
 
     async def drop_index(self, identifier: TableIdentifier, index: str) -> None:
         await self._service.drop_index(identifier, index)

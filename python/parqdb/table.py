@@ -29,6 +29,22 @@ class Table(Protocol):
         wait_timeout: timedelta | None = None,
     ) -> None: ...
 
+    def register_index(
+        self,
+        index: str,
+        *,
+        metadata_location: str,
+    ) -> None: ...
+
+    def refresh_index(
+        self,
+        index: str,
+        *,
+        config: IVF | None = None,
+        writer_options: WriteOptions | None = None,
+        wait_timeout: timedelta | None = None,
+    ) -> None: ...
+
     def index_status(self, index: str) -> IndexStatus: ...
 
     def wait_for_index(

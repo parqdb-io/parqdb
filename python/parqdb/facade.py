@@ -240,6 +240,18 @@ class AsyncSourceTable:
             wait_timeout=wait_timeout,
         )
 
+    async def register_index(
+        self,
+        index: str,
+        *,
+        metadata_location: str,
+    ) -> None:
+        await self._session._transport.register_index(
+            self.identifier,
+            index,
+            metadata_location=metadata_location,
+        )
+
     async def refresh_index(
         self,
         index: str,
@@ -376,7 +388,7 @@ class Session:
     @property
     def warehouse(self) -> str:
         """Return the index warehouse bound to this embedded session."""
-        return self._embedded_host().index_root
+        return self._embedded_host().warehouse
 
     @property
     def maintenance(self) -> Any:
@@ -478,6 +490,20 @@ class SourceTable:
                 config=config,
                 writer_options=writer_options,
                 wait_timeout=wait_timeout,
+            )
+        )
+
+    def register_index(
+        self,
+        index: str,
+        *,
+        metadata_location: str,
+    ) -> None:
+        self._session._run(
+            self._session._async._transport.register_index(
+                self.identifier,
+                index,
+                metadata_location=metadata_location,
             )
         )
 

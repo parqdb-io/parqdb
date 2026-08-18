@@ -1,5 +1,10 @@
 # Reusable IVF Centroids and Cosine Support
 
+> Source binding and centroid identity in this RFC are superseded by
+> [Portable Index Registration](20260817-portable-index-registration.md).
+> Published metadata is source-free; the catalog binds it to a source and
+> scopes centroid reuse by that binding.
+
 ## Problem
 
 IVF, IVF-LVQ4, and IVF-LVQ8 indexes over the same source can use the same

@@ -1,10 +1,19 @@
 //! Embedded catalog operations and index discovery.
 
-use parqdb_catalog::{CatalogEntry, Error as CatalogError, IndexIdentifier};
-use parqdb_index::{Error as IndexError, LoadedIndex};
-use parqdb_meta::{IndexMetadata, RelationReference};
+use std::time::Duration;
 
-use super::source::canonical_source;
+use arrow::datatypes::{DataType, Schema};
+use parqdb_catalog::{
+    CatalogEntry, Error as CatalogError, IndexIdentifier, IvfCentroidsClaimResult,
+};
+use parqdb_index::{Error as IndexError, LoadedIndex};
+use parqdb_meta::{
+    IndexMetadata, IndexSnapshot, PostingEncoding, RelationReference, ivf_centroids_reference,
+};
+use uuid::Uuid;
+
+use super::index_relation::IndexRelationLayout;
+use super::source::{canonical_source, validate_index_source_schema};
 use super::{IndexInfo, LocalSession};
 use crate::maintenance::{self, MaintenanceObject};
 use crate::{Error, Result};
@@ -48,13 +57,157 @@ impl LocalSession {
         ))
     }
 
-    /// Registers an existing metadata file in the root namespace.
-    pub async fn register_index(&self, name: &str, metadata_location: &str) -> Result<()> {
+    /// Registers an existing index package for one Parquet source.
+    pub async fn register_source_index(
+        &self,
+        source: &str,
+        name: &str,
+        metadata_location: &str,
+    ) -> Result<()> {
+        let source_uri = canonical_source(&self.warehouse.registry(), source)?;
+        self.register_relation_index(
+            &RelationReference::Parquet { uri: source_uri },
+            name,
+            metadata_location,
+        )
+        .await
+    }
+
+    /// Registers an existing index package for one exact source relation.
+    pub async fn register_relation_index(
+        &self,
+        source: &RelationReference,
+        name: &str,
+        metadata_location: &str,
+    ) -> Result<()> {
+        self.register_relation_index_in(&[], source, name, metadata_location)
+            .await
+    }
+
+    /// Registers an existing index package in one catalog namespace.
+    pub async fn register_relation_index_in(
+        &self,
+        namespace: &[String],
+        source: &RelationReference,
+        name: &str,
+        metadata_location: &str,
+    ) -> Result<()> {
+        source.validate()?;
+        let identifier = namespaced_index_identifier(namespace, name)?;
         let _guard = self.coordination.write()?;
+        if self.indexes.exists(&identifier)? {
+            return Err(CatalogError::AlreadyExists(identifier).into());
+        }
+        let binding = self.bind_relation(source).await?;
+        let metadata = self.indexes.load_unregistered(metadata_location).await?;
+        self.validate_registration(&binding, &metadata).await?;
+        self.publish_registered_centroids(source, &metadata).await?;
         self.indexes
-            .register(&local_index_identifier(name)?, metadata_location)
-            .await?;
+            .catalog()
+            .register(&identifier, source, metadata_location, &metadata)?;
         Ok(())
+    }
+
+    async fn validate_registration(
+        &self,
+        source: &super::source::SourceBinding,
+        metadata: &IndexMetadata,
+    ) -> Result<()> {
+        for snapshot in &metadata.snapshots {
+            validate_index_source_schema(source.schema.as_ref(), snapshot)?;
+            for location in snapshot.index_relations.values() {
+                self.indexes
+                    .metadata_store()
+                    .resolve_location(location, location.ends_with('/'))?;
+            }
+        }
+        let snapshot = metadata.current_snapshot()?;
+        let source_rows = self
+            .context
+            .read_table(source.provider.clone())?
+            .count()
+            .await?;
+        if i64::try_from(source_rows).ok() != Some(snapshot.indexed_rows) {
+            return Err(Error::InvalidSchema(format!(
+                "source row count {source_rows} does not match indexed-rows {}",
+                snapshot.indexed_rows
+            )));
+        }
+
+        let centroids = self
+            .indexes
+            .load_ivf_centroids_reference(&source.reference, &ivf_centroids_reference(snapshot)?)
+            .await?;
+        let centroids_location = self.indexes.metadata_store().resolve_location(
+            &centroids.metadata.centroids,
+            centroids.metadata.centroids.ends_with('/'),
+        )?;
+        let centroids_batch = self.parquet.read(&centroids_location, None).await?;
+        crate::ivf::read_centroids(
+            &centroids_batch,
+            snapshot.parameter_usize("nlist")?,
+            snapshot.parameter_usize("dimension")?,
+        )?;
+
+        let postings_location = snapshot
+            .index_relations
+            .get("ivf_postings")
+            .ok_or_else(|| Error::InvalidMetadata("missing relation role: ivf_postings".into()))?;
+        let postings_location = self
+            .indexes
+            .metadata_store()
+            .resolve_location(postings_location, postings_location.ends_with('/'))?;
+        let postings = self
+            .index_relation_providers
+            .get_or_create_parquet(
+                &postings_location,
+                IndexRelationLayout::HiveCid,
+                &self.context.state(),
+            )
+            .await?;
+        validate_postings_schema(source.schema.as_ref(), postings.schema().as_ref(), snapshot)?;
+        let posting_rows = self.context.read_table(postings)?.count().await?;
+        if i64::try_from(posting_rows).ok() != Some(snapshot.indexed_rows) {
+            return Err(Error::InvalidSchema(format!(
+                "postings row count {posting_rows} does not match indexed-rows {}",
+                snapshot.indexed_rows
+            )));
+        }
+        Ok(())
+    }
+
+    async fn publish_registered_centroids(
+        &self,
+        source: &RelationReference,
+        metadata: &IndexMetadata,
+    ) -> Result<()> {
+        let reference = ivf_centroids_reference(metadata.current_snapshot()?)?;
+        let loaded = self
+            .indexes
+            .load_ivf_centroids_reference(source, &reference)
+            .await?;
+        let owner = Uuid::new_v4();
+        loop {
+            match self.catalog.claim_ivf_centroids(
+                source,
+                &loaded.metadata.descriptor,
+                owner,
+                60_000,
+            )? {
+                IvfCentroidsClaimResult::Ready(_) => return Ok(()),
+                IvfCentroidsClaimResult::Busy { .. } => {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                IvfCentroidsClaimResult::Claimed(claim) => {
+                    self.catalog.publish_ivf_centroids(
+                        &claim,
+                        &loaded.entry.metadata_location,
+                        &loaded.metadata,
+                    )?;
+                    return Ok(());
+                }
+            }
+        }
     }
 
     /// Removes a root-namespace index mapping without deleting index data.
@@ -146,8 +299,7 @@ impl LocalSession {
                 error
             }
         })?;
-        if loaded.metadata.current_snapshot()?.source.exact_state_key() != source.exact_state_key()
-        {
+        if loaded.entry.source.exact_state_key() != source.exact_state_key() {
             return Err(Error::IndexNotFound(name.to_owned()));
         }
         let _guard = self.coordination.write()?;
@@ -254,4 +406,66 @@ fn index_info(entry: &CatalogEntry, metadata: &IndexMetadata) -> Result<IndexInf
         parameters: snapshot.parameters.clone(),
         current_snapshot_id: snapshot.snapshot_id,
     })
+}
+
+fn validate_postings_schema(
+    source: &Schema,
+    postings: &Schema,
+    snapshot: &IndexSnapshot,
+) -> Result<()> {
+    let encoding = PostingEncoding::from_snapshot(snapshot)?;
+    let expected_fields =
+        1 + snapshot.source_key_fields.len() + usize::from(encoding != PostingEncoding::Source) * 3;
+    if postings.fields().len() != expected_fields {
+        return Err(Error::InvalidSchema(
+            "ivf_postings fields do not match index metadata".into(),
+        ));
+    }
+    require_posting_field(postings, "cid", &DataType::Int32)?;
+    for (position, source_key) in snapshot.source_key_fields.iter().enumerate() {
+        let source_type = source
+            .field_with_name(source_key)
+            .map_err(|_| {
+                Error::InvalidSchema(format!("source key column not found: {source_key}"))
+            })?
+            .data_type();
+        let expected = match source_type {
+            DataType::Utf8View | DataType::LargeUtf8 => DataType::Utf8,
+            DataType::BinaryView | DataType::LargeBinary => DataType::Binary,
+            other => other.clone(),
+        };
+        require_posting_field(postings, &format!("key_{}", position + 1), &expected)?;
+    }
+    if encoding != PostingEncoding::Source {
+        require_posting_field(postings, "offset", &DataType::Float32)?;
+        require_posting_field(postings, "scale", &DataType::Float32)?;
+        require_posting_field(postings, "code", &DataType::BinaryView)?;
+    }
+    Ok(())
+}
+
+fn require_posting_field(schema: &Schema, name: &str, data_type: &DataType) -> Result<()> {
+    let field = schema
+        .field_with_name(name)
+        .map_err(|_| Error::InvalidSchema(format!("ivf_postings is missing {name}")))?;
+    if !equivalent_posting_type(field.data_type(), data_type) {
+        return Err(Error::InvalidSchema(format!(
+            "ivf_postings.{name} must have type {data_type}"
+        )));
+    }
+    Ok(())
+}
+
+fn equivalent_posting_type(actual: &DataType, expected: &DataType) -> bool {
+    actual == expected
+        || matches!(
+            (actual, expected),
+            (
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
+            ) | (
+                DataType::Binary | DataType::BinaryView | DataType::LargeBinary,
+                DataType::Binary | DataType::BinaryView | DataType::LargeBinary
+            )
+        )
 }

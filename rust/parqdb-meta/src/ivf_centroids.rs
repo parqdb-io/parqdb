@@ -4,9 +4,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::error::invalid;
-use crate::metadata::validate_metadata_location;
 use crate::serde_helpers::lowercase_uuid;
-use crate::{RelationReference, Result};
+use crate::{Result, validate_relative_location};
 
 /// Version of the deterministic centroid-training contract.
 pub const IVF_CLUSTERING_PROFILE_VERSION: i32 = 1;
@@ -50,8 +49,6 @@ impl DistanceMetric {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct IvfCentroidsDescriptor {
-    /// Exact source-table state used for training.
-    pub source: RelationReference,
     /// Source column containing vectors.
     pub vector_field: String,
     /// Canonical vector dimension.
@@ -65,23 +62,8 @@ pub struct IvfCentroidsDescriptor {
 }
 
 #[derive(Serialize)]
-#[serde(tag = "profile", rename_all = "lowercase")]
-enum FingerprintSource<'a> {
-    Parquet {
-        uri: &'a str,
-    },
-    Iceberg {
-        #[serde(rename = "table-uuid")]
-        table_uuid: Uuid,
-        #[serde(rename = "snapshot-id")]
-        snapshot_id: i64,
-    },
-}
-
-#[derive(Serialize)]
 #[serde(rename_all = "kebab-case")]
 struct FingerprintDescriptor<'a> {
-    source: FingerprintSource<'a>,
     vector_field: &'a str,
     dimension: i32,
     metric: DistanceMetric,
@@ -92,7 +74,6 @@ struct FingerprintDescriptor<'a> {
 impl IvfCentroidsDescriptor {
     /// Validates the descriptor independently.
     pub fn validate(&self) -> Result<()> {
-        self.source.validate()?;
         if self.vector_field.is_empty() {
             return invalid("IVF centroids vector-field must be non-empty");
         }
@@ -105,19 +86,7 @@ impl IvfCentroidsDescriptor {
     /// Returns the deterministic lookup fingerprint for this descriptor.
     pub fn fingerprint(&self) -> Result<String> {
         self.validate()?;
-        let source = match &self.source {
-            RelationReference::Parquet { uri } => FingerprintSource::Parquet { uri },
-            RelationReference::Iceberg {
-                table_uuid,
-                snapshot_id,
-                ..
-            } => FingerprintSource::Iceberg {
-                table_uuid: *table_uuid,
-                snapshot_id: *snapshot_id,
-            },
-        };
         let canonical = serde_json::to_vec(&FingerprintDescriptor {
-            source,
             vector_field: &self.vector_field,
             dimension: self.dimension,
             metric: self.metric,
@@ -131,8 +100,7 @@ impl IvfCentroidsDescriptor {
     /// Returns whether two descriptors name the same reusable coarse model.
     #[must_use]
     pub fn is_compatible_with(&self, other: &Self) -> bool {
-        self.source.exact_state_key() == other.source.exact_state_key()
-            && self.vector_field == other.vector_field
+        self.vector_field == other.vector_field
             && self.dimension == other.dimension
             && self.metric == other.metric
             && self.nlist == other.nlist
@@ -151,14 +119,12 @@ pub struct IvfCentroidsMetadata {
     pub artifact_uuid: Uuid,
     /// Deterministic descriptor fingerprint.
     pub fingerprint: String,
-    /// Base URI for this artifact's metadata files.
-    pub location: String,
     /// Artifact creation time as Unix epoch milliseconds.
     pub created_at_ms: i64,
     /// Semantic identity of the centroid model.
     pub descriptor: IvfCentroidsDescriptor,
-    /// Exact relation containing the centroid rows.
-    pub centroids: RelationReference,
+    /// Artifact-root-relative path containing the centroid rows.
+    pub centroids: String,
 }
 
 impl IvfCentroidsMetadata {
@@ -178,7 +144,6 @@ impl IvfCentroidsMetadata {
                 self.format_version
             ));
         }
-        validate_metadata_location(&self.location)?;
         if self.artifact_uuid.is_nil() {
             return invalid("IVF centroid artifact UUID must not be nil");
         }
@@ -189,7 +154,7 @@ impl IvfCentroidsMetadata {
         if self.fingerprint != self.descriptor.fingerprint()? {
             return invalid("IVF centroid fingerprint does not match its descriptor");
         }
-        self.centroids.validate()?;
+        validate_relative_location(&self.centroids)?;
         Ok(())
     }
 }
@@ -201,7 +166,7 @@ pub struct IvfCentroidsReference {
     pub fingerprint: String,
     /// Stable artifact UUID.
     pub artifact_uuid: Uuid,
-    /// Immutable IVF-centroids metadata location.
+    /// Artifact-root-relative IVF-centroids metadata location.
     pub metadata_location: String,
 }
 
@@ -232,7 +197,7 @@ impl IvfCentroidsReference {
         if parsed.to_string() != self.fingerprint {
             return invalid("IVF centroid fingerprint must be a lowercase UUID");
         }
-        validate_metadata_location(&self.metadata_location)
+        validate_relative_location(&self.metadata_location)
     }
 }
 
@@ -242,9 +207,6 @@ mod tests {
 
     fn parquet_descriptor() -> IvfCentroidsDescriptor {
         IvfCentroidsDescriptor {
-            source: RelationReference::Parquet {
-                uri: "s3://parqdb-fixtures/v1/valid/source/".into(),
-            },
             vector_field: "embedding".into(),
             dimension: 2,
             metric: DistanceMetric::L2Squared,
@@ -254,12 +216,12 @@ mod tests {
     }
 
     #[test]
-    fn parquet_descriptor_fingerprint_matches_the_spec_fixture() {
+    fn source_free_descriptor_fingerprint_matches_the_spec_fixture() {
         let descriptor = parquet_descriptor();
 
         assert_eq!(
             descriptor.fingerprint().unwrap(),
-            "77f9b8f9-77fd-56de-9353-3d160ea0af7b"
+            "3ad6988a-389e-53de-aaa6-f210345fd894"
         );
     }
 
@@ -272,55 +234,41 @@ mod tests {
             format_version: 1,
             artifact_uuid,
             fingerprint: fingerprint.clone(),
-            location: "s3://parqdb-fixtures/centroid-artifacts/".into(),
             created_at_ms: 1,
             descriptor,
-            centroids: RelationReference::Parquet {
-                uri: "s3://parqdb-fixtures/centroid-artifacts/centroids/".into(),
-            },
+            centroids: "centroids/".into(),
         };
 
         metadata.validate().unwrap();
         metadata.fingerprint = Uuid::new_v4().to_string();
         assert!(metadata.validate().is_err());
         assert!(
+            IvfCentroidsReference::new(fingerprint.to_uppercase(), artifact_uuid, "metadata.json")
+                .is_err()
+        );
+        assert!(
             IvfCentroidsReference::new(
-                fingerprint.to_uppercase(),
+                fingerprint,
                 artifact_uuid,
-                &metadata.location
+                "s3://parqdb-fixtures/metadata.json"
             )
             .is_err()
         );
-        assert!(IvfCentroidsReference::new(fingerprint, artifact_uuid, "relative.json").is_err());
     }
 
     #[test]
-    fn iceberg_fingerprint_ignores_locator_changes() {
-        let table_uuid = Uuid::new_v4();
+    fn fingerprint_changes_with_the_centroid_descriptor() {
         let first = IvfCentroidsDescriptor {
-            source: RelationReference::Iceberg {
-                catalog: "first".into(),
-                namespace: vec!["analytics".into()],
-                name: "documents".into(),
-                table_uuid,
-                snapshot_id: 101,
-            },
             vector_field: "embedding".into(),
             dimension: 2,
             metric: DistanceMetric::Cosine,
             nlist: 2,
             clustering_profile_version: 1,
         };
-        let mut renamed = first.clone();
-        renamed.source = RelationReference::Iceberg {
-            catalog: "second".into(),
-            namespace: vec!["renamed".into()],
-            name: "vectors".into(),
-            table_uuid,
-            snapshot_id: 101,
-        };
+        let mut changed = first.clone();
+        changed.vector_field = "other_embedding".into();
 
-        assert!(first.is_compatible_with(&renamed));
-        assert_eq!(first.fingerprint().unwrap(), renamed.fingerprint().unwrap());
+        assert!(!first.is_compatible_with(&changed));
+        assert_ne!(first.fingerprint().unwrap(), changed.fingerprint().unwrap());
     }
 }

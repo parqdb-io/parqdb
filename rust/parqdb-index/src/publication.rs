@@ -58,14 +58,16 @@ pub async fn publish_initial(
         parameters,
         index_relations,
     } = request.build;
+    let indexed_rows = indexed_rows(&parameters)?;
+    let index_relations = portable_relations(metadata_store, index_relations)?;
     let snapshot = IndexSnapshot {
         snapshot_id: request.snapshot_id,
         sequence_number: 1,
         timestamp_ms,
         summary: summary("create", request.builder),
-        source: request.source,
         vector_field: request.vector_field.to_owned(),
         source_key_fields: request.source_key_fields.to_vec(),
+        indexed_rows,
         index_family: format.family,
         index_schema_version: format.schema_version,
         metric: format.metric,
@@ -75,7 +77,6 @@ pub async fn publish_initial(
     let metadata = IndexMetadata {
         format_version: 1,
         index_uuid: request.index_uuid,
-        location: metadata_store.index_location(request.index_uuid)?,
         last_updated_ms: timestamp_ms,
         last_sequence_number: 1,
         current_snapshot_id: request.snapshot_id,
@@ -87,7 +88,12 @@ pub async fn publish_initial(
         properties: BTreeMap::new(),
     };
     let metadata_location = metadata_store.write_initial(&metadata).await?;
-    catalog.register(&request.identifier, &metadata_location, &metadata)?;
+    catalog.register(
+        &request.identifier,
+        &request.source,
+        &metadata_location,
+        &metadata,
+    )?;
     Ok(PublishedIndex {
         identifier: request.identifier,
         metadata_location,
@@ -107,6 +113,8 @@ pub async fn publish_refresh(
         parameters,
         index_relations,
     } = request.build;
+    let indexed_rows = indexed_rows(&parameters)?;
+    let index_relations = portable_relations(metadata_store, index_relations)?;
     let timestamp_ms = now_ms()?.max(request.base_metadata.last_updated_ms);
     let sequence_number = request
         .base_metadata
@@ -118,9 +126,9 @@ pub async fn publish_refresh(
         sequence_number,
         timestamp_ms,
         summary: summary("refresh", request.builder),
-        source: request.source,
         vector_field: base_snapshot.vector_field.clone(),
         source_key_fields: base_snapshot.source_key_fields.clone(),
+        indexed_rows,
         index_family: format.family,
         index_schema_version: format.schema_version,
         metric: format.metric,
@@ -141,6 +149,7 @@ pub async fn publish_refresh(
         .await?;
     catalog.commit(
         &request.identifier,
+        &request.source,
         request.base_metadata_location,
         &metadata_location,
         request.base_metadata,
@@ -151,6 +160,31 @@ pub async fn publish_refresh(
         metadata_location,
         metadata,
     })
+}
+
+fn indexed_rows(parameters: &BTreeMap<String, String>) -> Result<i64> {
+    parameters
+        .get("ntotal")
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|value| *value > 0)
+        .ok_or_else(|| Error::InvalidMetadata("ntotal must be a positive indexed row count".into()))
+}
+
+fn portable_relations(
+    metadata_store: &MetadataStore,
+    relations: BTreeMap<String, RelationReference>,
+) -> Result<BTreeMap<String, String>> {
+    relations
+        .into_iter()
+        .map(|(role, relation)| match relation {
+            RelationReference::Parquet { uri } => {
+                Ok((role, metadata_store.relative_location(&uri)?))
+            }
+            RelationReference::Iceberg { .. } => Err(Error::InvalidMetadata(
+                "index artifacts must use warehouse-relative Parquet paths".into(),
+            )),
+        })
+        .collect()
 }
 
 /// Allocates a positive, process-independent snapshot identifier.

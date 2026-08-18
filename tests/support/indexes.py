@@ -10,7 +10,7 @@ _IVF_CENTROIDS_FINGERPRINT_NAMESPACE = uuid.UUID("2fb71e63-a27c-4fc5-9d6d-507069
 
 
 def write_ivf_centroids_metadata(
-    metadata_root: Path,
+    warehouse: Path,
     *,
     source: Mapping[str, Any],
     centroids: Mapping[str, Any],
@@ -58,7 +58,7 @@ def write_ivf_centroids_metadata(
         )
     )
     artifact_uuid = uuid.uuid4()
-    location = metadata_root / "metadata" / str(artifact_uuid)
+    location = warehouse / "metadata" / str(artifact_uuid)
     metadata_location = location / "v1.metadata.json"
     metadata_location.parent.mkdir(parents=True, exist_ok=True)
     metadata_location.write_text(

@@ -144,7 +144,6 @@ def test_removed_metadata_cannot_be_registered_from_session_cache(
     assert not _uri_path(entry.metadata_location).exists()
     with pytest.raises(parqdb.StorageError):
         register_table_index(
-            session,
             vectors,
             "resurrected",
             entry.metadata_location,

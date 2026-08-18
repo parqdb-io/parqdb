@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use parqdb_catalog::{Error, IndexCatalog, IndexIdentifier, Result, SqliteCatalog};
-use parqdb_meta::IndexMetadata;
+use parqdb_meta::{IndexMetadata, RelationReference};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -59,6 +59,11 @@ fn sqlite_catalog_matches_the_portable_operation_trace() {
 
     let temporary = TempDir::new().unwrap();
     let catalog = SqliteCatalog::open(temporary.path().join("catalog.sqlite")).unwrap();
+    let source = RelationReference::Parquet {
+        uri: url::Url::from_file_path(root.join("source.parquet"))
+            .unwrap()
+            .into(),
+    };
 
     for operation in trace["operations"].as_array().unwrap() {
         let result: Result<Option<String>> = match operation["operation"].as_str().unwrap() {
@@ -71,6 +76,7 @@ fn sqlite_catalog_matches_the_portable_operation_trace() {
                 catalog
                     .register(
                         &identifier,
+                        &source,
                         location(location_name),
                         &metadata[metadata_name],
                     )
@@ -84,6 +90,7 @@ fn sqlite_catalog_matches_the_portable_operation_trace() {
                 catalog
                     .commit(
                         &identifier,
+                        &source,
                         location(base_location),
                         location(new_location),
                         &metadata[base_metadata],

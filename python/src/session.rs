@@ -342,13 +342,23 @@ impl PyNativeSession {
     fn register_index(
         &self,
         py: Python<'_>,
+        source: &str,
+        index_namespace: Vec<String>,
         name: String,
         metadata_location: String,
     ) -> PyResult<()> {
+        let source = parse_relation_reference(source)?;
         let session = Arc::clone(&self.session);
         let runtime = Arc::clone(&self.runtime);
-        py.detach(move || runtime.block_on(session.register_index(&name, &metadata_location)))
-            .map_err(|error| core_error(&error))
+        py.detach(move || {
+            runtime.block_on(session.register_relation_index_in(
+                &index_namespace,
+                &source,
+                &name,
+                &metadata_location,
+            ))
+        })
+        .map_err(|error| core_error(&error))
     }
 
     fn select_index_metadata(

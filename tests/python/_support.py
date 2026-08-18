@@ -4,8 +4,7 @@ import json
 from collections.abc import Mapping
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 import parqdb
 import pyarrow as pa
@@ -89,15 +88,13 @@ def load_table_index(
 
 
 def register_table_index(
-    session: parqdb.Session,
     table: parqdb.SourceTable,
     index: str,
     metadata_location: str,
 ) -> None:
-    session._indexes.register(
+    table.register_index(
         index,
-        metadata_location,
-        namespace=table.identifier.index_namespace,
+        metadata_location=metadata_location,
     )
 
 
@@ -112,19 +109,19 @@ def drop_table_index_entry(
     )
 
 
-def relation_root(reference: Mapping[str, Any]) -> Path:
-    parsed = urlparse(reference["uri"])
-    assert reference["profile"] == "parquet"
+def relation_root(reference: str, warehouse: str) -> Path:
+    assert isinstance(reference, str)
+    parsed = urlparse(urljoin(warehouse.rstrip("/") + "/", reference))
     assert parsed.scheme == "file"
     return Path(unquote(parsed.path))
 
 
-def relation_files(reference: Mapping[str, Any]) -> list[Path]:
-    return sorted(relation_root(reference).rglob("*.parquet"))
+def relation_files(reference: str, warehouse: str) -> list[Path]:
+    return sorted(relation_root(reference, warehouse).rglob("*.parquet"))
 
 
-def relation_path(reference: Mapping[str, Any]) -> Path:
-    files = relation_files(reference)
+def relation_path(reference: str, warehouse: str) -> Path:
+    files = relation_files(reference, warehouse)
     assert files
     return files[0]
 

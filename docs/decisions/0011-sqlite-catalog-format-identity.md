@@ -5,13 +5,10 @@
 
 ## Context
 
-ParqDB uses SQLite for its embedded catalog. Earlier prerelease revisions used
-internal schema generations 1 through 4. The current layout names reusable
-centroid coordination explicitly and is generation 5.
-
-Resetting the generation to 1 would be unsafe: an old prerelease database could
-then be mistaken for the current layout. A schema number also cannot establish
-that an arbitrary SQLite database belongs to ParqDB.
+ParqDB uses SQLite for its embedded catalog. No stable version has been
+published, so the current prerelease layout is the format-1 baseline rather
+than a migration target. A schema number alone cannot establish that an
+arbitrary SQLite database belongs to ParqDB.
 
 The catalog schema generation is an implementation detail. It is independent
 of the public ParqDB index schema stored in open index metadata.
@@ -22,18 +19,18 @@ ParqDB SQLite catalogs use both SQLite header fields:
 
 | Field | Current value | Purpose |
 | --- | ---: | --- |
-| `application_id` | `0x524c4659` (`RLFY`) | Identifies a ParqDB catalog |
-| `user_version` | `5` | Identifies the current internal table layout |
+| `application_id` | `0x50514442` (`PQDB`) | Identifies a ParqDB catalog |
+| `user_version` | `1` | Identifies the current internal table layout |
 
 A new empty database is initialized with both values and the complete current
-schema. An existing database opens only when both values match. Catalogs with
-prerelease schema generations 1 through 4, unversioned existing schemas, and
-unrelated application IDs are rejected before catalog tables are accessed.
+schema. An existing database opens only when both values match. Unversioned
+existing schemas and unrelated application IDs are rejected before catalog
+tables are accessed.
 
 ParqDB does not provide catalog migrations or backward-compatibility guarantees
 before a stable release. Users must recreate incompatible prerelease catalogs
-and rebuild or republish their indexes. The numeric value 5 prevents format
-collisions; it does not imply support for generations 1 through 4.
+and rebuild or republish their indexes. There is no compatibility reader for
+earlier development layouts that also happened to use `user_version = 1`.
 
 ## Stable-Release Boundary
 

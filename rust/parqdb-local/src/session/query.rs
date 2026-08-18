@@ -8,7 +8,8 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion::execution::context::SQLOptions;
 use datafusion::prelude::{SessionContext, col, lit};
-use parqdb_meta::{DistanceMetric, IndexSnapshot, PostingEncoding, RelationReference};
+use parqdb_index::LoadedIndex;
+use parqdb_meta::{DistanceMetric, PostingEncoding, RelationReference};
 use uuid::Uuid;
 
 use super::LocalSession;
@@ -195,14 +196,15 @@ impl LocalSession {
             Error::InvalidMetadata(format!("unsupported IVF metric: {}", snapshot.metric))
         })?;
         let query = crate::vector::transform_query(&request.query, metric)?;
-        let centroid_artifact = self.indexes.load_snapshot_ivf_centroids(snapshot).await?;
-        let postings_relation_key = relation_key(index_relation(snapshot, "ivf_postings")?);
+        let centroid_artifact = self.indexes.load_snapshot_ivf_centroids(&loaded).await?;
+        let postings_relation = index_relation(&self.warehouse, &loaded, "ivf_postings")?;
+        let postings_relation_key = relation_key(&postings_relation);
         let centroid_cache_key = format!(
             "{}\0ivf_centroids",
             centroid_artifact.entry.metadata_location
         );
         let (cluster_selection, nlist) = self
-            .resolve_cluster_selection(snapshot, &centroid_cache_key, &query, request.nprobe)
+            .resolve_cluster_selection(&loaded, &centroid_cache_key, &query, request.nprobe)
             .await?;
         Ok(ResolvedSearch {
             source_relation_key: source.key.clone(),
@@ -352,15 +354,11 @@ impl LocalSession {
         })
     }
 
-    async fn read_index_relation(
-        &self,
-        snapshot: &IndexSnapshot,
-        role: &str,
-    ) -> Result<RecordBatch> {
-        let reference = index_relation(snapshot, role)?;
+    async fn read_index_relation(&self, loaded: &LoadedIndex, role: &str) -> Result<RecordBatch> {
+        let reference = index_relation(&self.warehouse, loaded, role)?;
         let dataframe = self
             .index_relation_dataframe(
-                &relation_key(reference),
+                &relation_key(&reference),
                 if role == "ivf_postings" {
                     IndexRelationLayout::HiveCid
                 } else {
@@ -445,11 +443,12 @@ impl LocalSession {
 
     async fn resolve_cluster_selection(
         &self,
-        snapshot: &IndexSnapshot,
+        loaded: &LoadedIndex,
         cache_key: &str,
         query: &[f32],
         requested_nprobe: Option<usize>,
     ) -> Result<(ClusterSelection, usize)> {
+        let snapshot = loaded.metadata.current_snapshot()?;
         let (dimension, nlist, nprobe) =
             validated_cluster_search(snapshot, query, requested_nprobe)?;
         let selection = if nprobe == nlist {
@@ -458,7 +457,7 @@ impl LocalSession {
             let centroids = self
                 .index_relation_providers
                 .get_or_load_centroids(cache_key, || async {
-                    let centroids = self.read_index_relation(snapshot, "ivf_centroids").await?;
+                    let centroids = self.read_index_relation(loaded, "ivf_centroids").await?;
                     let values = crate::ivf::read_centroids(&centroids, nlist, dimension)?;
                     super::index_relation::CentroidNavigator::new(
                         nlist,
@@ -480,7 +479,11 @@ impl LocalSession {
             ClusterSelection::Native(selected)
         } else {
             ClusterSelection::Relational {
-                centroids_relation_key: relation_key(index_relation(snapshot, "ivf_centroids")?),
+                centroids_relation_key: relation_key(&index_relation(
+                    &self.warehouse,
+                    loaded,
+                    "ivf_centroids",
+                )?),
                 nprobe,
             }
         };
@@ -586,11 +589,20 @@ fn quote_identifier(identifier: &str) -> String {
     format!("\"{}\"", identifier.replace('"', "\"\""))
 }
 
-fn index_relation<'a>(snapshot: &'a IndexSnapshot, role: &str) -> Result<&'a RelationReference> {
-    snapshot
+fn index_relation(
+    warehouse: &parqdb_storage::Warehouse,
+    loaded: &LoadedIndex,
+    role: &str,
+) -> Result<RelationReference> {
+    let relative = loaded
+        .metadata
+        .current_snapshot()?
         .index_relations
         .get(role)
-        .ok_or_else(|| Error::InvalidMetadata(format!("missing relation role: {role}")))
+        .ok_or_else(|| Error::InvalidMetadata(format!("missing relation role: {role}")))?;
+    Ok(RelationReference::Parquet {
+        uri: warehouse.location(relative, relative.ends_with('/'))?,
+    })
 }
 
 fn sql_relation_lock_error() -> Error {

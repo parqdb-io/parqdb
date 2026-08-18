@@ -90,6 +90,11 @@ def _application(*, lifespan: Any = None, source_policy: SourceUriPolicy) -> Sta
             Route("/openapi.json", _openapi, methods=["GET"]),
             Route("/v1/table", _list_tables, methods=["GET"]),
             Route(
+                "/v1/table/{table_id:path}/index/{index_name:path}/register",
+                _register_index,
+                methods=["POST"],
+            ),
+            Route(
                 "/v1/table/{table_id:path}/register",
                 _register_table,
                 methods=["POST"],
@@ -267,6 +272,28 @@ async def _list_indexes(request: Request) -> Response:
             request,
             {"indexes": [index_info_to_json(index) for index in indexes]},
         )
+
+    return await _handle(request, operation)
+
+
+async def _register_index(request: Request) -> Response:
+    async def operation() -> Response:
+        body = await _json_body(request)
+        _only_fields(
+            body,
+            {"source", "index", "metadata_location"},
+        )
+        identifier = _scoped_identifier(request, body)
+        index = _scoped_index(request, body)
+        metadata_location = _required_string(
+            body.get("metadata_location"), "metadata_location"
+        )
+        await _service(request).register_index(
+            identifier,
+            index,
+            metadata_location=metadata_location,
+        )
+        return _json_response(request, {"registered": True})
 
     return await _handle(request, operation)
 

@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::error::invalid;
 use crate::family::validate_family;
 use crate::serde_helpers::{deserialize_unique_map, lowercase_uuid};
-use crate::{Error, RelationReference, Result};
+use crate::{Error, Result};
 
 /// Entry recording when an index snapshot became current.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,12 +34,12 @@ pub struct IndexSnapshot {
     /// Non-semantic provenance values.
     #[serde(deserialize_with = "deserialize_unique_map")]
     pub summary: BTreeMap<String, String>,
-    /// Exact source-table reference.
-    pub source: RelationReference,
     /// Source column containing vectors.
     pub vector_field: String,
     /// Ordered source unique-key columns.
     pub source_key_fields: Vec<String>,
+    /// Number of source rows represented by this snapshot.
+    pub indexed_rows: i64,
     /// Index-family identifier.
     pub index_family: String,
     /// Family schema version.
@@ -49,9 +49,9 @@ pub struct IndexSnapshot {
     /// Family-defined canonical parameters.
     #[serde(deserialize_with = "deserialize_unique_map")]
     pub parameters: BTreeMap<String, String>,
-    /// Family role to exact index-table reference.
+    /// Family role to warehouse-relative index-table path.
     #[serde(deserialize_with = "deserialize_unique_map")]
-    pub index_relations: BTreeMap<String, RelationReference>,
+    pub index_relations: BTreeMap<String, String>,
 }
 
 impl IndexSnapshot {
@@ -62,7 +62,6 @@ impl IndexSnapshot {
                 "snapshot IDs and sequence numbers must be positive and timestamps must be non-negative",
             );
         }
-        self.source.validate()?;
         if self.vector_field.is_empty()
             || self.source_key_fields.is_empty()
             || self.source_key_fields.iter().any(String::is_empty)
@@ -73,14 +72,17 @@ impl IndexSnapshot {
         if unique_keys.len() != self.source_key_fields.len() {
             return invalid("source-key-fields must not contain duplicates");
         }
+        if self.indexed_rows <= 0 {
+            return invalid("indexed-rows must be positive");
+        }
         if self.summary.keys().any(String::is_empty)
             || self.parameters.keys().any(String::is_empty)
             || self.index_relations.keys().any(String::is_empty)
         {
             return invalid("map keys must be non-empty");
         }
-        for reference in self.index_relations.values() {
-            reference.validate()?;
+        for location in self.index_relations.values() {
+            validate_relative_location(location)?;
         }
         validate_family(self)
     }
@@ -106,8 +108,6 @@ pub struct IndexMetadata {
     /// Stable UUID of the logical index.
     #[serde(with = "lowercase_uuid")]
     pub index_uuid: Uuid,
-    /// Base URI for metadata files.
-    pub location: String,
     /// Metadata creation time as Unix epoch milliseconds.
     pub last_updated_ms: i64,
     /// Greatest snapshot sequence number ever allocated.
@@ -140,7 +140,6 @@ impl IndexMetadata {
                 self.format_version
             ));
         }
-        validate_metadata_location(&self.location)?;
         if self.last_updated_ms < 0
             || self.last_sequence_number <= 0
             || self.current_snapshot_id <= 0
@@ -197,9 +196,6 @@ impl IndexMetadata {
         self.validate()?;
         if self.index_uuid != base.index_uuid {
             return invalid("index-uuid must remain unchanged");
-        }
-        if self.location != base.location {
-            return invalid("location must remain unchanged");
         }
         if self.last_updated_ms < base.last_updated_ms {
             return invalid("last-updated-ms must not decrease");
@@ -298,7 +294,6 @@ impl IndexMetadata {
 
 #[derive(PartialEq, Eq)]
 struct SnapshotIdentity {
-    source: String,
     vector_field: String,
     source_key_fields: Vec<String>,
     index_family: String,
@@ -308,7 +303,6 @@ struct SnapshotIdentity {
 impl SnapshotIdentity {
     fn from_snapshot(snapshot: &IndexSnapshot) -> Self {
         Self {
-            source: snapshot.source.identity_key(),
             vector_field: snapshot.vector_field.clone(),
             source_key_fields: snapshot.source_key_fields.clone(),
             index_family: snapshot.index_family.clone(),
@@ -317,17 +311,36 @@ impl SnapshotIdentity {
     }
 }
 
-pub(crate) fn validate_metadata_location(location: &str) -> Result<()> {
-    let parsed = Url::parse(location).map_err(|error| Error(error.to_string()))?;
-    if !parsed.has_host() && parsed.scheme() != "file" {
-        return invalid("location must be an absolute URI");
+/// Validates one canonical path below the warehouse root.
+pub fn validate_relative_location(location: &str) -> Result<()> {
+    let path = location.strip_suffix('/').unwrap_or(location);
+    if location.is_empty()
+        || location.starts_with('/')
+        || location.contains('\\')
+        || location.contains('?')
+        || location.contains('#')
+        || path.is_empty()
+        || path
+            .split('/')
+            .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+    {
+        return invalid(format!("invalid warehouse-relative location: {location}"));
     }
-    if parsed.username() != ""
+    Ok(())
+}
+
+/// Validates one deployment-owned absolute storage URI.
+pub fn validate_absolute_location(location: &str) -> Result<()> {
+    let parsed = Url::parse(location).map_err(|error| Error(error.to_string()))?;
+    if (!parsed.has_host() && parsed.scheme() != "file")
+        || parsed.username() != ""
         || parsed.password().is_some()
         || parsed.query().is_some()
         || parsed.fragment().is_some()
     {
-        return invalid("location must not contain user information, query, or fragment");
+        return invalid(
+            "location must be an absolute URI without user information, query, or fragment",
+        );
     }
     Ok(())
 }

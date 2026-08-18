@@ -24,19 +24,20 @@ A ParqDB index is an access path for a source table. The source table remains
 authoritative for source rows. Index tables contain auxiliary data
 used to accelerate queries, such as centroids and postings.
 
-Each logical index has a catalog identifier. The catalog points to the current
-immutable metadata file. Each index snapshot in that file binds one source
-table to the index tables that contain its index data.
+Each logical index has a catalog identifier. The catalog binds that index to a
+source table and points to the current immutable metadata file. Each index
+snapshot describes the warehouse-relative index data for that binding.
 
 ```text
 catalog identifier
+    -> source table
     -> index metadata
-        -> source table
-        -> index tables
+        -> warehouse-relative index tables
 ```
 
-Relation profiles define how source and index table references are resolved.
-Query results preserve source columns and add index-family result fields.
+The runtime resolves the catalog-bound source through its host engine and
+index relations through the session warehouse. Query results preserve source
+columns and add index-family result fields.
 
 All indexes are published and loaded through a catalog. A catalog commit
 publishes metadata only; table consistency is defined by the applicable
@@ -51,16 +52,17 @@ consistency.
 - **Index** -- A logical access path for a source table.
 - **Index identifier** -- An Iceberg-style namespace and name that identify a
   logical index within a catalog.
-- **Index snapshot** -- An immutable logical binding between a source table,
-  an index family, and its index tables. It is distinct from a snapshot of
-  any table it references.
+- **Index snapshot** -- An immutable logical state for an index family and its
+  warehouse-relative index tables. The catalog owns the source binding.
 - **Source table** -- The host-engine table whose rows are indexed.
 - **Index table** -- A table that stores auxiliary data for an index
   family.
 - **Metadata file** -- An immutable, self-contained JSON document that stores
   index state and snapshot history.
 - **Catalog** -- A naming layer that maps an index identifier to its current
-  metadata file.
+  metadata file and source table.
+- **Warehouse** -- The single URI prefix used by a session for all index
+  metadata and data.
 - **Iceberg catalog** -- An Iceberg catalog registered at runtime under the
   logical name used by Iceberg relation references.
 - **Resolution context** -- Runtime configuration used by a relation profile to

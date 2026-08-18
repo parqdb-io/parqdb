@@ -2,9 +2,10 @@
 
 ## Overview
 
-A catalog maps an identifier to the current metadata location of one ParqDB
-index. It owns naming, discovery, registration, and metadata publication. It
-does not execute index queries.
+A catalog maps an identifier to the current metadata location and source-table
+binding of one ParqDB index. It owns naming, discovery, registration, and
+metadata publication. It does not execute index queries or store a per-index
+warehouse.
 
 This spec defines operation semantics, not an API, SQL syntax, metastore
 schema, or network protocol.
@@ -24,6 +25,8 @@ and index identifiers are not stored in index metadata.
 
 A **metadata location** is the absolute URI of an immutable metadata file. A
 **base metadata location** is the location on which an update was based.
+Every metadata location belongs to the single warehouse configured for the
+session using the catalog.
 
 ## Catalog Operations
 
@@ -33,9 +36,9 @@ describe semantics and do not prescribe public method names.
 
 | Operation | Semantics |
 |---|---|
-| `load(identifier)` | Return the current metadata location and metadata, or `INDEX_NOT_FOUND`. |
-| `register(identifier, metadata-location)` | Create a mapping only if the identifier is absent. |
-| `commit(identifier, base, new)` | Replace the current location only if it equals `base`. |
+| `load(identifier)` | Return the current metadata location and source binding, or `INDEX_NOT_FOUND`. |
+| `register(identifier, source, metadata-location)` | Create a source-bound mapping only if the identifier is absent. |
+| `commit(identifier, source, base, new)` | Replace the current location only if it equals `base`. |
 | `drop(identifier)` | Remove the mapping, or `INDEX_NOT_FOUND`. |
 | `rename(source, destination)` | Move a mapping if the source exists and destination does not. |
 | `list(namespace)` | Return identifiers visible in the namespace, or `NAMESPACE_NOT_FOUND`. |
@@ -52,8 +55,8 @@ A successful `register` or `commit` must reference metadata that satisfies:
 
 - the metadata format and snapshot invariants in
   [`metadata.md`](metadata.md);
-- relation-reference syntax and family-defined index-table roles; and
-- for `commit`, unchanged `index-uuid` and index `location`.
+- warehouse-relative location syntax and family-defined index-table roles; and
+- for `commit`, unchanged `index-uuid` and logical identity fields.
 
 Data-dependent validation belongs to the publisher, not the catalog.
 
@@ -69,15 +72,8 @@ To update an index, a writer:
 The successful compare-and-swap in step 4 is the publication point. Readers
 that already loaded the previous file continue to observe its immutable state.
 
-The commit publishes only the metadata file. It does not atomically commit,
-snapshot, or retain the source or index tables referenced by that file.
-Relation profiles define the guarantees of those references.
-
-For Iceberg tables, a publisher first commits the required table snapshots,
-then creates a ParqDB index snapshot that references their exact table UUIDs
-and snapshot IDs, and finally commits the ParqDB metadata location. The ParqDB
-catalog commit and every Iceberg catalog commit remain independent publication
-operations.
+The commit publishes only the metadata file and source binding. It does not
+atomically commit, snapshot, or retain the source table or warehouse objects.
 
 When concurrent commits use the same base, at most one succeeds. A losing
 writer reloads current metadata and reapplies its change only if it remains
@@ -90,8 +86,9 @@ the same model for
 ## Index Lifecycle
 
 Creating an index writes initial metadata with a new `index-uuid`, then
-registers it under an absent identifier. Registering an existing metadata file
-can recover catalog state without changing index identity.
+registers it under an absent identifier and source binding. Registering an
+existing metadata file can attach the same immutable index to a catalog-bound
+source without changing index identity or copying warehouse objects.
 
 The runtime name of the ParqDB index catalog is not stored in metadata. Rename
 therefore leaves metadata, `index-uuid`, snapshots, and index data unchanged.

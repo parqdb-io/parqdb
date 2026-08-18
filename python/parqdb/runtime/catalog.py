@@ -18,12 +18,6 @@ class _CatalogNative(Protocol):
         self, namespace: list[str], name: str
     ) -> tuple[str, str]: ...
 
-    def register_index(self, name: str, metadata_location: str) -> None: ...
-
-    def register_index_in(
-        self, namespace: list[str], name: str, metadata_location: str
-    ) -> None: ...
-
     def drop_index(self, name: str) -> None: ...
 
     def drop_index_in(self, namespace: list[str], name: str) -> None: ...
@@ -87,19 +81,6 @@ class IndexCatalog:
             metadata=freeze_json(json.loads(metadata)),
         )
 
-    def register(
-        self,
-        index: str,
-        metadata_location: str,
-        *,
-        namespace: Sequence[str] = (),
-    ) -> None:
-        resolved = _namespace(namespace)
-        if not resolved:
-            self._native.register_index(index, metadata_location)
-        else:
-            self._native.register_index_in(resolved, index, metadata_location)
-
     def drop(self, index: str, *, namespace: Sequence[str] = ()) -> None:
         resolved = _namespace(namespace)
         if not resolved:
@@ -160,7 +141,7 @@ class IndexCatalog:
 def open_index_catalog(
     catalog: str,
     *,
-    metadata_root: str | None = None,
+    warehouse: str | None = None,
     storage_options: Mapping[str, str] | None = None,
 ) -> IndexCatalog:
     """Open the query-engine-independent ParqDB index catalog."""
@@ -169,7 +150,7 @@ def open_index_catalog(
     return IndexCatalog(
         open_index_repository(
             catalog,
-            metadata_root=metadata_root,
+            warehouse=warehouse,
             storage_options=storage_options,
         )
     )

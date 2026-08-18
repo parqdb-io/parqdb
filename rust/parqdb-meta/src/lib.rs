@@ -13,5 +13,8 @@ pub use ivf_centroids::{
     DistanceMetric, IVF_CLUSTERING_PROFILE_VERSION, IvfCentroidsDescriptor, IvfCentroidsMetadata,
     IvfCentroidsReference,
 };
-pub use metadata::{IndexMetadata, IndexSnapshot, SnapshotLogEntry};
+pub use metadata::{
+    IndexMetadata, IndexSnapshot, SnapshotLogEntry, validate_absolute_location,
+    validate_relative_location,
+};
 pub use relation::RelationReference;

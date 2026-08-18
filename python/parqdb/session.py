@@ -50,7 +50,7 @@ class _EmbeddedSession(SessionContext):
         self,
         root: str | os.PathLike[str],
         *,
-        index_root: str | None = None,
+        warehouse: str | None = None,
         storage_options: Mapping[str, str] | None = None,
         catalog_path: str | os.PathLike[str] | None = None,
         iceberg: object | None = None,
@@ -75,13 +75,13 @@ class _EmbeddedSession(SessionContext):
             raise TypeError("runtime must be parqdb.datafusion.RuntimeEnvBuilder")
         self._native = _NativeSession(
             self._root,
-            index_root,
+            warehouse,
             options or None,
             resolved_catalog_path if catalog_path is not None else None,
             config.config_internal if config is not None else None,
             runtime.config_internal if runtime is not None else None,
         )
-        self._index_root = self._native.warehouse_root()
+        self._warehouse = self._native.warehouse_root()
         self._repository = self._native.index_repository()
         self._indexes = IndexCatalog(self._repository)
         self.ctx = self._native.context()
@@ -98,8 +98,8 @@ class _EmbeddedSession(SessionContext):
         return self._root
 
     @property
-    def index_root(self) -> str:
-        return self._index_root
+    def warehouse(self) -> str:
+        return self._warehouse
 
     @classmethod
     def global_ctx(cls) -> SessionContext:
@@ -342,10 +342,8 @@ class _EmbeddedSession(SessionContext):
             if int(snapshot["snapshot-id"]) == snapshot_id
         )
         for relation in snapshot["index-relations"].values():
-            if relation["profile"] == "iceberg":
-                self._register_iceberg_relation(
-                    json.dumps(relation, separators=(",", ":"))
-                )
+            if not isinstance(relation, str):
+                raise ValueError("index relation locations must be strings")
 
     def _register_iceberg_relation(self, reference: str) -> DataFrame:
         if self._iceberg_catalog is None:
@@ -419,7 +417,7 @@ def _connect_embedded(
 ) -> _EmbeddedSession:
     return _EmbeddedSession(
         root,
-        index_root=warehouse,
+        warehouse=warehouse,
         storage_options=storage_options,
         iceberg=iceberg,
         config=config,

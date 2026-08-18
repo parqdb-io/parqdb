@@ -10,6 +10,8 @@ pub struct CatalogEntry {
     pub identifier: IndexIdentifier,
     /// URI of the current immutable metadata document.
     pub metadata_location: String,
+    /// Exact source table associated with this logical index.
+    pub source: RelationReference,
 }
 
 /// A metadata document that lost catalog reachability at a known time.
@@ -27,6 +29,8 @@ pub struct CatalogTombstone {
 /// One ready reusable IVF centroid catalog entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IvfCentroidsCatalogEntry {
+    /// Exact source-table identity that scopes reuse of this artifact.
+    pub source_identity: String,
     /// Deterministic descriptor fingerprint.
     pub fingerprint: String,
     /// Stable artifact UUID.
@@ -38,6 +42,8 @@ pub struct IvfCentroidsCatalogEntry {
 /// Ownership token for one in-progress IVF centroid build.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IvfCentroidsClaim {
+    /// Exact source-table identity that scopes this claim.
+    pub source_identity: String,
     /// Deterministic descriptor fingerprint.
     pub fingerprint: String,
     /// Opaque build-owner UUID.
@@ -78,6 +84,7 @@ pub trait IndexCatalog: Send + Sync {
     fn register(
         &self,
         _identifier: &IndexIdentifier,
+        _source: &RelationReference,
         _metadata_location: &str,
         _metadata: &IndexMetadata,
     ) -> Result<()> {
@@ -88,6 +95,7 @@ pub trait IndexCatalog: Send + Sync {
     fn commit(
         &self,
         _identifier: &IndexIdentifier,
+        _source: &RelationReference,
         _base_metadata_location: &str,
         _new_metadata_location: &str,
         _base_metadata: &IndexMetadata,
@@ -140,14 +148,19 @@ pub trait IndexCatalog: Send + Sync {
         Err(Error::UnsupportedOperation("purge_tombstone"))
     }
 
-    /// Loads one ready IVF centroid entry by deterministic fingerprint.
-    fn load_ivf_centroids(&self, _fingerprint: &str) -> Result<IvfCentroidsCatalogEntry> {
+    /// Loads one ready IVF centroid entry scoped to an exact source table.
+    fn load_ivf_centroids(
+        &self,
+        _source: &RelationReference,
+        _fingerprint: &str,
+    ) -> Result<IvfCentroidsCatalogEntry> {
         Err(Error::UnsupportedOperation("load_ivf_centroids"))
     }
 
-    /// Claims construction or returns the current state for one descriptor.
+    /// Claims construction or returns the source-scoped state for one descriptor.
     fn claim_ivf_centroids(
         &self,
+        _source: &RelationReference,
         _descriptor: &IvfCentroidsDescriptor,
         _owner: Uuid,
         _lease_duration_ms: i64,
@@ -182,5 +195,12 @@ pub trait IndexCatalog: Send + Sync {
     /// Lists all ready IVF centroid artifacts.
     fn list_ivf_centroids(&self) -> Result<Vec<IvfCentroidsCatalogEntry>> {
         Err(Error::UnsupportedOperation("list_ivf_centroids"))
+    }
+
+    /// Removes one unchanged ready IVF centroid entry during orphan collection.
+    ///
+    /// Returns `false` when the entry no longer exists or has changed.
+    fn purge_ivf_centroids(&self, _entry: &IvfCentroidsCatalogEntry) -> Result<bool> {
+        Err(Error::UnsupportedOperation("purge_ivf_centroids"))
     }
 }

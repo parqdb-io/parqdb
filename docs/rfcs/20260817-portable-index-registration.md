@@ -18,7 +18,7 @@ the index. Index metadata should describe only the index.
 | Does index metadata identify its source? | No. It contains no source URI, source ID, source version, or source content fingerprint. |
 | Who associates an index with a source table? | The catalog. |
 | What source compatibility is recorded? | The fields already used by the index and snapshot-level `indexed-rows`. |
-| Who stores physical locations? | The catalog stores the metadata location and artifact root. |
+| Who stores physical locations? | The catalog stores the metadata location; the session supplies one warehouse for all metadata and artifacts. |
 | Does registration rewrite or copy files? | No. |
 | Is directory scanning supported? | No. The caller supplies one metadata location. |
 | Where is the public API? | `SourceTable.register_index(name, metadata_location=...)`. |
@@ -65,8 +65,8 @@ dimension requirements, distance metric, encoding, and artifact schemas. A
 reader validates the registered source's referenced fields against those
 requirements.
 
-Index relations are relative to an artifact root rather than absolute source
-or warehouse URIs:
+Index relations are relative to the session warehouse rather than absolute
+source or warehouse URIs:
 
 ```json
 {
@@ -78,11 +78,12 @@ or warehouse URIs:
 ```
 
 A relative location must not be empty, absolute, contain `..`, or escape the
-artifact root after normalization. The root metadata `location` field is also
+warehouse after normalization. The root metadata `location` field is also
 removed: the catalog already stores the immutable metadata location.
 
-These changes require a new metadata format version. Version 1 retains its
-current URI-bound interpretation.
+These rules define metadata format version 1. ParqDB has not published a stable
+metadata release, so the earlier URI-bound draft is replaced rather than kept
+as a compatibility format.
 
 ## 2. Catalog Contract
 
@@ -92,13 +93,16 @@ The catalog is the authority for deployment-specific relationships:
 registered source table
     -> logical index name
     -> immutable index metadata location
-    -> index artifact root
+
+session
+    -> warehouse
 ```
 
 The source table entry already owns the source provider and physical URI. The
 logical index entry stores the source-table association, metadata location,
-artifact root, index UUID, and status. Neither association nor physical
-location is duplicated in index metadata.
+index UUID, and status. The session owns one warehouse used to resolve every
+relative metadata path. Neither the source association nor the warehouse URI
+is duplicated in index metadata.
 
 Reusable centroid records remain catalog records. Their fingerprint identifies
 and validates the centroid artifact within ParqDB; it is not a source identity
@@ -109,15 +113,14 @@ tables contain the same data.
 ParqDB does not add `register_existing_index` to the catalog. The existing
 `IndexCatalog::register` already accepts loaded and validated metadata and
 atomically publishes the logical index mapping. Its registration input is
-extended with the source-table association and artifact root required by the
-source-free format, conceptually:
+extended with the source-table association required by the source-free format,
+conceptually:
 
 ```text
 register(
     source_table_identifier,
     index_identifier,
     index_metadata_location,
-    artifact_root,
     validated_index_metadata,
 )
 ```
@@ -145,13 +148,13 @@ Registration is table-scoped:
 ```python
 table.register_index(
     "benchmark_embedding",
-    metadata_location="s3://indexes/sift1b/v2.metadata.json",
+    metadata_location="s3://shared-parqdb/sift1b/v2.metadata.json",
 )
 ```
 
 The selected `SourceTable` supplies the source association. The metadata
-location determines the default artifact root unless the storage profile or
-API call supplies one explicitly.
+location must be inside the session warehouse. Every relative location in the
+metadata is resolved against that same warehouse.
 
 Registration performs these steps:
 
@@ -160,7 +163,7 @@ Registration performs these steps:
    satisfy the index-family type requirements;
 3. count the rows eligible for indexing and require the result to equal
    `indexed-rows`;
-4. resolve all relative index relations against the artifact root;
+4. resolve all relative index relations against the warehouse;
 5. validate that the centroid and postings relations are permitted, readable,
    and structurally compatible with the metadata;
 6. make the validated centroid ready through the existing centroid lifecycle;
@@ -194,7 +197,7 @@ package/
 A recipient:
 
 1. registers the intended source table at any supported URI;
-2. makes the index package available at any supported artifact root; and
+2. makes the index package available in the catalog's warehouse; and
 3. calls `table.register_index` with the metadata location.
 
 The publisher and recipient do not coordinate source UUIDs, version strings,
@@ -202,8 +205,8 @@ filesystem paths, catalog files, or content manifests.
 
 ## 5. Query and Lifecycle Behavior
 
-After registration, query planning loads the source association and artifact
-root from the catalog, then interprets the index metadata normally. A
+After registration, query planning loads the source association from the
+catalog and resolves metadata paths through the session warehouse. A
 registered index behaves like one published by `create_index`:
 
 - `index_status` reports `ready`;
@@ -216,12 +219,9 @@ Registration does not change file ownership or retention policy.
 
 ## 6. Compatibility
 
-Version 1 metadata continues to load and query without modification. It may be
-registered only when its URI-bound references are already valid in the current
-deployment; this is not portable registration.
-
-Portable registration requires the new source-free format. Version 1 metadata
-is never silently rewritten or reinterpreted.
+There is no compatibility mode for the earlier URI-bound draft. Metadata
+format version 1 is source-free, and incompatible development artifacts must
+be rebuilt before the first stable release.
 
 ## Alternatives Rejected
 
@@ -253,8 +253,8 @@ on object stores, and cannot determine the intended source table or index name.
 
 ## Implementation Sequence
 
-1. define the source-free metadata version and add `indexed-rows`;
-2. move source association and artifact-root resolution into the catalog path;
+1. redefine metadata version 1 as source-free and add `indexed-rows`;
+2. move source association into the catalog and path resolution into the session warehouse;
 3. extend the existing `IndexCatalog::register` input for that association;
 4. reuse the existing centroid publication lifecycle;
 5. expose `SourceTable.register_index`; and

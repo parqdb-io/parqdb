@@ -24,6 +24,7 @@ parqdb-storage = { version = "0.2.0-rc.1", path = "../parqdb-storage" }
 serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
+url.workspace = true
 
 [dev-dependencies]
 parqdb-catalog = { version = "0.2.0-rc.1", path = "../parqdb-catalog" }

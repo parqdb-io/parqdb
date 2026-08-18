@@ -4,11 +4,12 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Barrier};
 
 use parqdb_catalog::{
-    CatalogTombstone, Error, IndexCatalog, IndexIdentifier, IvfCentroidsClaimResult, SqliteCatalog,
-    TableCatalog, TableDefinition, TableIdentifier,
+    CatalogTombstone, Error, IndexCatalog, IndexIdentifier, IvfCentroidsCatalogEntry,
+    IvfCentroidsClaim, IvfCentroidsClaimResult, SqliteCatalog, TableCatalog, TableDefinition,
+    TableIdentifier,
 };
 use parqdb_meta::{
-    DistanceMetric, IvfCentroidsDescriptor, IvfCentroidsMetadata, RelationReference,
+    DistanceMetric, IndexMetadata, IvfCentroidsDescriptor, IvfCentroidsMetadata, RelationReference,
 };
 use rusqlite::Connection;
 use tempfile::TempDir;
@@ -16,7 +17,117 @@ use uuid::Uuid;
 
 mod common;
 
-use common::{assert_index_catalog_contract, directory_uri, file_uri, metadata, refreshed};
+use common::{assert_index_catalog_contract, file_uri, metadata, refreshed};
+
+fn test_source() -> RelationReference {
+    RelationReference::Parquet {
+        uri: "file:///parqdb-test-source.parquet".into(),
+    }
+}
+
+trait TestCatalogExt {
+    fn register_test(
+        &self,
+        identifier: &IndexIdentifier,
+        metadata_location: &str,
+        metadata: &IndexMetadata,
+    ) -> parqdb_catalog::Result<()>;
+
+    fn commit_test(
+        &self,
+        identifier: &IndexIdentifier,
+        base_metadata_location: &str,
+        new_metadata_location: &str,
+        base_metadata: &IndexMetadata,
+        new_metadata: &IndexMetadata,
+    ) -> parqdb_catalog::Result<()>;
+
+    fn claim_ivf_centroids_test(
+        &self,
+        descriptor: &IvfCentroidsDescriptor,
+        owner: Uuid,
+        lease_duration_ms: i64,
+    ) -> parqdb_catalog::Result<IvfCentroidsClaimResult>;
+
+    fn publish_ivf_centroids_test(
+        &self,
+        claim: &IvfCentroidsClaim,
+        metadata_location: &str,
+        metadata: &IvfCentroidsMetadata,
+    ) -> parqdb_catalog::Result<IvfCentroidsCatalogEntry>;
+
+    fn load_ivf_centroids_test(
+        &self,
+        fingerprint: &str,
+    ) -> parqdb_catalog::Result<IvfCentroidsCatalogEntry>;
+}
+
+impl TestCatalogExt for SqliteCatalog {
+    fn register_test(
+        &self,
+        identifier: &IndexIdentifier,
+        metadata_location: &str,
+        metadata: &IndexMetadata,
+    ) -> parqdb_catalog::Result<()> {
+        IndexCatalog::register(
+            self,
+            identifier,
+            &test_source(),
+            metadata_location,
+            metadata,
+        )
+    }
+
+    fn commit_test(
+        &self,
+        identifier: &IndexIdentifier,
+        base_metadata_location: &str,
+        new_metadata_location: &str,
+        base_metadata: &IndexMetadata,
+        new_metadata: &IndexMetadata,
+    ) -> parqdb_catalog::Result<()> {
+        IndexCatalog::commit(
+            self,
+            identifier,
+            &test_source(),
+            base_metadata_location,
+            new_metadata_location,
+            base_metadata,
+            new_metadata,
+        )
+    }
+
+    fn claim_ivf_centroids_test(
+        &self,
+        descriptor: &IvfCentroidsDescriptor,
+        owner: Uuid,
+        lease_duration_ms: i64,
+    ) -> parqdb_catalog::Result<IvfCentroidsClaimResult> {
+        IndexCatalog::claim_ivf_centroids(
+            self,
+            &test_source(),
+            descriptor,
+            owner,
+            lease_duration_ms,
+        )
+    }
+
+    fn publish_ivf_centroids_test(
+        &self,
+        claim: &IvfCentroidsClaim,
+        metadata_location: &str,
+        metadata: &IvfCentroidsMetadata,
+    ) -> parqdb_catalog::Result<IvfCentroidsCatalogEntry> {
+        IndexCatalog::publish_ivf_centroids(self, claim, metadata_location, metadata)
+    }
+
+    fn load_ivf_centroids_test(
+        &self,
+        fingerprint: &str,
+    ) -> parqdb_catalog::Result<IvfCentroidsCatalogEntry> {
+        IndexCatalog::load_ivf_centroids(self, &test_source(), fingerprint)
+    }
+}
 
 #[test]
 fn sqlite_catalog_satisfies_index_catalog_contract() {
@@ -33,7 +144,7 @@ fn ivf_centroids_claim_publish_and_lookup_are_atomic() {
     let first_owner = Uuid::new_v4();
     let second_owner = Uuid::new_v4();
     let claim = match catalog
-        .claim_ivf_centroids(&descriptor, first_owner, 60_000)
+        .claim_ivf_centroids_test(&descriptor, first_owner, 60_000)
         .unwrap()
     {
         IvfCentroidsClaimResult::Claimed(claim) => claim,
@@ -41,7 +152,7 @@ fn ivf_centroids_claim_publish_and_lookup_are_atomic() {
     };
     assert!(matches!(
         catalog
-            .claim_ivf_centroids(&descriptor, second_owner, 60_000)
+            .claim_ivf_centroids_test(&descriptor, second_owner, 60_000)
             .unwrap(),
         IvfCentroidsClaimResult::Busy { .. }
     ));
@@ -50,15 +161,17 @@ fn ivf_centroids_claim_publish_and_lookup_are_atomic() {
     let metadata = ivf_centroids_metadata(temporary.path(), &descriptor);
     let metadata_location = file_uri(&temporary.path().join("ivf-centroids-v1.metadata.json"));
     assert!(matches!(
-        catalog.publish_ivf_centroids(&claim, "ivf-centroids-v1.metadata.json", &metadata),
+        catalog.publish_ivf_centroids_test(&claim, "ivf-centroids-v1.metadata.json", &metadata),
         Err(Error::InvalidMetadata(_))
     ));
     let published = catalog
-        .publish_ivf_centroids(&claim, &metadata_location, &metadata)
+        .publish_ivf_centroids_test(&claim, &metadata_location, &metadata)
         .unwrap();
 
     assert_eq!(
-        catalog.load_ivf_centroids(&published.fingerprint).unwrap(),
+        catalog
+            .load_ivf_centroids_test(&published.fingerprint)
+            .unwrap(),
         published
     );
     assert_eq!(
@@ -67,9 +180,19 @@ fn ivf_centroids_claim_publish_and_lookup_are_atomic() {
     );
     assert!(matches!(
         catalog
-            .claim_ivf_centroids(&descriptor, second_owner, 60_000)
+            .claim_ivf_centroids_test(&descriptor, second_owner, 60_000)
             .unwrap(),
         IvfCentroidsClaimResult::Ready(entry) if entry == published
+    ));
+
+    let mut changed = published.clone();
+    changed.metadata_location.push_str(".changed");
+    assert!(!catalog.purge_ivf_centroids(&changed).unwrap());
+    assert!(catalog.purge_ivf_centroids(&published).unwrap());
+    assert!(catalog.list_ivf_centroids().unwrap().is_empty());
+    assert!(matches!(
+        catalog.load_ivf_centroids_test(&published.fingerprint),
+        Err(Error::IvfCentroidsNotFound(_))
     ));
 }
 
@@ -86,7 +209,7 @@ fn ivf_centroids_listing_returns_multiple_ready_entries_in_fingerprint_order() {
 
     for (position, descriptor) in descriptors.iter().enumerate() {
         let claim = match catalog
-            .claim_ivf_centroids(descriptor, Uuid::new_v4(), 60_000)
+            .claim_ivf_centroids_test(descriptor, Uuid::new_v4(), 60_000)
             .unwrap()
         {
             IvfCentroidsClaimResult::Claimed(claim) => claim,
@@ -100,7 +223,7 @@ fn ivf_centroids_listing_returns_multiple_ready_entries_in_fingerprint_order() {
         );
         published.push(
             catalog
-                .publish_ivf_centroids(&claim, &metadata_location, &metadata)
+                .publish_ivf_centroids_test(&claim, &metadata_location, &metadata)
                 .unwrap(),
         );
     }
@@ -115,7 +238,7 @@ fn publishing_ivf_centroids_with_a_mismatched_fingerprint_is_rejected() {
     let catalog = SqliteCatalog::open(temporary.path().join("catalog.sqlite")).unwrap();
     let descriptor = ivf_centroids_descriptor(temporary.path());
     let claim = match catalog
-        .claim_ivf_centroids(&descriptor, Uuid::new_v4(), 60_000)
+        .claim_ivf_centroids_test(&descriptor, Uuid::new_v4(), 60_000)
         .unwrap()
     {
         IvfCentroidsClaimResult::Claimed(claim) => claim,
@@ -127,7 +250,7 @@ fn publishing_ivf_centroids_with_a_mismatched_fingerprint_is_rejected() {
     let metadata_location = file_uri(&temporary.path().join("ivf-centroids-v1.metadata.json"));
 
     assert!(matches!(
-        catalog.publish_ivf_centroids(&claim, &metadata_location, &metadata),
+        catalog.publish_ivf_centroids_test(&claim, &metadata_location, &metadata),
         Err(Error::InvalidMetadata(message))
             if message.contains("published IVF centroid fingerprint does not match claim")
     ));
@@ -140,7 +263,7 @@ fn expired_ivf_centroids_claim_cannot_be_renewed_or_published() {
     let catalog = SqliteCatalog::open(&database).unwrap();
     let descriptor = ivf_centroids_descriptor(temporary.path());
     let claim = match catalog
-        .claim_ivf_centroids(&descriptor, Uuid::new_v4(), 60_000)
+        .claim_ivf_centroids_test(&descriptor, Uuid::new_v4(), 60_000)
         .unwrap()
     {
         IvfCentroidsClaimResult::Claimed(claim) => claim,
@@ -158,7 +281,7 @@ fn expired_ivf_centroids_claim_cannot_be_renewed_or_published() {
         Err(Error::IvfCentroidsClaimLost(_))
     ));
     assert!(matches!(
-        catalog.publish_ivf_centroids(&claim, &metadata_location, &metadata),
+        catalog.publish_ivf_centroids_test(&claim, &metadata_location, &metadata),
         Err(Error::IvfCentroidsClaimLost(_))
     ));
 }
@@ -170,7 +293,7 @@ fn expired_ivf_centroids_claim_uses_compare_and_swap_publication() {
     let catalog = SqliteCatalog::open(&database).unwrap();
     let descriptor = ivf_centroids_descriptor(temporary.path());
     let first = match catalog
-        .claim_ivf_centroids(&descriptor, Uuid::new_v4(), 60_000)
+        .claim_ivf_centroids_test(&descriptor, Uuid::new_v4(), 60_000)
         .unwrap()
     {
         IvfCentroidsClaimResult::Claimed(claim) => claim,
@@ -181,7 +304,7 @@ fn expired_ivf_centroids_claim_uses_compare_and_swap_publication() {
         .execute("UPDATE ivf_centroid_artifacts SET lease_expires_ms = 0", [])
         .unwrap();
     let second = match catalog
-        .claim_ivf_centroids(&descriptor, Uuid::new_v4(), 60_000)
+        .claim_ivf_centroids_test(&descriptor, Uuid::new_v4(), 60_000)
         .unwrap()
     {
         IvfCentroidsClaimResult::Claimed(claim) => claim,
@@ -191,11 +314,11 @@ fn expired_ivf_centroids_claim_uses_compare_and_swap_publication() {
     let metadata_location = file_uri(&temporary.path().join("ivf-centroids-v1.metadata.json"));
 
     assert!(matches!(
-        catalog.publish_ivf_centroids(&first, &metadata_location, &metadata),
+        catalog.publish_ivf_centroids_test(&first, &metadata_location, &metadata),
         Err(Error::IvfCentroidsClaimLost(_))
     ));
     catalog
-        .publish_ivf_centroids(&second, &metadata_location, &metadata)
+        .publish_ivf_centroids_test(&second, &metadata_location, &metadata)
         .unwrap();
 }
 
@@ -205,7 +328,7 @@ fn abandoned_ivf_centroids_claim_can_be_retried() {
     let catalog = SqliteCatalog::open(temporary.path().join("catalog.sqlite")).unwrap();
     let descriptor = ivf_centroids_descriptor(temporary.path());
     let claim = match catalog
-        .claim_ivf_centroids(&descriptor, Uuid::new_v4(), 60_000)
+        .claim_ivf_centroids_test(&descriptor, Uuid::new_v4(), 60_000)
         .unwrap()
     {
         IvfCentroidsClaimResult::Claimed(claim) => claim,
@@ -216,12 +339,12 @@ fn abandoned_ivf_centroids_claim_can_be_retried() {
         .abandon_ivf_centroids(&claim, "fixture failure")
         .unwrap();
     assert!(matches!(
-        catalog.load_ivf_centroids(&claim.fingerprint),
+        catalog.load_ivf_centroids_test(&claim.fingerprint),
         Err(Error::IvfCentroidsNotFound(_))
     ));
     assert!(matches!(
         catalog
-            .claim_ivf_centroids(&descriptor, Uuid::new_v4(), 60_000)
+            .claim_ivf_centroids_test(&descriptor, Uuid::new_v4(), 60_000)
             .unwrap(),
         IvfCentroidsClaimResult::Claimed(_)
     ));
@@ -239,7 +362,7 @@ fn concurrent_ivf_centroids_claims_allow_exactly_one_builder() {
         let barrier = Arc::clone(&barrier);
         std::thread::spawn(move || {
             barrier.wait();
-            catalog.claim_ivf_centroids(&descriptor, owner, 60_000)
+            catalog.claim_ivf_centroids_test(&descriptor, owner, 60_000)
         })
     });
     barrier.wait();
@@ -266,29 +389,33 @@ fn ivf_centroids_reuse_follows_iceberg_exact_state_across_renames() {
     let temporary = TempDir::new().unwrap();
     let catalog = SqliteCatalog::open(temporary.path().join("catalog.sqlite")).unwrap();
     let table_uuid = Uuid::new_v4();
-    let mut descriptor = ivf_centroids_descriptor(temporary.path());
-    descriptor.source = RelationReference::Iceberg {
+    let descriptor = ivf_centroids_descriptor(temporary.path());
+    let first_source = RelationReference::Iceberg {
         catalog: "first".into(),
         namespace: vec!["analytics".into()],
         name: "documents".into(),
         table_uuid,
         snapshot_id: 101,
     };
-    let claim = match catalog
-        .claim_ivf_centroids(&descriptor, Uuid::new_v4(), 60_000)
-        .unwrap()
+    let claim = match IndexCatalog::claim_ivf_centroids(
+        &catalog,
+        &first_source,
+        &descriptor,
+        Uuid::new_v4(),
+        60_000,
+    )
+    .unwrap()
     {
         IvfCentroidsClaimResult::Claimed(claim) => claim,
         other => panic!("first caller must own the claim, received {other:?}"),
     };
     let metadata = ivf_centroids_metadata(temporary.path(), &descriptor);
     let metadata_location = file_uri(&temporary.path().join("ivf-centroids-v1.metadata.json"));
-    let published = catalog
-        .publish_ivf_centroids(&claim, &metadata_location, &metadata)
-        .unwrap();
+    let published =
+        IndexCatalog::publish_ivf_centroids(&catalog, &claim, &metadata_location, &metadata)
+            .unwrap();
 
-    let mut renamed = descriptor;
-    renamed.source = RelationReference::Iceberg {
+    let renamed_source = RelationReference::Iceberg {
         catalog: "second".into(),
         namespace: vec!["renamed".into()],
         name: "vectors".into(),
@@ -296,10 +423,34 @@ fn ivf_centroids_reuse_follows_iceberg_exact_state_across_renames() {
         snapshot_id: 101,
     };
     assert!(matches!(
-        catalog
-            .claim_ivf_centroids(&renamed, Uuid::new_v4(), 60_000)
-            .unwrap(),
+        IndexCatalog::claim_ivf_centroids(
+            &catalog,
+            &renamed_source,
+            &descriptor,
+            Uuid::new_v4(),
+            60_000,
+        )
+        .unwrap(),
         IvfCentroidsClaimResult::Ready(entry) if entry == published
+    ));
+
+    let different_snapshot = RelationReference::Iceberg {
+        catalog: "second".into(),
+        namespace: vec!["renamed".into()],
+        name: "vectors".into(),
+        table_uuid,
+        snapshot_id: 102,
+    };
+    assert!(matches!(
+        IndexCatalog::claim_ivf_centroids(
+            &catalog,
+            &different_snapshot,
+            &descriptor,
+            Uuid::new_v4(),
+            60_000,
+        )
+        .unwrap(),
+        IvfCentroidsClaimResult::Claimed(_)
     ));
 }
 
@@ -317,8 +468,8 @@ fn root_namespace_exists_in_a_new_catalog() {
     let user_version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(application_id, 0x524c_4659);
-    assert_eq!(user_version, 5);
+    assert_eq!(application_id, 0x5051_4442);
+    assert_eq!(user_version, 1);
 }
 
 #[test]
@@ -412,13 +563,13 @@ fn namespaces_are_structural_and_isolated() {
     let metadata = metadata(temporary.path());
     let location = file_uri(&temporary.path().join("v1.metadata.json"));
     let root = IndexIdentifier::root("root-index").unwrap();
-    catalog.register(&root, &location, &metadata).unwrap();
+    catalog.register_test(&root, &location, &metadata).unwrap();
     let nested_location = file_uri(&temporary.path().join("nested.metadata.json"));
     let mut nested_metadata = metadata.clone();
     nested_metadata.index_uuid = Uuid::new_v4();
     let nested = IndexIdentifier::new(vec!["a".into(), "b".into()], "documents").unwrap();
     catalog
-        .register(&nested, &nested_location, &nested_metadata)
+        .register_test(&nested, &nested_location, &nested_metadata)
         .unwrap();
 
     assert_eq!(
@@ -439,10 +590,12 @@ fn register_rejects_duplicates_and_invalid_metadata() {
     let identifier = IndexIdentifier::root("documents").unwrap();
     let metadata = metadata(temporary.path());
     let location = file_uri(&temporary.path().join("v1.metadata.json"));
-    catalog.register(&identifier, &location, &metadata).unwrap();
+    catalog
+        .register_test(&identifier, &location, &metadata)
+        .unwrap();
 
     assert!(matches!(
-        catalog.register(&identifier, &location, &metadata),
+        catalog.register_test(&identifier, &location, &metadata),
         Err(Error::AlreadyExists(_))
     ));
 
@@ -451,7 +604,7 @@ fn register_rejects_duplicates_and_invalid_metadata() {
     invalid_metadata.format_version = 2;
     let invalid = IndexIdentifier::root("invalid").unwrap();
     assert!(matches!(
-        catalog.register(&invalid, &invalid_location, &invalid_metadata),
+        catalog.register_test(&invalid, &invalid_location, &invalid_metadata),
         Err(Error::InvalidMetadata(_))
     ));
     assert!(matches!(
@@ -472,18 +625,18 @@ fn commit_replaces_only_the_expected_base() {
     let next_location = file_uri(&temporary.path().join("v2.metadata.json"));
     let losing_location = file_uri(&temporary.path().join("v2-losing.metadata.json"));
     catalog
-        .register(&identifier, &base_location, &base)
+        .register_test(&identifier, &base_location, &base)
         .unwrap();
 
     catalog
-        .commit(&identifier, &base_location, &next_location, &base, &next)
+        .commit_test(&identifier, &base_location, &next_location, &base, &next)
         .unwrap();
     assert_eq!(
         catalog.load(&identifier).unwrap().metadata_location,
         next_location
     );
     assert!(matches!(
-        catalog.commit(
+        catalog.commit_test(
             &identifier,
             &base_location,
             &losing_location,
@@ -506,7 +659,9 @@ fn drop_records_reachability_loss_and_register_clears_it() {
     let recovered = IndexIdentifier::root("recovered").unwrap();
     let metadata = metadata(temporary.path());
     let location = file_uri(&temporary.path().join("v1.metadata.json"));
-    catalog.register(&identifier, &location, &metadata).unwrap();
+    catalog
+        .register_test(&identifier, &location, &metadata)
+        .unwrap();
 
     catalog.drop(&identifier).unwrap();
     let tombstones = catalog.list_tombstones().unwrap();
@@ -514,7 +669,9 @@ fn drop_records_reachability_loss_and_register_clears_it() {
     assert_eq!(tombstones[0].metadata_location, location);
     assert!(tombstones[0].unreachable_since_ms > 0);
 
-    catalog.register(&recovered, &location, &metadata).unwrap();
+    catalog
+        .register_test(&recovered, &location, &metadata)
+        .unwrap();
     assert!(catalog.list_tombstones().unwrap().is_empty());
 }
 
@@ -525,7 +682,9 @@ fn tombstone_purge_uses_compare_and_delete() {
     let identifier = IndexIdentifier::root("documents").unwrap();
     let metadata = metadata(temporary.path());
     let location = file_uri(&temporary.path().join("v1.metadata.json"));
-    catalog.register(&identifier, &location, &metadata).unwrap();
+    catalog
+        .register_test(&identifier, &location, &metadata)
+        .unwrap();
     catalog.drop(&identifier).unwrap();
     let tombstone = catalog.list_tombstones().unwrap().pop().unwrap();
     let stale = CatalogTombstone {
@@ -550,7 +709,7 @@ fn concurrent_commits_allow_exactly_one_winner() {
     let first_location = file_uri(&temporary.path().join("v2-first.metadata.json"));
     let second_location = file_uri(&temporary.path().join("v2-second.metadata.json"));
     catalog
-        .register(&identifier, &base_location, &base)
+        .register_test(&identifier, &base_location, &base)
         .unwrap();
 
     let barrier = Arc::new(Barrier::new(3));
@@ -563,7 +722,7 @@ fn concurrent_commits_allow_exactly_one_winner() {
             let identifier = identifier.clone();
             std::thread::spawn(move || {
                 barrier.wait();
-                catalog.commit(
+                catalog.commit_test(
                     &identifier,
                     &base_location,
                     &new_location,
@@ -585,21 +744,21 @@ fn concurrent_commits_allow_exactly_one_winner() {
 }
 
 #[test]
-fn commit_rejects_uuid_and_location_changes_without_publication() {
+fn commit_rejects_uuid_changes_without_publication() {
     let temporary = TempDir::new().unwrap();
     let catalog = SqliteCatalog::open(temporary.path().join("catalog.sqlite")).unwrap();
     let identifier = IndexIdentifier::root("documents").unwrap();
     let base = metadata(temporary.path());
     let base_location = file_uri(&temporary.path().join("v1.metadata.json"));
     catalog
-        .register(&identifier, &base_location, &base)
+        .register_test(&identifier, &base_location, &base)
         .unwrap();
 
     let mut wrong_uuid = refreshed(&base, 702);
     wrong_uuid.index_uuid = Uuid::new_v4();
     let wrong_uuid_location = file_uri(&temporary.path().join("wrong-uuid.metadata.json"));
     assert!(matches!(
-        catalog.commit(
+        catalog.commit_test(
             &identifier,
             &base_location,
             &wrong_uuid_location,
@@ -609,19 +768,6 @@ fn commit_rejects_uuid_and_location_changes_without_publication() {
         Err(Error::IndexUuidMismatch(_))
     ));
 
-    let mut wrong_location = refreshed(&base, 703);
-    wrong_location.location = directory_uri(&temporary.path().join("other"));
-    let wrong_location_uri = file_uri(&temporary.path().join("wrong-location.metadata.json"));
-    assert!(matches!(
-        catalog.commit(
-            &identifier,
-            &base_location,
-            &wrong_location_uri,
-            &base,
-            &wrong_location
-        ),
-        Err(Error::InvalidMetadata(_))
-    ));
     assert_eq!(
         catalog.load(&identifier).unwrap().metadata_location,
         base_location
@@ -636,7 +782,7 @@ fn commit_rejects_rewriting_an_existing_snapshot() {
     let base = metadata(temporary.path());
     let base_location = file_uri(&temporary.path().join("v1.metadata.json"));
     catalog
-        .register(&identifier, &base_location, &base)
+        .register_test(&identifier, &base_location, &base)
         .unwrap();
 
     let mut rewritten = refreshed(&base, 702);
@@ -645,7 +791,7 @@ fn commit_rejects_rewriting_an_existing_snapshot() {
         .insert("rewritten".into(), "true".into());
     let rewritten_location = file_uri(&temporary.path().join("rewritten.metadata.json"));
     assert!(matches!(
-        catalog.commit(
+        catalog.commit_test(
             &identifier,
             &base_location,
             &rewritten_location,
@@ -715,8 +861,8 @@ fn rejects_an_unrelated_unversioned_database_without_modifying_it() {
 }
 
 #[test]
-fn rejects_catalogs_from_older_prerelease_schemas() {
-    for version in [1, 2, 3, 4] {
+fn rejects_unsupported_schema_versions() {
+    for version in [2, 3, 4, 5, 6] {
         let temporary = TempDir::new().unwrap();
         let database = temporary.path().join("catalog.sqlite");
         let connection = Connection::open(&database).unwrap();
@@ -743,7 +889,7 @@ fn rejects_the_current_schema_without_the_parqdb_application_id() {
     connection
         .execute_batch(
             "CREATE TABLE indexes (name TEXT PRIMARY KEY);
-             PRAGMA user_version=5;",
+             PRAGMA user_version=1;",
         )
         .unwrap();
     drop(connection);
@@ -755,10 +901,8 @@ fn rejects_the_current_schema_without_the_parqdb_application_id() {
 }
 
 fn ivf_centroids_descriptor(root: &std::path::Path) -> IvfCentroidsDescriptor {
+    let _ = root;
     IvfCentroidsDescriptor {
-        source: RelationReference::Parquet {
-            uri: file_uri(&root.join("source.parquet")),
-        },
         vector_field: "embedding".into(),
         dimension: 2,
         metric: DistanceMetric::L2Squared,
@@ -768,18 +912,15 @@ fn ivf_centroids_descriptor(root: &std::path::Path) -> IvfCentroidsDescriptor {
 }
 
 fn ivf_centroids_metadata(
-    root: &std::path::Path,
+    _root: &std::path::Path,
     descriptor: &IvfCentroidsDescriptor,
 ) -> IvfCentroidsMetadata {
     IvfCentroidsMetadata {
         format_version: 1,
         artifact_uuid: Uuid::new_v4(),
         fingerprint: descriptor.fingerprint().unwrap(),
-        location: directory_uri(&root.join("centroid-artifacts")),
         created_at_ms: 1_750_000_000_000,
         descriptor: descriptor.clone(),
-        centroids: RelationReference::Parquet {
-            uri: directory_uri(&root.join("centroids")),
-        },
+        centroids: "centroids/".into(),
     }
 }

@@ -4,8 +4,8 @@ use parqdb_catalog::{
     CatalogEntry, Error as CatalogError, IndexCatalog, IndexIdentifier, IvfCentroidsCatalogEntry,
 };
 use parqdb_meta::{
-    DistanceMetric, IndexMetadata, IndexSnapshot, IvfCentroidsMetadata, IvfCentroidsReference,
-    RelationReference, ivf_centroids_reference,
+    DistanceMetric, IndexMetadata, IvfCentroidsMetadata, IvfCentroidsReference, RelationReference,
+    ivf_centroids_reference,
 };
 
 use crate::{Error, MetadataStore, Result};
@@ -54,6 +54,12 @@ impl IndexRepository {
         &self.metadata
     }
 
+    /// Loads and validates metadata that is not yet registered in this catalog.
+    pub async fn load_unregistered(&self, metadata_location: &str) -> Result<IndexMetadata> {
+        self.metadata.relative_location(metadata_location)?;
+        self.metadata.load_from_storage(metadata_location).await
+    }
+
     /// Returns whether an identifier is currently published.
     pub fn exists(&self, identifier: &IndexIdentifier) -> Result<bool> {
         match self.catalog.load(identifier) {
@@ -76,21 +82,26 @@ impl IndexRepository {
     }
 
     /// Loads one ready IVF centroid artifact by fingerprint.
-    pub async fn load_ivf_centroids(&self, fingerprint: &str) -> Result<LoadedIvfCentroids> {
-        let entry = self.catalog.load_ivf_centroids(fingerprint)?;
+    pub async fn load_ivf_centroids(
+        &self,
+        source: &RelationReference,
+        fingerprint: &str,
+    ) -> Result<LoadedIvfCentroids> {
+        let entry = self.catalog.load_ivf_centroids(source, fingerprint)?;
         self.load_ivf_centroids_entry(entry).await
     }
 
     /// Loads and validates the centroid artifact referenced by a logical index.
     pub async fn load_ivf_centroids_reference(
         &self,
+        source: &RelationReference,
         reference: &IvfCentroidsReference,
     ) -> Result<LoadedIvfCentroids> {
         reference.validate()?;
-        let metadata = self
+        let metadata_location = self
             .metadata
-            .load_ivf_centroids(&reference.metadata_location)
-            .await?;
+            .resolve_location(&reference.metadata_location, false)?;
+        let metadata = self.metadata.load_ivf_centroids(&metadata_location).await?;
         validate_ivf_centroids_identity(
             &reference.fingerprint,
             reference.artifact_uuid,
@@ -98,9 +109,10 @@ impl IndexRepository {
         )?;
         Ok(LoadedIvfCentroids {
             entry: IvfCentroidsCatalogEntry {
+                source_identity: source.exact_state_key(),
                 fingerprint: reference.fingerprint.clone(),
                 artifact_uuid: reference.artifact_uuid,
-                metadata_location: reference.metadata_location.clone(),
+                metadata_location,
             },
             metadata,
         })
@@ -109,10 +121,13 @@ impl IndexRepository {
     /// Loads and validates the centroid artifact required by one logical IVF snapshot.
     pub async fn load_snapshot_ivf_centroids(
         &self,
-        snapshot: &IndexSnapshot,
+        loaded_index: &LoadedIndex,
     ) -> Result<LoadedIvfCentroids> {
+        let snapshot = loaded_index.metadata.current_snapshot()?;
         let reference = ivf_centroids_reference(snapshot)?;
-        let loaded = self.load_ivf_centroids_reference(&reference).await?;
+        let loaded = self
+            .load_ivf_centroids_reference(&loaded_index.entry.source, &reference)
+            .await?;
         let descriptor = &loaded.metadata.descriptor;
         let metric = DistanceMetric::from_metadata(&snapshot.metric).ok_or_else(|| {
             Error::InvalidMetadata(format!("unsupported IVF metric: {}", snapshot.metric))
@@ -121,8 +136,7 @@ impl IndexRepository {
             .index_relations
             .get("ivf_centroids")
             .ok_or_else(|| Error::InvalidMetadata("missing relation role: ivf_centroids".into()))?;
-        if descriptor.source.exact_state_key() != snapshot.source.exact_state_key()
-            || descriptor.vector_field != snapshot.vector_field
+        if descriptor.vector_field != snapshot.vector_field
             || usize::try_from(descriptor.dimension).ok()
                 != Some(snapshot.parameter_usize("dimension")?)
             || usize::try_from(descriptor.nlist).ok() != Some(snapshot.parameter_usize("nlist")?)
@@ -162,7 +176,7 @@ impl IndexRepository {
         if let Some(identifier) = identifier {
             let loaded = self.load(identifier).await?;
             let snapshot = loaded.metadata.current_snapshot()?;
-            if snapshot.source.exact_state_key() != source.exact_state_key()
+            if loaded.entry.source.exact_state_key() != source.exact_state_key()
                 || vector_field.is_some_and(|field| snapshot.vector_field != field)
             {
                 return Err(Error::IndexNotFound(identifier.to_string()));
@@ -197,11 +211,12 @@ impl IndexRepository {
     pub async fn register(
         &self,
         identifier: &IndexIdentifier,
+        source: &RelationReference,
         metadata_location: &str,
     ) -> Result<()> {
-        let metadata = self.metadata.load_from_storage(metadata_location).await?;
+        let metadata = self.load_unregistered(metadata_location).await?;
         self.catalog
-            .register(identifier, metadata_location, &metadata)?;
+            .register(identifier, source, metadata_location, &metadata)?;
         Ok(())
     }
 
@@ -221,6 +236,27 @@ impl IndexRepository {
         validate_ivf_centroids_identity(&entry.fingerprint, entry.artifact_uuid, &metadata)?;
         Ok(LoadedIvfCentroids { entry, metadata })
     }
+}
+
+/// Resolves one validated warehouse-relative path below a warehouse URI.
+pub fn resolve_warehouse_location(
+    warehouse_root: &str,
+    relative: &str,
+    directory: bool,
+) -> Result<String> {
+    parqdb_meta::validate_relative_location(relative)?;
+    let mut root = url::Url::parse(warehouse_root)
+        .map_err(|error| Error::InvalidMetadata(error.to_string()))?;
+    if !root.path().ends_with('/') {
+        root.set_path(&format!("{}/", root.path()));
+    }
+    let mut resolved = root
+        .join(relative)
+        .map_err(|error| Error::InvalidMetadata(error.to_string()))?;
+    if directory && !resolved.path().ends_with('/') {
+        resolved.set_path(&format!("{}/", resolved.path()));
+    }
+    Ok(resolved.into())
 }
 
 fn validate_ivf_centroids_identity(

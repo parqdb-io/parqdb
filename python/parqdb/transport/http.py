@@ -246,6 +246,26 @@ class HttpTransport:
         if wait_timeout is not None:
             await self.wait_for_index(identifier, index, wait_timeout)
 
+    async def register_index(
+        self,
+        identifier: TableIdentifier,
+        index: str,
+        *,
+        metadata_location: str,
+    ) -> None:
+        self._ensure_open()
+        path, params = _index_path(identifier, index, "register")
+        await self._request_json(
+            "POST",
+            path,
+            params=params,
+            json_body={
+                "source": identifier_to_json(identifier),
+                "index": index,
+                "metadata_location": metadata_location,
+            },
+        )
+
     async def refresh_index(
         self,
         identifier: TableIdentifier,

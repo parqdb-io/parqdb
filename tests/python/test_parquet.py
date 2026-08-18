@@ -57,9 +57,8 @@ def test_parquet_source_reference_forms(
     snapshot = load_table_index(session, vectors, "vectors_embedding").metadata[
         "snapshots"
     ][0]
-    source_uri = snapshot["source"]["uri"]
-    assert source_uri.startswith("file://")
-    assert source_uri.endswith("/") == reference_kind.startswith("directory")
+    assert "source" not in snapshot
+    assert snapshot["indexed-rows"] == 4
 
 
 def test_zstd_writer_options_reach_every_index_relation(tmp_path: Path) -> None:
@@ -86,7 +85,7 @@ def test_zstd_writer_options_reach_every_index_relation(tmp_path: Path) -> None:
         "snapshots"
     ][0]
     for role, reference in snapshot["index-relations"].items():
-        paths = relation_files(reference)
+        paths = relation_files(reference, session.warehouse)
         if role == "ivf_postings":
             assert len(paths) == 2
         for path in paths:
@@ -118,7 +117,7 @@ def test_postings_row_groups_default_to_bounded_average_cluster_size(
     postings = snapshot["index-relations"]["ivf_postings"]
     row_groups = [
         parquet_file.metadata.row_group(row_group)
-        for path in relation_files(postings)
+        for path in relation_files(postings, session.warehouse)
         for parquet_file in [pq.ParquetFile(path)]
         for row_group in range(parquet_file.metadata.num_row_groups)
     ]
@@ -156,7 +155,7 @@ def test_postings_use_one_hive_partitioned_file_per_cluster(tmp_path: Path) -> N
         "snapshots"
     ][0]
     postings = snapshot["index-relations"]["ivf_postings"]
-    paths = relation_files(postings)
+    paths = relation_files(postings, session.warehouse)
     assert len(paths) == 16
     assert sum(pq.ParquetFile(path).metadata.num_rows for path in paths) == row_count
     assert {path.name for path in paths} == {"part-00000.parquet"}

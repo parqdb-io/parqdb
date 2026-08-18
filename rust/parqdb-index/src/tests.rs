@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use parqdb_catalog::{IndexIdentifier, IvfCentroidsClaimResult, SqliteCatalog};
+use parqdb_catalog::{CatalogEntry, IndexIdentifier, IvfCentroidsClaimResult, SqliteCatalog};
 use parqdb_core::{IndexArtifacts, IndexFormat};
 use parqdb_meta::{
     DistanceMetric, IVF_CLUSTERING_PROFILE_VERSION, IndexMetadata, IndexSnapshot,
@@ -13,8 +13,8 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 use crate::{
-    Error, IndexRepository, InitialIndex, MetadataCacheConfig, MetadataStore, RefreshedIndex,
-    new_snapshot_id, publish_initial, publish_refresh,
+    Error, IndexRepository, InitialIndex, LoadedIndex, MetadataCacheConfig, MetadataStore,
+    RefreshedIndex, new_snapshot_id, publish_initial, publish_refresh,
 };
 
 fn repository(temporary: &TempDir) -> IndexRepository {
@@ -52,8 +52,9 @@ fn source(uri: &str) -> RelationReference {
     }
 }
 
-fn artifacts(uri: &str, nlist: usize) -> IndexArtifacts {
+fn artifacts(store: &MetadataStore, relative_root: &str, nlist: usize) -> IndexArtifacts {
     let centroid_uuid = Uuid::new_v4();
+    let uri = store.resolve_location(relative_root, true).unwrap();
     IndexArtifacts {
         format: IndexFormat::ivf(DistanceMetric::L2Squared),
         parameters: BTreeMap::from([
@@ -68,12 +69,12 @@ fn artifacts(uri: &str, nlist: usize) -> IndexArtifacts {
             ("ivf_centroids_uuid".into(), centroid_uuid.to_string()),
             (
                 "ivf_centroids_metadata_location".into(),
-                format!("file:///metadata/{centroid_uuid}/v1.metadata.json"),
+                format!("metadata/{centroid_uuid}/v1.metadata.json"),
             ),
         ]),
         index_relations: BTreeMap::from([
-            ("ivf_centroids".into(), source(&format!("{uri}/centroids"))),
-            ("ivf_postings".into(), source(&format!("{uri}/postings"))),
+            ("ivf_centroids".into(), source(&format!("{uri}centroids"))),
+            ("ivf_postings".into(), source(&format!("{uri}postings"))),
         ]),
     }
 }
@@ -82,11 +83,10 @@ fn metadata_document(store: &MetadataStore) -> IndexMetadata {
     let index_uuid = Uuid::new_v4();
     let snapshot_id = 701;
     let timestamp_ms = 1_750_000_000_000;
-    let build = artifacts("file:///indexes/metadata-test", 2);
+    let build = artifacts(store, "indexes/metadata-test", 2);
     IndexMetadata {
         format_version: 1,
         index_uuid,
-        location: store.index_location(index_uuid).unwrap(),
         last_updated_ms: timestamp_ms,
         last_sequence_number: 1,
         current_snapshot_id: snapshot_id,
@@ -95,14 +95,23 @@ fn metadata_document(store: &MetadataStore) -> IndexMetadata {
             sequence_number: 1,
             timestamp_ms,
             summary: BTreeMap::new(),
-            source: source("file:///data/documents.parquet"),
             vector_field: "embedding".into(),
             source_key_fields: vec!["document_id".into()],
+            indexed_rows: 3,
             index_family: "ivf".into(),
             index_schema_version: 1,
             metric: "l2_squared".into(),
             parameters: build.parameters,
-            index_relations: build.index_relations,
+            index_relations: build
+                .index_relations
+                .into_iter()
+                .map(|(role, reference)| match reference {
+                    RelationReference::Parquet { uri } => {
+                        (role, store.relative_location(&uri).unwrap())
+                    }
+                    RelationReference::Iceberg { .. } => unreachable!(),
+                })
+                .collect(),
         }],
         snapshot_log: vec![SnapshotLogEntry {
             timestamp_ms,
@@ -112,9 +121,8 @@ fn metadata_document(store: &MetadataStore) -> IndexMetadata {
     }
 }
 
-fn ivf_centroids_document(store: &MetadataStore) -> IvfCentroidsMetadata {
+fn ivf_centroids_document(_store: &MetadataStore) -> IvfCentroidsMetadata {
     let descriptor = IvfCentroidsDescriptor {
-        source: source("file:///data/documents.parquet"),
         vector_field: "embedding".into(),
         dimension: 2,
         metric: DistanceMetric::L2Squared,
@@ -126,10 +134,9 @@ fn ivf_centroids_document(store: &MetadataStore) -> IvfCentroidsMetadata {
         format_version: 1,
         artifact_uuid,
         fingerprint: descriptor.fingerprint().unwrap(),
-        location: store.ivf_centroids_location(artifact_uuid).unwrap(),
         created_at_ms: 1_750_000_000_000,
         descriptor,
-        centroids: source("file:///indexes/centroid-artifacts/centroids"),
+        centroids: "indexes/centroid-artifacts/centroids/".into(),
     }
 }
 
@@ -140,8 +147,8 @@ async fn repository_validates_the_centroid_artifact_against_the_logical_snapshot
     let store = repository.metadata_store();
     let centroids = ivf_centroids_document(store);
     let centroid_location = store.write_ivf_centroids(&centroids).await.unwrap();
-    let mut snapshot = metadata_document(store).current_snapshot().unwrap().clone();
-    snapshot.source = centroids.descriptor.source.clone();
+    let mut metadata = metadata_document(store);
+    let snapshot = metadata.snapshots.first_mut().unwrap();
     snapshot
         .index_relations
         .insert("ivf_centroids".into(), centroids.centroids.clone());
@@ -153,19 +160,30 @@ async fn repository_validates_the_centroid_artifact_against_the_logical_snapshot
         "ivf_centroids_uuid".into(),
         centroids.artifact_uuid.to_string(),
     );
-    snapshot
-        .parameters
-        .insert("ivf_centroids_metadata_location".into(), centroid_location);
+    snapshot.parameters.insert(
+        "ivf_centroids_metadata_location".into(),
+        store.relative_location(&centroid_location).unwrap(),
+    );
+    let source = source("file:///data/documents.parquet");
+    let loaded = LoadedIndex {
+        entry: CatalogEntry {
+            identifier: IndexIdentifier::root("documents_embedding").unwrap(),
+            metadata_location: "file:///metadata.json".into(),
+            source: source.clone(),
+        },
+        metadata,
+    };
 
     repository
-        .load_snapshot_ivf_centroids(&snapshot)
+        .load_snapshot_ivf_centroids(&loaded)
         .await
         .unwrap();
 
-    snapshot.vector_field = "other_embedding".into();
+    let mut mismatched = loaded;
+    mismatched.metadata.snapshots[0].vector_field = "other_embedding".into();
     assert!(
         repository
-            .load_snapshot_ivf_centroids(&snapshot)
+            .load_snapshot_ivf_centroids(&mismatched)
             .await
             .is_err()
     );
@@ -232,9 +250,10 @@ async fn repository_validates_ivf_centroids_catalog_and_reference_identity() {
         .write_ivf_centroids(&centroids)
         .await
         .unwrap();
+    let source = source("file:///data/documents.parquet");
     let claim = match repository
         .catalog()
-        .claim_ivf_centroids(&centroids.descriptor, Uuid::new_v4(), 60_000)
+        .claim_ivf_centroids(&source, &centroids.descriptor, Uuid::new_v4(), 60_000)
         .unwrap()
     {
         IvfCentroidsClaimResult::Claimed(claim) => claim,
@@ -246,19 +265,22 @@ async fn repository_validates_ivf_centroids_catalog_and_reference_identity() {
         .unwrap();
 
     let loaded = repository
-        .load_ivf_centroids(&centroids.fingerprint)
+        .load_ivf_centroids(&source, &centroids.fingerprint)
         .await
         .unwrap();
     assert_eq!(loaded.metadata, centroids);
     let reference = IvfCentroidsReference::new(
         &loaded.entry.fingerprint,
         loaded.entry.artifact_uuid,
-        &loaded.entry.metadata_location,
+        repository
+            .metadata_store()
+            .relative_location(&loaded.entry.metadata_location)
+            .unwrap(),
     )
     .unwrap();
     assert_eq!(
         repository
-            .load_ivf_centroids_reference(&reference)
+            .load_ivf_centroids_reference(&source, &reference)
             .await
             .unwrap()
             .metadata,
@@ -273,7 +295,7 @@ async fn repository_validates_ivf_centroids_catalog_and_reference_identity() {
     .unwrap();
     assert!(
         repository
-            .load_ivf_centroids_reference(&mismatched)
+            .load_ivf_centroids_reference(&source, &mismatched)
             .await
             .is_err()
     );
@@ -285,24 +307,26 @@ async fn repository_validates_ivf_centroids_catalog_and_reference_identity() {
     };
     assert!(
         repository
-            .load_ivf_centroids_reference(&malformed)
+            .load_ivf_centroids_reference(&source, &malformed)
             .await
             .is_err()
     );
 }
 
 #[tokio::test]
-async fn metadata_store_rejects_foreign_locations() {
+async fn metadata_store_rejects_absolute_artifact_locations() {
     let temporary = TempDir::new().unwrap();
     let repository = repository(&temporary);
     let store = repository.metadata_store();
     let mut metadata = metadata_document(store);
-    metadata.location = "file:///tmp/other/metadata/".into();
+    metadata.snapshots[0]
+        .index_relations
+        .insert("ivf_postings".into(), "file:///tmp/other/postings/".into());
 
     assert!(store.write_initial(&metadata).await.is_err());
 
     let mut centroids = ivf_centroids_document(store);
-    centroids.location = "file:///tmp/other/centroid-artifacts/".into();
+    centroids.centroids = "file:///tmp/other/centroids/".into();
     assert!(matches!(
         store.write_ivf_centroids(&centroids).await,
         Err(Error::InvalidMetadata(_))
@@ -448,7 +472,7 @@ async fn repository_loads_discovers_and_selects_published_indexes() {
             vector_field: "embedding",
             source_key_fields: &["document_id".into()],
             builder: "test",
-            build: artifacts("file:///indexes/v1", 2),
+            build: artifacts(repository.metadata_store(), "indexes/v1", 2),
         },
     )
     .await
@@ -493,7 +517,16 @@ async fn repository_registration_requires_metadata_to_exist_in_storage() {
     std::fs::remove_file(url::Url::parse(&location).unwrap().to_file_path().unwrap()).unwrap();
     let identifier = IndexIdentifier::root("missing_metadata").unwrap();
 
-    assert!(repository.register(&identifier, &location).await.is_err());
+    assert!(
+        repository
+            .register(
+                &identifier,
+                &source("file:///data/documents.parquet"),
+                &location,
+            )
+            .await
+            .is_err()
+    );
     assert!(!repository.exists(&identifier).unwrap());
 }
 
@@ -501,7 +534,7 @@ async fn repository_registration_requires_metadata_to_exist_in_storage() {
 async fn publication_uses_the_builder_format_descriptor() {
     let temporary = TempDir::new().unwrap();
     let repository = repository(&temporary);
-    let mut build = artifacts("file:///indexes/v2", 2);
+    let mut build = artifacts(repository.metadata_store(), "indexes/v2", 2);
     build.format = IndexFormat::ivf(DistanceMetric::Cosine);
     build
         .parameters
@@ -550,7 +583,7 @@ async fn repository_rejects_missing_and_ambiguous_selection() {
                 vector_field: "embedding",
                 source_key_fields: &["document_id".into()],
                 builder: "test",
-                build: artifacts(&format!("file:///indexes/{name}"), 2),
+                build: artifacts(repository.metadata_store(), &format!("indexes/{name}"), 2),
             },
         )
         .await
@@ -579,7 +612,7 @@ async fn repository_publication_refreshes_with_catalog_cas() {
             vector_field: "embedding",
             source_key_fields: &["document_id".into()],
             builder: "test",
-            build: artifacts("file:///indexes/v1", 2),
+            build: artifacts(repository.metadata_store(), "indexes/v1", 2),
         },
     )
     .await
@@ -594,7 +627,7 @@ async fn repository_publication_refreshes_with_catalog_cas() {
             snapshot_id: new_snapshot_id(),
             source,
             builder: "test",
-            build: artifacts("file:///indexes/v2", 3),
+            build: artifacts(repository.metadata_store(), "indexes/v2", 3),
         },
     )
     .await
@@ -626,7 +659,7 @@ async fn duplicate_publication_does_not_replace_catalog_state() {
             vector_field: "embedding",
             source_key_fields: &["document_id".into()],
             builder: "local",
-            build: artifacts("file:///indexes/first", 2),
+            build: artifacts(repository.metadata_store(), "indexes/first", 2),
         },
     )
     .await
@@ -642,7 +675,7 @@ async fn duplicate_publication_does_not_replace_catalog_state() {
             vector_field: "embedding",
             source_key_fields: &["document_id".into()],
             builder: "spark",
-            build: artifacts("file:///indexes/duplicate", 2),
+            build: artifacts(repository.metadata_store(), "indexes/duplicate", 2),
         },
     )
     .await;

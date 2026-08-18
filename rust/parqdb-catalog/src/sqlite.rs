@@ -13,8 +13,8 @@ use crate::{
     TableIdentifier,
 };
 
-const SCHEMA_VERSION: i64 = 5;
-const APPLICATION_ID: i64 = 0x524c_4659; // ASCII "RLFY"
+const SCHEMA_VERSION: i64 = 1;
+const APPLICATION_ID: i64 = 0x5051_4442; // ASCII "PQDB"
 const ROOT_NAMESPACE_KEY: &str = "[]";
 const IVF_CENTROIDS_STATE_BUILDING: &str = "building";
 const IVF_CENTROIDS_STATE_READY: &str = "ready";
@@ -117,11 +117,13 @@ impl IndexCatalog for SqliteCatalog {
     fn register(
         &self,
         identifier: &IndexIdentifier,
+        source: &RelationReference,
         metadata_location: &str,
         metadata: &IndexMetadata,
     ) -> Result<()> {
         metadata.validate()?;
-        let snapshot = metadata.current_snapshot()?;
+        source.validate()?;
+        parqdb_meta::validate_absolute_location(metadata_location)?;
         let namespace = identifier.namespace_key()?;
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -131,14 +133,16 @@ impl IndexCatalog for SqliteCatalog {
         )?;
         let result = transaction.execute(
             "INSERT INTO indexes(
-                namespace, name, metadata_location, index_uuid, source_identity
-             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                namespace, name, metadata_location, index_uuid,
+                source_identity, source_reference
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 namespace,
                 identifier.name(),
                 metadata_location,
                 metadata.index_uuid.to_string(),
-                snapshot.source.exact_state_key(),
+                source.exact_state_key(),
+                serde_json::to_string(source)?,
             ],
         );
         match result {
@@ -160,6 +164,7 @@ impl IndexCatalog for SqliteCatalog {
     fn commit(
         &self,
         identifier: &IndexIdentifier,
+        source: &RelationReference,
         base_metadata_location: &str,
         new_metadata_location: &str,
         base_metadata: &IndexMetadata,
@@ -192,23 +197,22 @@ impl IndexCatalog for SqliteCatalog {
         {
             return Err(Error::IndexUuidMismatch(identifier.clone()));
         }
-        if new_metadata.location != base_metadata.location {
-            return Err(Error::InvalidMetadata(
-                "index location must remain unchanged".into(),
-            ));
-        }
         new_metadata.validate_update_from(base_metadata)?;
-        let source_identity = new_metadata.current_snapshot()?.source.exact_state_key();
+        source.validate()?;
+        parqdb_meta::validate_absolute_location(new_metadata_location)?;
+        let source_identity = source.exact_state_key();
         let updated = transaction.execute(
             "UPDATE indexes
-             SET metadata_location = ?1, source_identity = ?2
-             WHERE namespace = ?3
-               AND name = ?4
-               AND metadata_location = ?5
-               AND index_uuid = ?6",
+             SET metadata_location = ?1, source_identity = ?2,
+                 source_reference = ?3
+             WHERE namespace = ?4
+               AND name = ?5
+               AND metadata_location = ?6
+               AND index_uuid = ?7",
             params![
                 new_metadata_location,
                 source_identity,
+                serde_json::to_string(source)?,
                 namespace,
                 identifier.name(),
                 base_metadata_location,
@@ -269,20 +273,21 @@ impl IndexCatalog for SqliteCatalog {
 
     fn load(&self, identifier: &IndexIdentifier) -> Result<CatalogEntry> {
         let namespace = identifier.namespace_key()?;
-        let metadata_location = self
+        let entry = self
             .connection()?
             .query_row(
-                "SELECT metadata_location
+                "SELECT metadata_location, source_reference
                  FROM indexes
                  WHERE namespace = ?1 AND name = ?2",
                 params![namespace, identifier.name()],
-                |row| row.get::<_, String>(0),
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
             )
             .optional()?
             .ok_or_else(|| Error::IndexNotFound(identifier.clone()))?;
         Ok(CatalogEntry {
             identifier: identifier.clone(),
-            metadata_location,
+            metadata_location: entry.0,
+            source: serde_json::from_str(&entry.1)?,
         })
     }
 
@@ -295,20 +300,25 @@ impl IndexCatalog for SqliteCatalog {
         let source_identity = source.exact_state_key();
         let connection = self.connection()?;
         let mut statement = connection.prepare(
-            "SELECT name, metadata_location
+            "SELECT name, metadata_location, source_reference
              FROM indexes
              WHERE namespace = ?1 AND source_identity = ?2
              ORDER BY name",
         )?;
         let rows = statement.query_map(params![namespace_key, source_identity], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
         })?;
         let mut entries = Vec::new();
         for row in rows {
-            let (name, metadata_location) = row?;
+            let (name, metadata_location, source_reference) = row?;
             entries.push(CatalogEntry {
                 identifier: IndexIdentifier::new(namespace.to_vec(), name)?,
                 metadata_location,
+                source: serde_json::from_str(&source_reference)?,
             });
         }
         Ok(entries)
@@ -367,29 +377,38 @@ impl IndexCatalog for SqliteCatalog {
         )? == 1)
     }
 
-    fn load_ivf_centroids(&self, fingerprint: &str) -> Result<IvfCentroidsCatalogEntry> {
+    fn load_ivf_centroids(
+        &self,
+        source: &RelationReference,
+        fingerprint: &str,
+    ) -> Result<IvfCentroidsCatalogEntry> {
+        source.validate()?;
+        let source_identity = source.exact_state_key();
         let row = self
             .connection()?
             .query_row(
                 "SELECT artifact_uuid, metadata_location
                  FROM ivf_centroid_artifacts
-                 WHERE fingerprint = ?1 AND state = ?2",
-                params![fingerprint, IVF_CENTROIDS_STATE_READY],
+                 WHERE source_identity = ?1 AND fingerprint = ?2 AND state = ?3",
+                params![source_identity, fingerprint, IVF_CENTROIDS_STATE_READY],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
             )
             .optional()?
             .ok_or_else(|| Error::IvfCentroidsNotFound(fingerprint.to_owned()))?;
-        ivf_centroids_entry(fingerprint, &row.0, &row.1)
+        ivf_centroids_entry(&source.exact_state_key(), fingerprint, &row.0, &row.1)
     }
 
     fn claim_ivf_centroids(
         &self,
+        source: &RelationReference,
         descriptor: &IvfCentroidsDescriptor,
         owner: Uuid,
         lease_duration_ms: i64,
     ) -> Result<IvfCentroidsClaimResult> {
+        source.validate()?;
         descriptor.validate()?;
         validate_lease(owner, lease_duration_ms)?;
+        let source_identity = source.exact_state_key();
         let fingerprint = descriptor.fingerprint()?;
         let descriptor_json = serde_json::to_string(descriptor)?;
         let owner_string = owner.to_string();
@@ -401,8 +420,9 @@ impl IndexCatalog for SqliteCatalog {
             .query_row(
                 "SELECT descriptor, state, owner, lease_expires_ms,
                         artifact_uuid, metadata_location
-                 FROM ivf_centroid_artifacts WHERE fingerprint = ?1",
-                [&fingerprint],
+                 FROM ivf_centroid_artifacts
+                 WHERE source_identity = ?1 AND fingerprint = ?2",
+                params![source_identity, fingerprint],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -426,6 +446,7 @@ impl IndexCatalog for SqliteCatalog {
             }
             if state == IVF_CENTROIDS_STATE_READY {
                 let entry = ivf_centroids_entry(
+                    &source_identity,
                     &fingerprint,
                     artifact_uuid.as_deref().ok_or_else(|| {
                         Error::Implementation("ready IVF centroid artifact has no UUID".into())
@@ -450,22 +471,25 @@ impl IndexCatalog for SqliteCatalog {
             transaction.execute(
                 "UPDATE ivf_centroid_artifacts
                  SET descriptor = ?1, state = ?2, owner = ?3, lease_expires_ms = ?4,
-                     artifact_uuid = NULL, metadata_location = NULL, error = NULL
-                 WHERE fingerprint = ?5",
+                     artifact_uuid = NULL, metadata_location = NULL,
+                     error = NULL
+                 WHERE source_identity = ?5 AND fingerprint = ?6",
                 params![
                     descriptor_json,
                     IVF_CENTROIDS_STATE_BUILDING,
                     owner_string,
                     lease_expires_ms,
+                    source_identity,
                     fingerprint
                 ],
             )?;
         } else {
             transaction.execute(
                 "INSERT INTO ivf_centroid_artifacts(
-                    fingerprint, descriptor, state, owner, lease_expires_ms
-                 ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    source_identity, fingerprint, descriptor, state, owner, lease_expires_ms
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
+                    source_identity,
                     fingerprint,
                     descriptor_json,
                     IVF_CENTROIDS_STATE_BUILDING,
@@ -476,6 +500,7 @@ impl IndexCatalog for SqliteCatalog {
         }
         transaction.commit()?;
         Ok(IvfCentroidsClaimResult::Claimed(IvfCentroidsClaim {
+            source_identity,
             fingerprint,
             owner,
         }))
@@ -491,10 +516,11 @@ impl IndexCatalog for SqliteCatalog {
         let lease_expires_ms = now.saturating_add(lease_duration_ms);
         let updated = self.connection()?.execute(
             "UPDATE ivf_centroid_artifacts SET lease_expires_ms = ?1
-             WHERE fingerprint = ?2 AND state = ?3 AND owner = ?4
-               AND lease_expires_ms > ?5",
+             WHERE source_identity = ?2 AND fingerprint = ?3
+               AND state = ?4 AND owner = ?5 AND lease_expires_ms > ?6",
             params![
                 lease_expires_ms,
+                claim.source_identity,
                 claim.fingerprint,
                 IVF_CENTROIDS_STATE_BUILDING,
                 claim.owner.to_string(),
@@ -520,11 +546,7 @@ impl IndexCatalog for SqliteCatalog {
                 "published IVF centroid fingerprint does not match claim".into(),
             ));
         }
-        parqdb_meta::IvfCentroidsReference::new(
-            &claim.fingerprint,
-            metadata.artifact_uuid,
-            metadata_location,
-        )?;
+        parqdb_meta::validate_absolute_location(metadata_location)?;
         let descriptor_json = serde_json::to_string(&metadata.descriptor)?;
         let now = now_ms()?;
         let mut connection = self.connection()?;
@@ -532,13 +554,15 @@ impl IndexCatalog for SqliteCatalog {
         let updated = transaction.execute(
             "UPDATE ivf_centroid_artifacts
              SET state = ?1, owner = NULL, lease_expires_ms = NULL,
-                 artifact_uuid = ?2, metadata_location = ?3, error = NULL
-             WHERE fingerprint = ?4 AND descriptor = ?5
-               AND state = ?6 AND owner = ?7 AND lease_expires_ms > ?8",
+                 artifact_uuid = ?2, metadata_location = ?3,
+                 error = NULL
+             WHERE source_identity = ?4 AND fingerprint = ?5 AND descriptor = ?6
+               AND state = ?7 AND owner = ?8 AND lease_expires_ms > ?9",
             params![
                 IVF_CENTROIDS_STATE_READY,
                 metadata.artifact_uuid.to_string(),
                 metadata_location,
+                claim.source_identity,
                 claim.fingerprint,
                 descriptor_json,
                 IVF_CENTROIDS_STATE_BUILDING,
@@ -555,6 +579,7 @@ impl IndexCatalog for SqliteCatalog {
         )?;
         transaction.commit()?;
         Ok(IvfCentroidsCatalogEntry {
+            source_identity: claim.source_identity.clone(),
             fingerprint: claim.fingerprint.clone(),
             artifact_uuid: metadata.artifact_uuid,
             metadata_location: metadata_location.to_owned(),
@@ -565,10 +590,12 @@ impl IndexCatalog for SqliteCatalog {
         let updated = self.connection()?.execute(
             "UPDATE ivf_centroid_artifacts
              SET state = ?1, owner = NULL, lease_expires_ms = NULL, error = ?2
-             WHERE fingerprint = ?3 AND state = ?4 AND owner = ?5",
+             WHERE source_identity = ?3 AND fingerprint = ?4
+               AND state = ?5 AND owner = ?6",
             params![
                 IVF_CENTROIDS_STATE_FAILED,
                 error,
+                claim.source_identity,
                 claim.fingerprint,
                 IVF_CENTROIDS_STATE_BUILDING,
                 claim.owner.to_string()
@@ -584,21 +611,38 @@ impl IndexCatalog for SqliteCatalog {
     fn list_ivf_centroids(&self) -> Result<Vec<IvfCentroidsCatalogEntry>> {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
-            "SELECT fingerprint, artifact_uuid, metadata_location
-             FROM ivf_centroid_artifacts WHERE state = ?1 ORDER BY fingerprint",
+            "SELECT source_identity, fingerprint, artifact_uuid, metadata_location
+             FROM ivf_centroid_artifacts
+             WHERE state = ?1 ORDER BY source_identity, fingerprint",
         )?;
         let rows = statement.query_map([IVF_CENTROIDS_STATE_READY], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
             ))
         })?;
         rows.map(|row| {
-            let (fingerprint, artifact_uuid, location) = row?;
-            ivf_centroids_entry(&fingerprint, &artifact_uuid, &location)
+            let (source_identity, fingerprint, artifact_uuid, location) = row?;
+            ivf_centroids_entry(&source_identity, &fingerprint, &artifact_uuid, &location)
         })
         .collect()
+    }
+
+    fn purge_ivf_centroids(&self, entry: &IvfCentroidsCatalogEntry) -> Result<bool> {
+        Ok(self.connection()?.execute(
+            "DELETE FROM ivf_centroid_artifacts
+             WHERE source_identity = ?1 AND fingerprint = ?2 AND state = ?3
+               AND artifact_uuid = ?4 AND metadata_location = ?5",
+            params![
+                entry.source_identity,
+                entry.fingerprint,
+                IVF_CENTROIDS_STATE_READY,
+                entry.artifact_uuid.to_string(),
+                entry.metadata_location
+            ],
+        )? == 1)
     }
 }
 
@@ -702,6 +746,7 @@ fn create_schema(connection: &mut Connection) -> Result<()> {
              metadata_location TEXT NOT NULL,
              index_uuid TEXT NOT NULL UNIQUE,
              source_identity TEXT NOT NULL,
+             source_reference TEXT NOT NULL,
              PRIMARY KEY(namespace, name),
              FOREIGN KEY(namespace) REFERENCES namespaces(namespace)
          );
@@ -720,14 +765,16 @@ fn create_schema(connection: &mut Connection) -> Result<()> {
              PRIMARY KEY(catalog, namespace, name)
          );
          CREATE TABLE ivf_centroid_artifacts (
-             fingerprint TEXT PRIMARY KEY,
+             source_identity TEXT NOT NULL,
+             fingerprint TEXT NOT NULL,
              descriptor TEXT NOT NULL,
              state TEXT NOT NULL CHECK(state IN ('building', 'ready', 'failed')),
              owner TEXT,
              lease_expires_ms INTEGER,
-             artifact_uuid TEXT UNIQUE,
-             metadata_location TEXT UNIQUE,
-             error TEXT
+             artifact_uuid TEXT,
+             metadata_location TEXT,
+             error TEXT,
+             PRIMARY KEY(source_identity, fingerprint)
          );",
     )?;
     transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
@@ -750,6 +797,7 @@ fn validate_lease(owner: Uuid, lease_duration_ms: i64) -> Result<()> {
 }
 
 fn ivf_centroids_entry(
+    source_identity: &str,
     fingerprint: &str,
     artifact_uuid: &str,
     metadata_location: &str,
@@ -757,6 +805,7 @@ fn ivf_centroids_entry(
     let artifact_uuid =
         Uuid::parse_str(artifact_uuid).map_err(|error| Error::Implementation(error.to_string()))?;
     Ok(IvfCentroidsCatalogEntry {
+        source_identity: source_identity.to_owned(),
         fingerprint: fingerprint.to_owned(),
         artifact_uuid,
         metadata_location: metadata_location.to_owned(),

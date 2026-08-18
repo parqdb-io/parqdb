@@ -454,7 +454,7 @@ impl LocalSession {
         let current = loaded.metadata.current_snapshot()?;
         let source = self.bind_source(source).await?;
         let source_reference = source.reference.clone();
-        if current.source.identity_key() != source_reference.identity_key() {
+        if loaded.entry.source.identity_key() != source_reference.identity_key() {
             return Err(Error::IndexNotFound(identifier.name().to_owned()));
         }
         let config = resolve_refresh_config(current, config)?;
@@ -539,7 +539,6 @@ impl LocalSession {
         context: &mut IvfCentroidsBuildContext<'_>,
     ) -> Result<ResolvedIvfCentroids> {
         let descriptor = IvfCentroidsDescriptor {
-            source: source.clone(),
             vector_field: vector_field.to_owned(),
             dimension: i32::try_from(context.prepared.dimension)
                 .map_err(|_| Error::InvalidSchema("vector dimension exceeds int32".into()))?,
@@ -551,20 +550,24 @@ impl LocalSession {
         let fingerprint = descriptor.fingerprint()?;
         let owner = Uuid::new_v4();
         loop {
-            match self
-                .catalog
-                .claim_ivf_centroids(&descriptor, owner, IVF_CENTROIDS_LEASE_MS)?
-            {
+            match self.catalog.claim_ivf_centroids(
+                source,
+                &descriptor,
+                owner,
+                IVF_CENTROIDS_LEASE_MS,
+            )? {
                 IvfCentroidsClaimResult::Ready(_) => {
                     return self
-                        .load_ivf_centroids(&fingerprint, &descriptor, context.prepared)
+                        .load_ivf_centroids(source, &fingerprint, &descriptor, context.prepared)
                         .await;
                 }
                 IvfCentroidsClaimResult::Busy { .. } => {
                     tokio::time::sleep(IVF_CENTROIDS_WAIT_INTERVAL).await;
                 }
                 IvfCentroidsClaimResult::Claimed(claim) => {
-                    return self.build_ivf_centroids(descriptor, claim, context).await;
+                    return self
+                        .build_ivf_centroids(source, descriptor, claim, context)
+                        .await;
                 }
             }
         }
@@ -572,37 +575,43 @@ impl LocalSession {
 
     async fn load_ivf_centroids(
         &self,
+        source: &RelationReference,
         fingerprint: &str,
         descriptor: &IvfCentroidsDescriptor,
         prepared: &PreparedIvf,
     ) -> Result<ResolvedIvfCentroids> {
-        let loaded = self.indexes.load_ivf_centroids(fingerprint).await?;
+        let loaded = self.indexes.load_ivf_centroids(source, fingerprint).await?;
         if !loaded.metadata.descriptor.is_compatible_with(descriptor) {
             return Err(Error::InvalidMetadata(
                 "IVF centroids descriptor does not match the requested build".into(),
             ));
         }
-        let RelationReference::Parquet { uri } = &loaded.metadata.centroids else {
-            return Err(Error::InvalidMetadata(
-                "the local builder requires Parquet IVF centroids".into(),
-            ));
-        };
-        let batch = self.parquet.read(uri, None).await?;
+        let centroids_location = parqdb_index::resolve_warehouse_location(
+            self.indexes.metadata_store().warehouse_root(),
+            &loaded.metadata.centroids,
+            loaded.metadata.centroids.ends_with('/'),
+        )?;
+        let batch = self.parquet.read(&centroids_location, None).await?;
         let centroids = crate::ivf::read_centroids(&batch, prepared.nlist, prepared.dimension)?;
         let reference = IvfCentroidsReference::new(
             loaded.entry.fingerprint,
             loaded.entry.artifact_uuid,
-            loaded.entry.metadata_location,
+            self.indexes
+                .metadata_store()
+                .relative_location(&loaded.entry.metadata_location)?,
         )?;
         Ok(ResolvedIvfCentroids {
             reference,
-            centroids: loaded.metadata.centroids,
+            centroids: RelationReference::Parquet {
+                uri: centroids_location,
+            },
             trained: reused_ivf(prepared, centroids)?,
         })
     }
 
     async fn build_ivf_centroids(
         &self,
+        source: &RelationReference,
         descriptor: IvfCentroidsDescriptor,
         claim: IvfCentroidsClaim,
         context: &mut IvfCentroidsBuildContext<'_>,
@@ -618,11 +627,11 @@ impl LocalSession {
         };
         let result: Result<ResolvedIvfCentroids> = async {
             let artifact_uuid = Uuid::new_v4();
-            let artifact_root = self
+            let centroid_root = self
                 .warehouse
                 .location(&format!("indexes/{}/1", artifact_uuid.simple()), true)?;
-            context.build_lease.add_snapshot_root(&artifact_root)?;
-            let centroids_location = child_location(&artifact_root, "ivf_centroids", true)?;
+            context.build_lease.add_snapshot_root(&centroid_root)?;
+            let centroids_location = child_location(&centroid_root, "ivf_centroids", true)?;
             let trained = train_prepared_ivf(context.prepared, context.parallel, context.progress)?;
             write_ivf_centroids(
                 &self.parquet,
@@ -636,15 +645,12 @@ impl LocalSession {
                 format_version: 1,
                 artifact_uuid,
                 fingerprint: claim.fingerprint.clone(),
-                location: self
-                    .indexes
-                    .metadata_store()
-                    .ivf_centroids_location(artifact_uuid)?,
                 created_at_ms: now_ms()?,
                 descriptor: descriptor.clone(),
-                centroids: RelationReference::Parquet {
-                    uri: centroids_location.clone(),
-                },
+                centroids: self
+                    .indexes
+                    .metadata_store()
+                    .relative_location(&centroids_location)?,
             };
             let metadata_location = self
                 .indexes
@@ -657,11 +663,15 @@ impl LocalSession {
             let reference = IvfCentroidsReference::new(
                 entry.fingerprint,
                 entry.artifact_uuid,
-                entry.metadata_location,
+                self.indexes
+                    .metadata_store()
+                    .relative_location(&entry.metadata_location)?,
             )?;
             Ok(ResolvedIvfCentroids {
                 reference,
-                centroids: metadata.centroids,
+                centroids: RelationReference::Parquet {
+                    uri: centroids_location,
+                },
                 trained,
             })
         }
@@ -687,7 +697,7 @@ impl LocalSession {
                     .catalog
                     .abandon_ivf_centroids(&claim, &error.to_string());
                 if let Ok(centroid_artifact) = self
-                    .load_ivf_centroids(&claim.fingerprint, &descriptor, context.prepared)
+                    .load_ivf_centroids(source, &claim.fingerprint, &descriptor, context.prepared)
                     .await
                 {
                     return Ok(centroid_artifact);

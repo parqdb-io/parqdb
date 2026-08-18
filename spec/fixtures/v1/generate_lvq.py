@@ -30,15 +30,7 @@ def write_json(path: Path, value: object) -> None:
 
 
 def fingerprint(descriptor: dict[str, object]) -> str:
-    source = descriptor["source"]
-    assert isinstance(source, dict)
-    canonical_source = {"profile": source["profile"]}
-    fields = (
-        ("uri",) if source["profile"] == "parquet" else ("table-uuid", "snapshot-id")
-    )
-    canonical_source.update((field, source[field]) for field in fields)
     canonical_descriptor = {
-        "source": canonical_source,
         "vector-field": descriptor["vector-field"],
         "dimension": descriptor["dimension"],
         "metric": descriptor["metric"],
@@ -80,9 +72,8 @@ def encode(vector: list[float], bits: int) -> tuple[float, float, bytes]:
 
 
 def descriptor(encoding: str) -> dict[str, object]:
-    root = f"s3://parqdb-fixtures/v1/valid/{encoding}"
+    _ = encoding
     return {
-        "source": {"profile": "parquet", "uri": f"{root}/source/"},
         "vector-field": "embedding",
         "dimension": 3,
         "metric": "l2_squared",
@@ -99,7 +90,6 @@ def metadata(encoding: str) -> dict[str, object]:
     return {
         "format-version": 1,
         "index-uuid": index_uuid,
-        "location": f"s3://parqdb-fixtures/v1/metadata/{index_uuid}/",
         "last-updated-ms": 1_750_000_000_000,
         "last-sequence-number": 1,
         "current-snapshot-id": SNAPSHOT_ID,
@@ -109,9 +99,9 @@ def metadata(encoding: str) -> dict[str, object]:
                 "sequence-number": 1,
                 "timestamp-ms": 1_750_000_000_000,
                 "summary": {"operation": "create"},
-                "source": centroid_descriptor["source"],
                 "vector-field": "embedding",
                 "source-key-fields": ["document_id"],
+                "indexed-rows": 3,
                 "index-family": "ivf",
                 "index-schema-version": 1,
                 "metric": "l2_squared",
@@ -122,17 +112,11 @@ def metadata(encoding: str) -> dict[str, object]:
                     "posting_encoding": encoding,
                     "ivf_centroids_fingerprint": fingerprint(centroid_descriptor),
                     "ivf_centroids_uuid": centroid_uuid,
-                    "ivf_centroids_metadata_location": f"{root}/ivf-centroids.metadata.json",
+                    "ivf_centroids_metadata_location": "ivf-centroids.metadata.json",
                 },
                 "index-relations": {
-                    "ivf_centroids": {
-                        "profile": "parquet",
-                        "uri": f"{root}/ivf_centroids/",
-                    },
-                    "ivf_postings": {
-                        "profile": "parquet",
-                        "uri": f"{root}/ivf_postings/",
-                    },
+                    "ivf_centroids": "ivf_centroids.parquet",
+                    "ivf_postings": "ivf_postings/",
                 },
             }
         ],
@@ -149,18 +133,13 @@ def metadata(encoding: str) -> dict[str, object]:
 def ivf_centroids_metadata(encoding: str) -> dict[str, object]:
     centroid_descriptor = descriptor(encoding)
     centroid_uuid = IVF_CENTROIDS_UUIDS[encoding]
-    root = f"s3://parqdb-fixtures/v1/valid/{encoding}"
     return {
         "format-version": 1,
         "artifact-uuid": centroid_uuid,
         "fingerprint": fingerprint(centroid_descriptor),
-        "location": f"{root}/centroid-artifacts/{centroid_uuid}/",
         "created-at-ms": 1_750_000_000_000,
         "descriptor": centroid_descriptor,
-        "centroids": {
-            "profile": "parquet",
-            "uri": f"{root}/ivf_centroids/",
-        },
+        "centroids": "ivf_centroids.parquet",
     }
 
 
