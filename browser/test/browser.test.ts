@@ -81,4 +81,17 @@ describe('HTTP Range query', () => {
     expect(requests.some(request => request.path === 'ivf_postings/manifest.json')).toBe(false)
     expect(requests.some(request => request.path.includes('cid_bucket=000000/part-00000.parquet'))).toBe(true)
   })
+
+  test('returns all available candidates when k exceeds the index size', async () => {
+    const wasm = await readFile(wasmPath)
+    const index = await ParqDB.open(`${baseUrl}/manifest.json`, {
+      allowHttp: true,
+      wasm,
+    })
+
+    const hits = await index.search([0, 0, 0], { nprobe: 20, k: 20 })
+
+    expect(hits).toHaveLength(3)
+    expect(hits.map(hit => hit.document_id)).toEqual(['a', 'b', 'c'])
+  })
 })

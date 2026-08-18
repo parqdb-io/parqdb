@@ -220,8 +220,8 @@
             <div class="field"><label for="manifest">INDEX URL <span>manifest.json</span></label><input id="manifest" value="https://parqdb-io.github.io/fixtures/lvq8/manifest.json" spellcheck="false" autocapitalize="off" /></div>
             <div class="field"><label for="query">QUERY VECTOR <span>float32[]</span></label><input id="query" value="0, 0, 0" spellcheck="false" inputmode="decimal" /></div>
             <div class="pair">
-              <div class="field"><label for="nprobe">NPROBE</label><input id="nprobe" type="number" min="1" value="1" /></div>
-              <div class="field"><label for="k">TOP_K</label><input id="k" type="number" min="1" value="2" /></div>
+              <div class="field"><label for="nprobe">NPROBE <span id="nprobe-limit">nlist 2</span></label><input id="nprobe" type="number" min="1" value="1" /></div>
+              <div class="field"><label for="k">TOP_K <span id="k-limit">rows 3</span></label><input id="k" type="number" min="1" value="2" /></div>
             </div>
             <div class="actions"><button class="run" id="search" type="submit">EXECUTE QUERY ↵</button><button id="lvq4" type="button">USE LVQ4</button></div>
             <div class="package-info">
@@ -346,7 +346,11 @@
           }
           const vector = byId('query').value.split(',').map(value => Number(value.trim()))
           const queryStarted = performance.now()
-          const hits = await openedIndex.search(vector, { nprobe: Number(byId('nprobe').value), k: Number(byId('k').value), trace: onTrace })
+          const nprobe = Math.min(Number(byId('nprobe').value), openedIndex.manifest.index.nlist)
+          const k = Math.min(Number(byId('k').value), openedIndex.manifest.index.ntotal)
+          byId('nprobe').value = String(nprobe)
+          byId('k').value = String(k)
+          const hits = await openedIndex.search(vector, { nprobe, k, trace: onTrace })
           const queryMs = performance.now() - queryStarted
           renderFacts(openedIndex.manifest)
           renderRows(hits)
@@ -372,7 +376,7 @@
         byId('byte-total').textContent = formatBytes(transferred)
         byId('request-log').innerHTML = requests.length ? requests.map(request => `<div class="request-row"><b>${request.method}</b><span class="path">${request.status} ${escape(request.path)}</span><span class="range">${escape(request.range)}</span><span class="time">${request.elapsed.toFixed(1)}ms</span></div>`).join('') : '<div class="request-empty">$ waiting for range requests_</div>'
       }
-      function renderFacts(manifest) { byId('encoding').textContent = manifest.index.postingEncoding.toUpperCase(); byId('dimension').textContent = manifest.index.dimension.toLocaleString(); byId('ntotal').textContent = manifest.index.ntotal.toLocaleString() }
+      function renderFacts(manifest) { byId('encoding').textContent = manifest.index.postingEncoding.toUpperCase(); byId('dimension').textContent = manifest.index.dimension.toLocaleString(); byId('ntotal').textContent = manifest.index.ntotal.toLocaleString(); byId('nprobe-limit').textContent = `nlist ${manifest.index.nlist.toLocaleString()}`; byId('k-limit').textContent = `rows ${manifest.index.ntotal.toLocaleString()}` }
       function renderRows(rows) {
         if (!rows.length) { byId('output').innerHTML = '<div class="empty">$ query returned 0 rows</div>'; return }
         const columns = Object.keys(rows[0])

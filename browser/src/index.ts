@@ -81,12 +81,14 @@ export class ParqDB {
 
   async search(query: Iterable<number>, options: SearchOptions): Promise<SearchHit[]> {
     const { nlist, dimension } = this.manifest.index
-    if (!Number.isSafeInteger(options.nprobe) || options.nprobe <= 0 || options.nprobe > nlist) {
-      throw new Error(`nprobe must be in [1, ${nlist}]`)
+    if (!Number.isSafeInteger(options.nprobe) || options.nprobe <= 0) {
+      throw new Error('nprobe must be a positive portable integer')
     }
-    if (!Number.isSafeInteger(options.k) || options.k <= 0 || options.k > 1_000_000) {
-      throw new Error('k must be in [1, 1000000]')
+    if (!Number.isSafeInteger(options.k) || options.k <= 0) {
+      throw new Error('k must be a positive portable integer')
     }
+    const effectiveNprobe = Math.min(options.nprobe, nlist)
+    const effectiveK = Math.min(options.k, this.manifest.index.ntotal, 1_000_000)
     const rawQuery = Float32Array.from(query)
     if (rawQuery.length !== dimension || rawQuery.some(value => !Number.isFinite(value))) {
       throw new Error(`query must contain ${dimension} finite values`)
@@ -95,7 +97,7 @@ export class ParqDB {
     const requestOptions: HttpOptions = { ...this.httpOptions }
     if (options.signal !== undefined) requestOptions.signal = options.signal
     options.trace?.({ phase: 'routing', status: 'start' })
-    const selectedCids = await this.selectCids(transformedQuery, options.nprobe, requestOptions)
+    const selectedCids = await this.selectCids(transformedQuery, effectiveNprobe, requestOptions)
     options.trace?.({ phase: 'routing', status: 'complete', selectedCids: selectedCids.length })
     const selected = new Set(selectedCids)
     const files = this.manifest.postings.files.filter(file => intersects(file, selectedCids))
@@ -152,7 +154,7 @@ export class ParqDB {
           batch.scales,
           transformedQuery,
           this.manifest.index.postingEncoding === 'lvq4' ? 4 : 8,
-          options.k,
+          effectiveK,
         )) {
           candidates.push({ row: rows[hit.row]!, distance: hit.distance, order })
           order += 1
@@ -162,7 +164,7 @@ export class ParqDB {
     options.trace?.({ phase: 'scoring', status: 'complete', candidateRows })
     candidates.sort((left, right) => left.distance - right.distance || left.order - right.order)
     const scale = this.manifest.index.metric === 'cosine' ? 0.5 : 1
-    return candidates.slice(0, options.k).map(candidate =>
+    return candidates.slice(0, effectiveK).map(candidate =>
       resultRow(candidate.row, this.manifest.index.sourceKeyFields, candidate.distance * scale),
     )
   }
