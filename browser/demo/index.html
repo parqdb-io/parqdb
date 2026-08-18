@@ -217,7 +217,7 @@
         <aside class="pane controls">
           <div class="pane-head"><span>01 / query input</span><code>ctrl+enter to run</code></div>
           <form class="form" id="query-form">
-            <div class="field"><label for="manifest">INDEX URL <span>manifest.json</span></label><input id="manifest" value="./fixtures/lvq8/manifest.json" spellcheck="false" autocapitalize="off" /></div>
+            <div class="field"><label for="manifest">INDEX URL <span>manifest.json</span></label><input id="manifest" value="https://parqdb-io.github.io/fixtures/lvq8/manifest.json" spellcheck="false" autocapitalize="off" /></div>
             <div class="field"><label for="query">QUERY VECTOR <span>float32[]</span></label><input id="query" value="0, 0, 0" spellcheck="false" inputmode="decimal" /></div>
             <div class="pair">
               <div class="field"><label for="nprobe">NPROBE</label><input id="nprobe" type="number" min="1" value="1" /></div>
@@ -283,7 +283,7 @@
         if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); run() }
       })
       byId('lvq4').addEventListener('click', () => {
-        manifestInput.value = './fixtures/lvq4/manifest.json'
+        manifestInput.value = 'https://parqdb-io.github.io/fixtures/lvq4/manifest.json'
         openedIndex = undefined
         openedUrl = ''
         run()
