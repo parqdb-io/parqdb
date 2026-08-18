@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use object_store::ObjectMeta;
 use parqdb_catalog::{CatalogTombstone, IndexCatalog};
-use parqdb_meta::{RelationReference, ivf_centroids_reference};
+use parqdb_meta::ivf_centroids_reference;
 use parqdb_storage::Warehouse;
 use uuid::Uuid;
 
@@ -131,6 +131,7 @@ pub(crate) async fn remove_orphans(
         }
         removed.push(candidate.object);
     }
+    purge_missing_ivf_centroids(warehouse, catalog, &reachable).await?;
     for state in tombstones {
         if state.tombstone.unreachable_since_ms >= older_than_ms
             || reachable.contains(&state.tombstone.metadata_location)
@@ -161,15 +162,19 @@ async fn tombstone_references(
         }
         match metadata_store.load(&tombstone.metadata_location).await {
             Ok(metadata) => {
-                references.extend(index_metadata_references(warehouse, &metadata)?);
+                references.extend(index_metadata_references(
+                    warehouse,
+                    warehouse.root(),
+                    &metadata,
+                )?);
             }
             Err(parqdb_index::Error::InvalidMetadata(_)) => {
                 let metadata = metadata_store
                     .load_ivf_centroids(&tombstone.metadata_location)
                     .await?;
-                if let RelationReference::Parquet { uri } = &metadata.centroids
-                    && let Some(root) = snapshot_root(warehouse, uri)?
-                {
+                let centroids =
+                    warehouse.location(&metadata.centroids, metadata.centroids.ends_with('/'))?;
+                if let Some(root) = snapshot_root(warehouse, &centroids)? {
                     references.insert(root);
                 }
             }
@@ -198,40 +203,59 @@ async fn reachable_locations(
         if warehouse.managed(&entry.metadata_location).is_ok() {
             reachable.insert(entry.metadata_location);
         }
-        reachable.extend(index_metadata_references(warehouse, &metadata)?);
-    }
-    for entry in catalog.list_ivf_centroids()? {
-        let metadata = metadata_store
-            .load_ivf_centroids(&entry.metadata_location)
-            .await?;
-        if warehouse.managed(&entry.metadata_location).is_ok() {
-            reachable.insert(entry.metadata_location);
-        }
-        if let RelationReference::Parquet { uri } = &metadata.centroids
-            && let Some(root) = snapshot_root(warehouse, uri)?
-        {
-            reachable.insert(root);
-        }
+        reachable.extend(index_metadata_references(
+            warehouse,
+            warehouse.root(),
+            &metadata,
+        )?);
     }
     Ok(reachable)
 }
 
+async fn purge_missing_ivf_centroids(
+    warehouse: &Warehouse,
+    catalog: &dyn IndexCatalog,
+    reachable: &HashSet<String>,
+) -> Result<()> {
+    for entry in catalog.list_ivf_centroids()? {
+        if reachable.contains(&entry.metadata_location) {
+            continue;
+        }
+        match warehouse.head(&entry.metadata_location).await {
+            Err(parqdb_storage::Error::ObjectStore(object_store::Error::NotFound { .. })) => {
+                catalog.purge_ivf_centroids(&entry)?;
+            }
+            Ok(_) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
 fn index_metadata_references(
     warehouse: &Warehouse,
+    warehouse_root: &str,
     metadata: &parqdb_meta::IndexMetadata,
 ) -> Result<HashSet<String>> {
     let mut references = HashSet::new();
     for snapshot in &metadata.snapshots {
         if let Ok(centroids) = ivf_centroids_reference(snapshot)
-            && warehouse.managed(&centroids.metadata_location).is_ok()
+            && let Ok(location) = parqdb_index::resolve_warehouse_location(
+                warehouse_root,
+                &centroids.metadata_location,
+                centroids.metadata_location.ends_with('/'),
+            )
+            && warehouse.managed(&location).is_ok()
         {
-            references.insert(centroids.metadata_location);
+            references.insert(location);
         }
-        for reference in snapshot.index_relations.values() {
-            let RelationReference::Parquet { uri } = reference else {
-                continue;
-            };
-            if let Some(root) = snapshot_root(warehouse, uri)? {
+        for relative in snapshot.index_relations.values() {
+            let location = parqdb_index::resolve_warehouse_location(
+                warehouse_root,
+                relative,
+                relative.ends_with('/'),
+            )?;
+            if let Some(root) = snapshot_root(warehouse, &location)? {
                 references.insert(root);
             }
         }

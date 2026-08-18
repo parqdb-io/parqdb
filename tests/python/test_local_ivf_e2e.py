@@ -141,7 +141,7 @@ def test_local_build_publish_and_search(tmp_path: Path) -> None:
     }
     required_vector = vector_type()
     assert pq.read_schema(
-        relation_path(snapshot["index-relations"]["ivf_centroids"])
+        relation_path(snapshot["index-relations"]["ivf_centroids"], session.warehouse)
     ) == pa.schema(
         [
             pa.field("cid", pa.int32(), nullable=False),
@@ -149,13 +149,15 @@ def test_local_build_publish_and_search(tmp_path: Path) -> None:
         ]
     )
     assert pq.read_schema(
-        relation_path(snapshot["index-relations"]["ivf_postings"])
+        relation_path(snapshot["index-relations"]["ivf_postings"], session.warehouse)
     ) == pa.schema(
         [
             pa.field("key_1", pa.string(), nullable=False),
         ]
     )
-    posting_files = relation_files(snapshot["index-relations"]["ivf_postings"])
+    posting_files = relation_files(
+        snapshot["index-relations"]["ivf_postings"], session.warehouse
+    )
     assert posting_files
     for file in posting_files:
         parquet_file = pq.ParquetFile(file)
@@ -197,7 +199,7 @@ def test_local_lvq_build_and_search(tmp_path: Path) -> None:
         assert snapshot["parameters"]["posting_encoding"] == encoding
         assert snapshot["parameters"]["dimension"] == str(dimension)
         postings = snapshot["index-relations"]["ivf_postings"]
-        posting_files = relation_files(postings)
+        posting_files = relation_files(postings, session.warehouse)
         assert posting_files
         assert pq.read_schema(posting_files[0]) == pa.schema(
             [
@@ -337,7 +339,7 @@ def test_ivf_centroids_float64_and_cosine_end_to_end(tmp_path: Path) -> None:
     assert (
         len(
             {
-                snapshot["index-relations"]["ivf_postings"]["uri"]
+                snapshot["index-relations"]["ivf_postings"]
                 for snapshot in cosine_snapshots
             }
         )
@@ -441,7 +443,7 @@ metadata = session._indexes.load(
 ).metadata
 print(json.dumps({
     "hits": hits.to_pydict(),
-    "source": metadata["snapshots"][0]["source"]["uri"],
+    "source_free": "source" not in metadata["snapshots"][0],
 }, sort_keys=True))
 """
 
@@ -464,8 +466,7 @@ print(json.dumps({
         "document_id": ["c", "d"],
         "title": ["ten", "eleven"],
     }
-    assert payload["source"].startswith("file://")
-    assert payload["source"].endswith("/documents/*/data/*.parquet")
+    assert payload["source_free"] is True
 
 
 def test_composite_keys_are_stored_directly_in_postings(tmp_path: Path) -> None:
@@ -514,7 +515,7 @@ def test_composite_keys_are_stored_directly_in_postings(tmp_path: Path) -> None:
     ][0]
     assert set(snapshot["index-relations"]) == {"ivf_centroids", "ivf_postings"}
     assert pq.read_schema(
-        relation_path(snapshot["index-relations"]["ivf_postings"])
+        relation_path(snapshot["index-relations"]["ivf_postings"], session.warehouse)
     ) == pa.schema(
         [
             pa.field("key_1", pa.string(), nullable=False),
@@ -541,7 +542,7 @@ def test_vectors_can_be_omitted_from_postings(tmp_path: Path) -> None:
     ][0]
     assert snapshot["parameters"]["posting_encoding"] == "source"
     assert pq.read_schema(
-        relation_path(snapshot["index-relations"]["ivf_postings"])
+        relation_path(snapshot["index-relations"]["ivf_postings"], session.warehouse)
     ) == pa.schema(
         [
             pa.field("key_1", pa.string(), nullable=False),

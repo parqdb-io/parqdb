@@ -13,7 +13,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 import uvicorn
-from _support import WAIT, build_index, register_source, write_vectors
+from _support import WAIT, build_index, load_table_index, register_source, write_vectors
 from parqdb.facade import AsyncSession
 from parqdb.runtime.service import SessionService
 from parqdb.server.app import create_http_app, create_http_app_for_service
@@ -238,6 +238,55 @@ def test_http_transport_matches_embedded_query_surface(tmp_path: Path) -> None:
 
             with pytest.raises(parqdb.InvalidArgumentError, match="read-only"):
                 await session.sql("CREATE TABLE forbidden (value BIGINT)")
+        finally:
+            await session.close()
+            await client.aclose()
+            await service.close()
+
+    asyncio.run(exercise())
+
+
+def test_http_registers_an_index_already_published_in_the_warehouse(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "vectors.parquet"
+    root = tmp_path / "parqdb-data"
+    write_vectors(source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
+    embedded = parqdb.connect(root)
+    vectors = register_source(embedded, source)
+    build_index(vectors, nlist=1)
+    published = load_table_index(embedded, vectors, "vectors_embedding")
+    vectors.drop_index("vectors_embedding")
+    embedded.close()
+
+    async def exercise() -> None:
+        service = await SessionService.open(
+            root,
+            warehouse=None,
+            storage_options=None,
+            iceberg=None,
+            config=None,
+            runtime=None,
+        )
+        app = create_http_app_for_service(service)
+        client = httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://parqdb.test/",
+        )
+        transport = await HttpTransport.open("http://parqdb.test", client=client)
+        session = AsyncSession(transport)
+        try:
+            remote_vectors = await session.table("vectors")
+            await remote_vectors.register_index(
+                "vectors_embedding",
+                metadata_location=published.metadata_location,
+            )
+
+            assert (
+                await remote_vectors.index_status("vectors_embedding")
+            ).state == "ready"
+            result = await session.collect(remote_vectors.search([0.0, 0.0]).limit(1))
+            assert result["id"].to_pylist() == [0]
         finally:
             await session.close()
             await client.aclose()

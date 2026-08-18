@@ -44,15 +44,15 @@ impl PyNativeIndexRepository {
 #[pymethods]
 impl PyNativeIndexRepository {
     #[new]
-    #[pyo3(signature = (catalog_path, metadata_root, storage_options=None))]
+    #[pyo3(signature = (catalog_path, warehouse, storage_options=None))]
     fn new(
         catalog_path: PathBuf,
-        metadata_root: &str,
+        warehouse: &str,
         storage_options: Option<HashMap<String, String>>,
     ) -> PyResult<Self> {
         let catalog = Arc::new(SqliteCatalog::open(catalog_path).map_err(runtime_error)?);
         let warehouse = Warehouse::open(
-            metadata_root,
+            warehouse,
             StorageRegistry::new(storage_options.unwrap_or_default()),
         )
         .map_err(runtime_error)?;
@@ -102,25 +102,6 @@ impl PyNativeIndexRepository {
             .detach(move || runtime.block_on(repository.load(&identifier)))
             .map_err(|error| index_error(&error))?;
         loaded_json(loaded)
-    }
-
-    fn register_index(&self, py: Python<'_>, name: &str, metadata_location: &str) -> PyResult<()> {
-        self.register_index_in(py, Vec::new(), name, metadata_location)
-    }
-
-    fn register_index_in(
-        &self,
-        py: Python<'_>,
-        namespace: Vec<String>,
-        name: &str,
-        metadata_location: &str,
-    ) -> PyResult<()> {
-        let identifier = IndexIdentifier::new(namespace, name).map_err(runtime_error)?;
-        let metadata_location = metadata_location.to_owned();
-        let repository = Arc::clone(&self.repository);
-        let runtime = Arc::clone(&self.runtime);
-        py.detach(move || runtime.block_on(repository.register(&identifier, &metadata_location)))
-            .map_err(|error| index_error(&error))
     }
 
     fn drop_index(&self, name: &str) -> PyResult<()> {
@@ -181,8 +162,7 @@ impl PyNativeIndexRepository {
                     let loaded = repository
                         .select(&namespace, &source, identifier.as_ref(), column.as_deref())
                         .await?;
-                    let snapshot = loaded.metadata.current_snapshot()?;
-                    repository.load_snapshot_ivf_centroids(snapshot).await?;
+                    repository.load_snapshot_ivf_centroids(&loaded).await?;
                     Ok::<_, parqdb_index::Error>(loaded)
                 })
             })

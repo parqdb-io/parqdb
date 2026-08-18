@@ -1,7 +1,7 @@
 [
   {
-    "file": "noncanonical-parquet-uri.metadata.json",
-    "violates": "Parquet relation URIs use a lowercase canonical scheme"
+    "file": "absolute-index-relation.metadata.json",
+    "violates": "index relation locations must be relative to the warehouse"
   },
   {
     "file": "unknown-ivf-role.metadata.json",
@@ -40,8 +40,8 @@
     "violates": "IVF metric must be l2_squared or cosine"
   },
   {
-    "file": "unsupported-relation-profile.metadata.json",
-    "violates": "format version 1 supports only declared relation profiles"
+    "file": "escaping-index-relation.metadata.json",
+    "violates": "index relation locations must not escape the warehouse"
   },
   {
     "file": "missing-required-field.metadata.json",
@@ -68,7 +68,7 @@
     "violates": "JSON maps must contain unique keys"
   },
   {
-    "file": "unknown-relation-field.metadata.json",
-    "violates": "relation references contain exactly profile-defined fields"
+    "file": "unknown-metadata-field.metadata.json",
+    "violates": "metadata documents reject unknown fields"
   }
 ]

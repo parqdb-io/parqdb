@@ -208,6 +208,25 @@ class SessionService:
         if wait_timeout is not None:
             await self._wait_for_index(source, identifier, index, wait_timeout)
 
+    async def register_index(
+        self,
+        identifier: TableIdentifier,
+        index: str,
+        *,
+        metadata_location: str,
+    ) -> None:
+        self._ensure_open()
+        if not isinstance(metadata_location, str) or not metadata_location:
+            raise ValueError("metadata_location must be a non-empty string")
+        source = await self._source_reference(identifier)
+        await asyncio.to_thread(
+            self._host._native.register_index,
+            source,
+            _index_namespace(identifier),
+            index,
+            metadata_location,
+        )
+
     async def refresh_index(
         self,
         identifier: TableIdentifier,

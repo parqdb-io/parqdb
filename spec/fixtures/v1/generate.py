@@ -46,14 +46,12 @@ def write_postings(directory: Path, table: pa.Table) -> None:
 
 
 def ivf_centroids_descriptor(
-    source_uri: str,
     *,
     dimension: int = 2,
     metric: str = "l2_squared",
     nlist: int = 2,
 ) -> dict[str, object]:
     return {
-        "source": {"profile": "parquet", "uri": source_uri},
         "vector-field": "embedding",
         "dimension": dimension,
         "metric": metric,
@@ -63,15 +61,7 @@ def ivf_centroids_descriptor(
 
 
 def fingerprint(descriptor: dict[str, object]) -> str:
-    source = descriptor["source"]
-    assert isinstance(source, dict)
-    canonical_source = {"profile": source["profile"]}
-    fields = (
-        ("uri",) if source["profile"] == "parquet" else ("table-uuid", "snapshot-id")
-    )
-    canonical_source.update((field, source[field]) for field in fields)
     canonical_descriptor = {
-        "source": canonical_source,
         "vector-field": descriptor["vector-field"],
         "dimension": descriptor["dimension"],
         "metric": descriptor["metric"],
@@ -85,12 +75,10 @@ def fingerprint(descriptor: dict[str, object]) -> str:
 
 
 def metadata() -> dict[str, object]:
-    source_uri = "s3://parqdb-fixtures/v1/valid/source/"
-    descriptor = ivf_centroids_descriptor(source_uri)
+    descriptor = ivf_centroids_descriptor()
     return {
         "format-version": 1,
         "index-uuid": INDEX_UUID,
-        "location": f"s3://parqdb-fixtures/v1/metadata/{INDEX_UUID}/",
         "last-updated-ms": 1_750_000_000_000,
         "last-sequence-number": 1,
         "current-snapshot-id": SNAPSHOT_ID,
@@ -100,12 +88,9 @@ def metadata() -> dict[str, object]:
                 "sequence-number": 1,
                 "timestamp-ms": 1_750_000_000_000,
                 "summary": {"operation": "create"},
-                "source": {
-                    "profile": "parquet",
-                    "uri": source_uri,
-                },
                 "vector-field": "embedding",
                 "source-key-fields": ["document_id"],
+                "indexed-rows": 3,
                 "index-family": "ivf",
                 "index-schema-version": 1,
                 "metric": "l2_squared",
@@ -116,19 +101,11 @@ def metadata() -> dict[str, object]:
                     "posting_encoding": "source",
                     "ivf_centroids_fingerprint": fingerprint(descriptor),
                     "ivf_centroids_uuid": IVF_CENTROIDS_UUID,
-                    "ivf_centroids_metadata_location": (
-                        "s3://parqdb-fixtures/v1/valid/ivf-centroids.metadata.json"
-                    ),
+                    "ivf_centroids_metadata_location": ("ivf-centroids.metadata.json"),
                 },
                 "index-relations": {
-                    "ivf_centroids": {
-                        "profile": "parquet",
-                        "uri": "s3://parqdb-fixtures/v1/valid/ivf_centroids/",
-                    },
-                    "ivf_postings": {
-                        "profile": "parquet",
-                        "uri": "s3://parqdb-fixtures/v1/valid/ivf_postings/",
-                    },
+                    "ivf_centroids": "ivf_centroids.parquet",
+                    "ivf_postings": "ivf_postings/",
                 },
             }
         ],
@@ -143,7 +120,6 @@ def metadata() -> dict[str, object]:
 
 
 def ivf_centroids_metadata(
-    directory_uri: str,
     artifact_uuid: str,
     descriptor: dict[str, object],
 ) -> dict[str, object]:
@@ -151,13 +127,9 @@ def ivf_centroids_metadata(
         "format-version": 1,
         "artifact-uuid": artifact_uuid,
         "fingerprint": fingerprint(descriptor),
-        "location": f"{directory_uri}/centroid-artifacts/{artifact_uuid}/",
         "created-at-ms": 1_750_000_000_000,
         "descriptor": descriptor,
-        "centroids": {
-            "profile": "parquet",
-            "uri": f"{directory_uri}/ivf_centroids/",
-        },
+        "centroids": "ivf_centroids.parquet",
     }
 
 
@@ -307,7 +279,6 @@ def write_tables() -> None:
 def composite_metadata() -> dict[str, object]:
     value = metadata()
     value["index-uuid"] = COMPOSITE_INDEX_UUID
-    value["location"] = f"s3://parqdb-fixtures/v1/metadata/{COMPOSITE_INDEX_UUID}/"
     value["current-snapshot-id"] = COMPOSITE_SNAPSHOT_ID
     value["snapshot-log"] = [
         {
@@ -318,26 +289,16 @@ def composite_metadata() -> dict[str, object]:
     value["properties"] = {"fixture": "ivf-parquet-composite"}
     snapshot = value["snapshots"][0]  # type: ignore[index]
     snapshot["snapshot-id"] = COMPOSITE_SNAPSHOT_ID
-    snapshot["source"] = {
-        "profile": "parquet",
-        "uri": "s3://parqdb-fixtures/v1/valid/composite/source/",
-    }
     snapshot["source-key-fields"] = ["tenant_id", "document_id"]
-    descriptor = ivf_centroids_descriptor(snapshot["source"]["uri"])
+    descriptor = ivf_centroids_descriptor()
     snapshot["parameters"]["ivf_centroids_fingerprint"] = fingerprint(descriptor)
     snapshot["parameters"]["ivf_centroids_uuid"] = COMPOSITE_IVF_CENTROIDS_UUID
     snapshot["parameters"]["ivf_centroids_metadata_location"] = (
-        "s3://parqdb-fixtures/v1/valid/composite/ivf-centroids.metadata.json"
+        "ivf-centroids.metadata.json"
     )
     snapshot["index-relations"] = {
-        "ivf_centroids": {
-            "profile": "parquet",
-            "uri": ("s3://parqdb-fixtures/v1/valid/composite/ivf_centroids/"),
-        },
-        "ivf_postings": {
-            "profile": "parquet",
-            "uri": ("s3://parqdb-fixtures/v1/valid/composite/ivf_postings/"),
-        },
+        "ivf_centroids": "ivf_centroids.parquet",
+        "ivf_postings": "ivf_postings/",
     }
     return value
 
@@ -406,20 +367,17 @@ def write_invalid_documents(base: dict[str, object]) -> None:
         cases.append({"file": filename, "violates": violates})
 
     noncanonical = copy.deepcopy(base)
-    noncanonical["snapshots"][0]["source"]["uri"] = (  # type: ignore[index]
-        "S3://parqdb-fixtures/v1/valid/source/"
+    noncanonical["snapshots"][0]["index-relations"]["ivf_postings"] = (  # type: ignore[index]
+        "s3://parqdb-fixtures/v1/valid/ivf_postings/"
     )
     write_case(
-        "noncanonical-parquet-uri.metadata.json",
+        "absolute-index-relation.metadata.json",
         noncanonical,
-        "Parquet relation URIs use a lowercase canonical scheme",
+        "index relation locations must be relative to the warehouse",
     )
 
     unknown_role = copy.deepcopy(base)
-    unknown_role["snapshots"][0]["index-relations"]["unknown"] = {  # type: ignore[index]
-        "profile": "parquet",
-        "uri": "s3://parqdb-fixtures/v1/valid/unknown/",
-    }
+    unknown_role["snapshots"][0]["index-relations"]["unknown"] = "unknown/"  # type: ignore[index]
     write_case(
         "unknown-ivf-role.metadata.json",
         unknown_role,
@@ -493,12 +451,14 @@ def write_invalid_documents(base: dict[str, object]) -> None:
         "IVF metric must be l2_squared or cosine",
     )
 
-    unsupported_profile = copy.deepcopy(base)
-    unsupported_profile["snapshots"][0]["source"]["profile"] = "delta"  # type: ignore[index]
+    escaping_relation = copy.deepcopy(base)
+    escaping_relation["snapshots"][0]["index-relations"]["ivf_postings"] = (  # type: ignore[index]
+        "../ivf_postings/"
+    )
     write_case(
-        "unsupported-relation-profile.metadata.json",
-        unsupported_profile,
-        "format version 1 supports only declared relation profiles",
+        "escaping-index-relation.metadata.json",
+        escaping_relation,
+        "index relation locations must not escape the warehouse",
     )
 
     missing_field = copy.deepcopy(base)
@@ -576,18 +536,18 @@ def write_invalid_documents(base: dict[str, object]) -> None:
     )
 
     unknown_field = valid_json.replace(
-        '"profile": "parquet",',
-        '"profile": "parquet",\n        "unexpected": "value",',
+        '"format-version": 1,',
+        '"format-version": 1,\n  "unexpected": "value",',
         1,
     )
-    (INVALID / "unknown-relation-field.metadata.json").write_text(
+    (INVALID / "unknown-metadata-field.metadata.json").write_text(
         unknown_field + "\n",
         encoding="utf-8",
     )
     cases.append(
         {
-            "file": "unknown-relation-field.metadata.json",
-            "violates": "relation references contain exactly profile-defined fields",
+            "file": "unknown-metadata-field.metadata.json",
+            "violates": "metadata documents reject unknown fields",
         }
     )
     write_json(INVALID / "manifest.json", cases)
@@ -602,13 +562,10 @@ def main() -> None:
     base = metadata()
     write_json(VALID / "metadata.json", base)
     write_json(VALID / "metadata-next.json", next_metadata(base))
-    source_descriptor = ivf_centroids_descriptor(
-        "s3://parqdb-fixtures/v1/valid/source/"
-    )
+    source_descriptor = ivf_centroids_descriptor()
     write_json(
         VALID / "ivf-centroids.metadata.json",
         ivf_centroids_metadata(
-            "s3://parqdb-fixtures/v1/valid",
             IVF_CENTROIDS_UUID,
             source_descriptor,
         ),
@@ -688,13 +645,10 @@ def main() -> None:
         ],
     )
     write_json(COMPOSITE / "metadata.json", composite_metadata())
-    composite_descriptor = ivf_centroids_descriptor(
-        "s3://parqdb-fixtures/v1/valid/composite/source/"
-    )
+    composite_descriptor = ivf_centroids_descriptor()
     write_json(
         COMPOSITE / "ivf-centroids.metadata.json",
         ivf_centroids_metadata(
-            "s3://parqdb-fixtures/v1/valid/composite",
             COMPOSITE_IVF_CENTROIDS_UUID,
             composite_descriptor,
         ),

@@ -150,7 +150,6 @@ def test_catalog_publication_supersedes_an_unpublished_failure(
     published = load_table_index(session, vectors, "published_embedding")
     drop_table_index_entry(session, vectors, "published_embedding")
     register_table_index(
-        session,
         vectors,
         "failed_embedding",
         published.metadata_location,

@@ -129,6 +129,22 @@ impl MetadataStore {
             .location(&format!("metadata/{index_uuid}"), true)?)
     }
 
+    /// Returns the warehouse root for metadata written by this store.
+    #[must_use]
+    pub fn warehouse_root(&self) -> &str {
+        self.warehouse.root()
+    }
+
+    /// Converts a managed absolute URI into a warehouse-relative path.
+    pub fn relative_location(&self, location: &str) -> Result<String> {
+        Ok(self.warehouse.relative_location(location)?)
+    }
+
+    /// Resolves a warehouse-relative path managed by this store.
+    pub fn resolve_location(&self, location: &str, directory: bool) -> Result<String> {
+        Ok(self.warehouse.location(location, directory)?)
+    }
+
     /// Returns the stable root recorded in IVF centroid metadata.
     pub fn ivf_centroids_location(&self, artifact_uuid: Uuid) -> Result<String> {
         self.index_location(artifact_uuid)
@@ -160,12 +176,6 @@ impl MetadataStore {
     /// Validates and writes one immutable IVF centroid metadata document.
     pub async fn write_ivf_centroids(&self, metadata: &IvfCentroidsMetadata) -> Result<String> {
         metadata.validate()?;
-        let expected_location = self.ivf_centroids_location(metadata.artifact_uuid)?;
-        if metadata.location != expected_location {
-            return Err(Error::InvalidMetadata(
-                "IVF centroid metadata location does not match the configured warehouse".into(),
-            ));
-        }
         let destination = self.warehouse.location(
             &format!("metadata/{}/v1.metadata.json", metadata.artifact_uuid),
             false,
@@ -189,7 +199,7 @@ impl MetadataStore {
         if let Some(metadata) = self.cache().get_ivf_centroids(location) {
             return Ok(metadata.as_ref().clone());
         }
-        let bytes = self.warehouse.read(location).await?;
+        let bytes = self.read(location).await?;
         let serialized_bytes = bytes.len();
         let metadata = Arc::new(IvfCentroidsMetadata::from_json_slice(&bytes)?);
         self.cache().insert(
@@ -214,7 +224,7 @@ impl MetadataStore {
     }
 
     pub(crate) async fn load_from_storage(&self, location: &str) -> Result<IndexMetadata> {
-        let bytes = self.warehouse.read(location).await?;
+        let bytes = self.read(location).await?;
         let serialized_bytes = bytes.len();
         let metadata = Arc::new(IndexMetadata::from_json_slice(&bytes)?);
         self.cache().insert(
@@ -225,13 +235,11 @@ impl MetadataStore {
         Ok(metadata.as_ref().clone())
     }
 
+    async fn read(&self, location: &str) -> Result<Bytes> {
+        Ok(self.warehouse.read_external(location).await?)
+    }
+
     async fn write(&self, metadata: &IndexMetadata, filename: &str) -> Result<String> {
-        let expected_location = self.index_location(metadata.index_uuid)?;
-        if metadata.location != expected_location {
-            return Err(Error::InvalidMetadata(
-                "metadata location does not match the configured warehouse".into(),
-            ));
-        }
         let destination = self.warehouse.location(
             &format!("metadata/{}/{filename}", metadata.index_uuid),
             false,

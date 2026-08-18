@@ -217,6 +217,29 @@ def openapi_document() -> dict[str, Any]:
                     "responses": json_ok({"$ref": "#/components/schemas/IndexStatus"}),
                 },
             },
+            "/v1/table/{id}/index/{index_name}/register": {
+                "parameters": [
+                    *table_parameters,
+                    {
+                        "name": "index_name",
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "string"},
+                    },
+                ],
+                "post": {
+                    "operationId": "registerIndex",
+                    "requestBody": {
+                        "required": True,
+                        "content": json_content(
+                            {"$ref": "#/components/schemas/RegisterIndexRequest"}
+                        ),
+                    },
+                    "responses": json_ok(
+                        {"$ref": "#/components/schemas/RegisterIndexResponse"}
+                    ),
+                },
+            },
             "/v1/table/{id}/index/{index_name}/refresh": {
                 "parameters": [
                     *table_parameters,
@@ -420,6 +443,20 @@ def openapi_document() -> dict[str, Any]:
                         },
                     },
                 },
+                "RegisterIndexRequest": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": [
+                        "source",
+                        "index",
+                        "metadata_location",
+                    ],
+                    "properties": {
+                        "source": {"$ref": "#/components/schemas/TableIdentifier"},
+                        "index": {"type": "string", "minLength": 1},
+                        "metadata_location": {"type": "string", "minLength": 1},
+                    },
+                },
                 "RefreshIndexRequest": {
                     "type": "object",
                     "additionalProperties": False,
@@ -527,6 +564,11 @@ def openapi_document() -> dict[str, Any]:
                     "type": "object",
                     "required": ["dropped"],
                     "properties": {"dropped": {"const": True}},
+                },
+                "RegisterIndexResponse": {
+                    "type": "object",
+                    "required": ["registered"],
+                    "properties": {"registered": {"const": True}},
                 },
                 "VectorQuery": {
                     "type": "object",

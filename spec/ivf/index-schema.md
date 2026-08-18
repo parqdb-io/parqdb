@@ -23,7 +23,7 @@ An IVF snapshot must contain exactly these parameters:
 | `posting_encoding` | `source`, `lvq4`, or `lvq8`. |
 | `ivf_centroids_fingerprint` | Deterministic UUID identifying the IVF centroid descriptor. |
 | `ivf_centroids_uuid` | UUID of the referenced IVF centroid artifact. |
-| `ivf_centroids_metadata_location` | Absolute URI of its immutable metadata file. |
+| `ivf_centroids_metadata_location` | Warehouse-relative location of its immutable metadata file. |
 
 `dimension`, `nlist`, and `ntotal` use the canonical base-10 representation of
 a positive integer, without a sign or leading zero. `dimension` and `nlist`
@@ -37,9 +37,10 @@ The snapshot contains exactly these index relation roles:
 | `ivf_centroids` | The centroid relation named by the IVF centroid metadata. |
 | `ivf_postings` | The postings owned by this logical index. |
 
-The snapshot's `ivf_centroids` reference must equal the centroid metadata's
-centroid reference. Its source, vector field, dimension, metric, and `nlist`
-must equal the corresponding descriptor fields.
+The snapshot's `ivf_centroids` location must equal the centroid metadata's
+`centroids` location. Its vector field, dimension, metric, and `nlist` must
+equal the corresponding descriptor fields. `indexed-rows` must equal
+parameter `ntotal`.
 
 ## 3. IVF Centroid Metadata
 
@@ -50,37 +51,23 @@ An IVF centroid metadata document has these fields:
 | `format-version` | `1`. |
 | `artifact-uuid` | Non-nil lowercase UUID of this immutable artifact. |
 | `fingerprint` | Fingerprint of `descriptor`. |
-| `location` | Absolute base URI assigned to the artifact. |
 | `created-at-ms` | Non-negative Unix epoch time in milliseconds. |
 | `descriptor` | Semantic identity defined below. |
-| `centroids` | Relation reference for `ivf_centroids`. |
+| `centroids` | Warehouse-relative Parquet location for `ivf_centroids`. |
 
-The descriptor contains, in order, `source`, `vector-field`, `dimension`,
-`metric`, `nlist`, and `clustering-profile-version`. Version `1` is the only
-clustering profile defined here.
+The descriptor contains, in order, `vector-field`, `dimension`, `metric`,
+`nlist`, and `clustering-profile-version`. Version `1` is the only clustering
+profile defined here.
 
 The fingerprint is UUIDv5 using namespace
 `2fb71e63-a27c-4fc5-9d6d-5070698dc398`. The UUID name is a semantic descriptor
 encoded as compact UTF-8 JSON with fields in the order above and no
-insignificant whitespace. Its `source` contains `profile` followed by `uri` for
-Parquet, or `profile`, `table-uuid`, and `snapshot-id` for Iceberg. Iceberg
-locator fields do not affect the fingerprint. JSON strings leave non-ASCII
-characters unescaped and use the shortest RFC 8259 escape for characters that
-must be escaped.
+insignificant whitespace. JSON strings leave non-ASCII characters unescaped
+and use the shortest RFC 8259 escape for characters that must be escaped.
 
-The fingerprint is a lookup key. Readers must still compare every semantic
-descriptor field before using the artifact. Source references are compared by
-profile-defined exact state, so Iceberg locator changes do not prevent reuse.
-
-For a Parquet source, the files resolved by the descriptor URI must remain
-unchanged for the lifetime of the centroid artifact. Reuse from the same URI is
-valid only while the resolved file set and every file's bytes remain unchanged.
-Appending, deleting, or overwriting a file, including changing a wildcard
-expansion, makes reuse invalid. Changed data must be published at a different
-canonical URI, which produces a different fingerprint. A URI change also
-produces a different source state even when the bytes are identical. ParqDB
-cannot detect an overwrite behind the same URI; such a mutation violates the
-source contract.
+The fingerprint is a lookup key. Readers still compare every descriptor field
+before using the artifact. The catalog scopes centroid reuse by its exact
+source-table binding; the fingerprint itself is source-free.
 
 ## 4. Types
 

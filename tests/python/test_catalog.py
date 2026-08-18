@@ -53,7 +53,7 @@ def test_catalog_lifecycle_survives_session_reopen(tmp_path: Path) -> None:
         "ivf_centroids",
         "ivf_postings",
     }
-    source_reference = entry.metadata["snapshots"][0]["source"]
+    source_reference = {"profile": "parquet", "uri": source.as_uri()}
     assert session._indexes.list_for(source_reference, namespace=namespace) == [
         parqdb.IndexInfo(
             name="vectors_embedding",
@@ -83,11 +83,11 @@ def test_internal_index_catalog_can_be_opened_without_an_execution_session(
     source = tmp_path / "vectors.parquet"
     root = tmp_path / "state"
     catalog_path = root / "catalog.sqlite"
-    metadata_root = (tmp_path / "metadata").as_uri()
+    warehouse = (tmp_path / "warehouse").as_uri()
     write_vectors(source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
     session = parqdb.connect(
         root,
-        warehouse=metadata_root,
+        warehouse=warehouse,
     )
     vectors = register_source(session, source)
     vectors.create_index(
@@ -102,11 +102,11 @@ def test_internal_index_catalog_can_be_opened_without_an_execution_session(
 
     catalog = open_index_catalog(
         f"sqlite://{catalog_path}",
-        metadata_root=metadata_root,
+        warehouse=warehouse,
     )
 
     assert catalog.load("vectors_embedding", namespace=namespace) == expected
-    source_reference = expected.metadata["snapshots"][0]["source"]
+    source_reference = {"profile": "parquet", "uri": source.as_uri()}
     assert (
         catalog.select(source_reference, namespace=namespace).identifier
         == "vectors_embedding"
@@ -138,7 +138,7 @@ def test_catalog_drop_and_register_recover_an_existing_index(
     index_files = [
         path
         for reference in entry.metadata["snapshots"][0]["index-relations"].values()
-        for path in relation_files(reference)
+        for path in relation_files(reference, session.warehouse)
     ]
 
     drop_table_index_entry(session, vectors, "vectors_embedding")
@@ -151,7 +151,6 @@ def test_catalog_drop_and_register_recover_an_existing_index(
         load_table_index(session, vectors, "vectors_embedding")
 
     register_table_index(
-        session,
         vectors,
         "vectors_embedding",
         entry.metadata_location,
@@ -163,11 +162,47 @@ def test_catalog_drop_and_register_recover_an_existing_index(
     assert recovered.current_snapshot_id == entry.metadata["current-snapshot-id"]
     with pytest.raises(parqdb.AlreadyExistsError):
         register_table_index(
-            session,
             vectors,
             "vectors_embedding",
             entry.metadata_location,
         )
+
+
+def test_catalogs_share_indexes_through_one_warehouse(tmp_path: Path) -> None:
+    source = tmp_path / "vectors.parquet"
+    warehouse = (tmp_path / "warehouse").as_uri()
+    write_vectors(source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
+
+    publisher = parqdb.connect(tmp_path / "publisher", warehouse=warehouse)
+    published_vectors = register_source(publisher, source)
+    published_vectors.create_index(
+        "vectors_embedding",
+        column="embedding",
+        key=["id"],
+        config=parqdb.IVF(nlist=1),
+        wait_timeout=timedelta(seconds=30),
+    )
+    published = load_table_index(
+        publisher,
+        published_vectors,
+        "vectors_embedding",
+    )
+
+    consumer = parqdb.connect(tmp_path / "consumer", warehouse=warehouse)
+    consumed_vectors = register_source(consumer, source)
+    register_table_index(
+        consumed_vectors,
+        "vectors_embedding",
+        published.metadata_location,
+    )
+
+    consumed = load_table_index(consumer, consumed_vectors, "vectors_embedding")
+    assert consumed == published
+    assert consumer.to_arrow(consumed_vectors.search([0.0, 0.0]).limit(1))[
+        "id"
+    ].to_pylist() == [0]
+    assert (tmp_path / "publisher" / "catalog.sqlite").is_file()
+    assert (tmp_path / "consumer" / "catalog.sqlite").is_file()
 
 
 def test_index_status_and_wait_are_scoped_to_the_source(tmp_path: Path) -> None:

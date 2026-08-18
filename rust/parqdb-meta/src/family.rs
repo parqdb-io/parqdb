@@ -115,6 +115,9 @@ fn validate_ivf(snapshot: &IndexSnapshot) -> Result<()> {
     parse_positive_parameter(&snapshot.parameters, "dimension", i32::MAX as u64)?;
     let nlist = parse_positive_parameter(&snapshot.parameters, "nlist", i32::MAX as u64)?;
     let ntotal = parse_positive_parameter(&snapshot.parameters, "ntotal", i64::MAX as u64)?;
+    if u64::try_from(snapshot.indexed_rows).ok() != Some(ntotal) {
+        return invalid("indexed-rows must match the IVF ntotal parameter");
+    }
     if snapshot
         .parameters
         .get("posting_encoding")

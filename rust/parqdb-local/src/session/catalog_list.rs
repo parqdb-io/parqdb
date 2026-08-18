@@ -74,16 +74,18 @@ impl IndexCatalog for ParqDBCatalogList {
     fn register(
         &self,
         identifier: &IndexIdentifier,
+        source: &RelationReference,
         metadata_location: &str,
         metadata: &IndexMetadata,
     ) -> parqdb_catalog::Result<()> {
         self.indexes
-            .register(identifier, metadata_location, metadata)
+            .register(identifier, source, metadata_location, metadata)
     }
 
     fn commit(
         &self,
         identifier: &IndexIdentifier,
+        source: &RelationReference,
         base_metadata_location: &str,
         new_metadata_location: &str,
         base_metadata: &IndexMetadata,
@@ -91,6 +93,7 @@ impl IndexCatalog for ParqDBCatalogList {
     ) -> parqdb_catalog::Result<()> {
         self.indexes.commit(
             identifier,
+            source,
             base_metadata_location,
             new_metadata_location,
             base_metadata,
@@ -128,19 +131,21 @@ impl IndexCatalog for ParqDBCatalogList {
 
     fn load_ivf_centroids(
         &self,
+        source: &RelationReference,
         fingerprint: &str,
     ) -> parqdb_catalog::Result<IvfCentroidsCatalogEntry> {
-        self.indexes.load_ivf_centroids(fingerprint)
+        self.indexes.load_ivf_centroids(source, fingerprint)
     }
 
     fn claim_ivf_centroids(
         &self,
+        source: &RelationReference,
         descriptor: &IvfCentroidsDescriptor,
         owner: Uuid,
         lease_duration_ms: i64,
     ) -> parqdb_catalog::Result<IvfCentroidsClaimResult> {
         self.indexes
-            .claim_ivf_centroids(descriptor, owner, lease_duration_ms)
+            .claim_ivf_centroids(source, descriptor, owner, lease_duration_ms)
     }
 
     fn renew_ivf_centroids_claim(
@@ -172,6 +177,13 @@ impl IndexCatalog for ParqDBCatalogList {
 
     fn list_ivf_centroids(&self) -> parqdb_catalog::Result<Vec<IvfCentroidsCatalogEntry>> {
         self.indexes.list_ivf_centroids()
+    }
+
+    fn purge_ivf_centroids(
+        &self,
+        entry: &IvfCentroidsCatalogEntry,
+    ) -> parqdb_catalog::Result<bool> {
+        self.indexes.purge_ivf_centroids(entry)
     }
 }
 

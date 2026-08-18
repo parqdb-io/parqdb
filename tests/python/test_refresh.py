@@ -25,7 +25,7 @@ def test_refresh_reuses_ivf_centroids_for_the_same_immutable_source(
     snapshots = after.metadata["snapshots"]
     assert after.metadata_location != before.metadata_location
     assert after.metadata["index-uuid"] == before.metadata["index-uuid"]
-    assert after.metadata["location"] == before.metadata["location"]
+    assert "location" not in after.metadata
     assert len(snapshots) == 2
     assert snapshots[0] == before.metadata["snapshots"][0]
     assert (

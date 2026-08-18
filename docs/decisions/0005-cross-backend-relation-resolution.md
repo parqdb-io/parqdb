@@ -1,5 +1,9 @@
 # Cross-Backend Relation Resolution
 
+> The index-metadata source references described here are superseded by
+> [Portable Index Registration](../rfcs/20260817-portable-index-registration.md).
+> A catalog now binds source-free index metadata to a source at registration.
+
 - Status: Accepted
 - Date: 2026-07-30
 

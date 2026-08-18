@@ -14,7 +14,9 @@ pub use error::{Error, Result};
 pub use publication::{
     InitialIndex, RefreshedIndex, new_snapshot_id, publish_initial, publish_refresh,
 };
-pub use repository::{IndexRepository, LoadedIndex, LoadedIvfCentroids};
+pub use repository::{
+    IndexRepository, LoadedIndex, LoadedIvfCentroids, resolve_warehouse_location,
+};
 pub use store::{
     DEFAULT_METADATA_CACHE_BYTES, DEFAULT_METADATA_CACHE_ENTRIES, MetadataCacheConfig,
     MetadataStore,

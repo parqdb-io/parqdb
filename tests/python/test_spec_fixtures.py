@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 import shutil
-import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 import parqdb
 import pyarrow.parquet as pq
@@ -16,7 +16,6 @@ VALID = FIXTURES / "valid"
 COMPOSITE = VALID / "composite"
 INVALID = FIXTURES / "invalid"
 INVALID_CASES = json.loads((INVALID / "manifest.json").read_text(encoding="utf-8"))
-FINGERPRINT_NAMESPACE = uuid.UUID("2fb71e63-a27c-4fc5-9d6d-5070698dc398")
 
 
 def squared_l2(left: list[float], right: list[float]) -> float:
@@ -127,101 +126,68 @@ def reference_lvq_search(
     return sorted(candidates, key=lambda row: row["_distance"])[: case["k"]]
 
 
-def register_fixture(session: parqdb.Session, fixture: Path, name: str) -> None:
-    destination = session.root / fixture.name
-    shutil.copyfile(fixture, destination)
-    session._indexes.register(name, destination.as_uri())
-
-
-def ivf_centroids_fingerprint(descriptor: dict[str, object]) -> str:
-    source = descriptor["source"]
-    assert isinstance(source, dict)
-    if source["profile"] == "parquet":
-        canonical_source = {"profile": "parquet", "uri": source["uri"]}
-    else:
-        canonical_source = {
-            field: source[field]
-            for field in (
-                "profile",
-                "table-uuid",
-                "snapshot-id",
-            )
-        }
-    canonical_descriptor = {
-        "source": canonical_source,
-        "vector-field": descriptor["vector-field"],
-        "dimension": descriptor["dimension"],
-        "metric": descriptor["metric"],
-        "nlist": descriptor["nlist"],
-        "clustering-profile-version": descriptor["clustering-profile-version"],
-    }
-    canonical = json.dumps(
-        canonical_descriptor, ensure_ascii=False, separators=(",", ":")
-    )
-    return str(uuid.uuid5(FINGERPRINT_NAMESPACE, canonical))
-
-
-def localize_lvq_fixture(warehouse: Path, directory: Path) -> tuple[Path, Path]:
-    local = warehouse / "fixture"
+def localize_fixture(
+    warehouse: Path,
+    directory: Path,
+    name: str,
+) -> tuple[Path, Path, Path]:
+    local = warehouse / f"{name}-package"
     shutil.copytree(directory, local)
-    source = (local / "source.parquet").resolve()
-    centroids = (local / "ivf_centroids.parquet").resolve()
-    postings = (local / "ivf_postings").resolve()
-    metadata_root = (warehouse / "metadata").resolve()
-    metadata_root.mkdir()
-
-    metadata = json.loads((local / "metadata.json").read_text(encoding="utf-8"))
-    metadata["location"] = f"{metadata_root.as_uri()}/"
-    snapshot = metadata["snapshots"][0]
-    snapshot["source"] = {"profile": "parquet", "uri": source.as_uri()}
-    centroid_metadata_path = (local / "ivf-centroids.metadata.json").resolve()
-    centroid_metadata = json.loads(centroid_metadata_path.read_text(encoding="utf-8"))
-    centroid_metadata["location"] = (
-        f"{(local / 'centroid-artifacts').resolve().as_uri()}/"
-    )
-    centroid_metadata["descriptor"]["source"] = snapshot["source"]
-    centroid_metadata["centroids"] = {
-        "profile": "parquet",
-        "uri": centroids.as_uri(),
-    }
-    centroid_metadata["fingerprint"] = ivf_centroids_fingerprint(
-        centroid_metadata["descriptor"]
-    )
-    centroid_metadata_path.write_text(
-        json.dumps(centroid_metadata, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    snapshot["parameters"]["ivf_centroids_fingerprint"] = centroid_metadata[
-        "fingerprint"
-    ]
-    snapshot["parameters"]["ivf_centroids_metadata_location"] = (
-        centroid_metadata_path.as_uri()
-    )
-    snapshot["index-relations"] = {
-        "ivf_centroids": {
-            "profile": "parquet",
-            "uri": centroids.as_uri(),
-        },
-        "ivf_postings": {
-            "profile": "parquet",
-            "uri": f"{postings.as_uri()}/",
-        },
-    }
-    metadata_path = metadata_root / "metadata.json"
+    prefix = f"{local.name}/"
+    metadata_path = local / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    for snapshot in metadata["snapshots"]:
+        snapshot["index-relations"] = {
+            role: f"{prefix}{location}"
+            for role, location in snapshot["index-relations"].items()
+        }
+        parameter = "ivf_centroids_metadata_location"
+        snapshot["parameters"][parameter] = (
+            f"{prefix}{snapshot['parameters'][parameter]}"
+        )
     metadata_path.write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    return source, metadata_path
+    centroids_metadata_path = local / "ivf-centroids.metadata.json"
+    centroids_metadata = json.loads(centroids_metadata_path.read_text(encoding="utf-8"))
+    centroids_metadata["centroids"] = f"{prefix}{centroids_metadata['centroids']}"
+    centroids_metadata_path.write_text(
+        json.dumps(centroids_metadata, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return local / "source.parquet", metadata_path, local
+
+
+def local_warehouse(session: parqdb.Session) -> Path:
+    parsed = urlparse(session.warehouse)
+    assert parsed.scheme == "file"
+    return Path(unquote(parsed.path))
+
+
+def register_fixture(
+    session: parqdb.Session,
+    directory: Path,
+    name: str,
+) -> parqdb.SourceTable:
+    source, metadata, _package = localize_fixture(
+        local_warehouse(session), directory, name
+    )
+    table = register_source(session, source, f"{name}_source")
+    table.register_index(
+        name,
+        metadata_location=metadata.as_uri(),
+    )
+    return table
 
 
 def test_valid_metadata_fixture_is_accepted_by_the_native_reader(
     tmp_path: Path,
 ) -> None:
     session = parqdb.connect(tmp_path / "parqdb-data")
-    register_fixture(session, VALID / "metadata.json", "fixture")
+    table = register_fixture(session, VALID, "fixture")
 
-    entry = session._indexes.load("fixture")
+    entry = session._indexes.load("fixture", namespace=table.identifier.index_namespace)
     assert entry.metadata["format-version"] == 1
     assert entry.metadata["current-snapshot-id"] == 701
 
@@ -230,9 +196,11 @@ def test_composite_metadata_fixture_is_accepted_by_the_native_reader(
     tmp_path: Path,
 ) -> None:
     session = parqdb.connect(tmp_path / "parqdb-data")
-    register_fixture(session, COMPOSITE / "metadata.json", "composite")
+    table = register_fixture(session, COMPOSITE, "composite")
 
-    entry = session._indexes.load("composite")
+    entry = session._indexes.load(
+        "composite", namespace=table.identifier.index_namespace
+    )
     snapshot = entry.metadata["snapshots"][0]
     assert snapshot["source-key-fields"] == ("tenant_id", "document_id")
     assert snapshot["parameters"]["posting_encoding"] == "source"
@@ -244,9 +212,9 @@ def test_lvq_metadata_fixtures_are_accepted_by_the_native_reader(
     encoding: str,
 ) -> None:
     session = parqdb.connect(tmp_path / "parqdb-data")
-    register_fixture(session, VALID / encoding / "metadata.json", encoding)
+    table = register_fixture(session, VALID / encoding, encoding)
 
-    entry = session._indexes.load(encoding)
+    entry = session._indexes.load(encoding, namespace=table.identifier.index_namespace)
     snapshot = entry.metadata["snapshots"][0]
     assert snapshot["index-schema-version"] == 1
     assert snapshot["parameters"]["posting_encoding"] == encoding
@@ -259,12 +227,13 @@ def test_lvq_pyarrow_fixtures_are_queryable_by_the_native_reader(
 ) -> None:
     directory = VALID / encoding
     session = parqdb.connect(tmp_path / "parqdb-data")
-    source, metadata = localize_lvq_fixture(session.root, directory)
+    source, metadata, _package = localize_fixture(
+        local_warehouse(session), directory, encoding
+    )
     documents = register_source(session, source, "documents")
-    session._indexes.register(
+    documents.register_index(
         encoding,
-        metadata.as_uri(),
-        namespace=documents.identifier.index_namespace,
+        metadata_location=metadata.as_uri(),
     )
     case = json.loads((directory / "queries.json").read_text(encoding="utf-8"))[0]
 
@@ -293,9 +262,17 @@ def test_invalid_metadata_fixtures_are_rejected(
     case: dict[str, str],
 ) -> None:
     session = parqdb.connect(tmp_path / "parqdb-data")
+    source, metadata, _package = localize_fixture(
+        local_warehouse(session), VALID, "invalid"
+    )
+    shutil.copyfile(INVALID / case["file"], metadata)
+    table = register_source(session, source, "invalid_source")
 
     with pytest.raises(parqdb.InvalidMetadataError):
-        register_fixture(session, INVALID / case["file"], "invalid")
+        table.register_index(
+            "invalid",
+            metadata_location=metadata.as_uri(),
+        )
 
 
 def test_invalid_fixture_manifest_covers_exactly_the_invalid_documents() -> None:

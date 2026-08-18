@@ -41,6 +41,25 @@ fn derives_locations_for_each_supported_scheme() {
     }
 }
 
+#[test]
+fn warehouse_relative_locations_preserve_directory_semantics() {
+    let warehouse =
+        Warehouse::open("file:///tmp/parqdb/", StorageRegistry::new(HashMap::new())).unwrap();
+
+    assert_eq!(
+        warehouse
+            .relative_location("file:///tmp/parqdb/indexes/a/")
+            .unwrap(),
+        "indexes/a/"
+    );
+    assert_eq!(
+        warehouse
+            .relative_location("file:///tmp/parqdb/metadata/a.json")
+            .unwrap(),
+        "metadata/a.json"
+    );
+}
+
 #[tokio::test]
 async fn writes_reads_lists_and_deletes_local_objects() {
     let temporary = TempDir::new().unwrap();

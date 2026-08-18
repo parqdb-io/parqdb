@@ -10,12 +10,12 @@ from .._native import _NativeIndexRepository
 def open_index_repository(
     index_catalog: str,
     *,
-    metadata_root: str | None = None,
+    warehouse: str | None = None,
     storage_options: Mapping[str, str] | None = None,
 ) -> _NativeIndexRepository:
     """Open the query-engine-independent index repository used by a session."""
     catalog_path = sqlite_catalog_path(index_catalog)
-    resolved_metadata_root = metadata_root or default_metadata_root(catalog_path)
+    resolved_warehouse = warehouse or default_warehouse(catalog_path)
     options = dict(storage_options or {})
     if any(
         not isinstance(key, str) or not isinstance(value, str)
@@ -24,7 +24,7 @@ def open_index_repository(
         raise TypeError("storage_options keys and values must be strings")
     return _NativeIndexRepository(
         catalog_path,
-        resolved_metadata_root,
+        resolved_warehouse,
         options or None,
     )
 
@@ -48,6 +48,6 @@ def sqlite_catalog_path(catalog: str) -> Path:
     return path
 
 
-def default_metadata_root(catalog_path: Path) -> str:
+def default_warehouse(catalog_path: Path) -> str:
     root = catalog_path.parent / f"{catalog_path.stem}-metadata"
     return root.resolve().as_uri()

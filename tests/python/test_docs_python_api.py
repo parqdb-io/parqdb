@@ -111,7 +111,6 @@ def test_python_api_catalog_recovery_example(tmp_path: Path) -> None:
     entry = load_table_index(session, documents, "documents_embedding")
     drop_table_index_entry(session, documents, "documents_embedding")
     register_table_index(
-        session,
         documents,
         "recovered_index",
         entry.metadata_location,

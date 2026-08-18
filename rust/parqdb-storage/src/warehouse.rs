@@ -41,6 +41,7 @@ impl Warehouse {
     /// Returns an absolute URI below the warehouse root.
     pub fn location(&self, relative: &str, directory: bool) -> Result<String> {
         validate_relative(relative)?;
+        let relative = relative.strip_suffix('/').unwrap_or(relative);
         let mut location = self
             .root
             .join(relative)
@@ -65,6 +66,16 @@ impl Warehouse {
     /// Reads an object completely.
     pub async fn read(&self, location: &str) -> Result<Bytes> {
         let resolved = self.managed(location)?;
+        Ok(resolved.store().get(resolved.path()).await?.bytes().await?)
+    }
+
+    /// Reads an absolute location through this warehouse's storage registry.
+    ///
+    /// Unlike [`Self::read`], the location need not be below the managed
+    /// warehouse root. This is used to inspect immutable packages before they
+    /// are registered in a catalog.
+    pub async fn read_external(&self, location: &str) -> Result<Bytes> {
+        let resolved = self.registry.resolve(location)?;
         Ok(resolved.store().get(resolved.path()).await?.bytes().await?)
     }
 
@@ -108,9 +119,13 @@ impl Warehouse {
     pub fn relative_location(&self, location: &str) -> Result<String> {
         let resolved = self.managed(location)?;
         let root = self.registry.resolve(self.root.as_str())?;
-        strip_object_prefix(resolved.path(), root.path()).ok_or_else(|| {
+        let mut relative = strip_object_prefix(resolved.path(), root.path()).ok_or_else(|| {
             Error::InvalidLocation(format!("location is outside warehouse: {location}"))
-        })
+        })?;
+        if resolved.uri().path().ends_with('/') && !relative.ends_with('/') {
+            relative.push('/');
+        }
+        Ok(relative)
     }
 
     /// Resolves a warehouse-owned location.
@@ -182,9 +197,11 @@ impl Warehouse {
 }
 
 fn validate_relative(relative: &str) -> Result<()> {
+    let path = relative.strip_suffix('/').unwrap_or(relative);
     if relative.is_empty()
         || relative.starts_with('/')
-        || relative
+        || path.is_empty()
+        || path
             .split('/')
             .any(|part| part.is_empty() || part == "." || part == "..")
     {
