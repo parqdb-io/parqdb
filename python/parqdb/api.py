@@ -1,4 +1,4 @@
-"""Compatibility imports for ParqDB's public Python API."""
+"""Public Python API exports."""
 
 from ._native import (
     BuildAlreadyRunningError,
@@ -23,9 +23,8 @@ from .facade import (
 from .identifier import TableIdentifier
 from .maintenance import Maintenance, MaintenanceObject
 from .query import VectorQuery
-from .runtime.catalog import IndexInfo
 from .session import ParquetPageCacheStats
-from .table import Table
+from .table import IndexInfo, Table
 
 __all__ = [
     "IVF",

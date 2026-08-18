@@ -89,7 +89,7 @@ def test_python_api_build_search_and_compose_example(tmp_path: Path) -> None:
     )
     assert sql_result.num_rows == 2
 
-    exact = session.to_arrow(
+    exact = session.collect(
         documents.search([0.0, 0.0], column="embedding").bypass_vector_index().limit(1)
     )
     assert exact["id"].to_pylist() == [0]
@@ -116,6 +116,4 @@ def test_python_api_catalog_recovery_example(tmp_path: Path) -> None:
         entry.metadata_location,
     )
 
-    assert session._indexes.list(namespace=documents.identifier.index_namespace) == [
-        "recovered_index"
-    ]
+    assert [index.name for index in documents.list_indexes()] == ["recovered_index"]

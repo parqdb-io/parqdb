@@ -20,7 +20,7 @@ def test_exact_search_does_not_require_an_index(tmp_path: Path) -> None:
     session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
 
-    result = session.to_arrow(
+    result = session.collect(
         vectors.search([9.0, 0.0]).bypass_vector_index().limit(2).select(["id"])
     )
 
@@ -31,7 +31,7 @@ def test_exact_search_does_not_require_an_index(tmp_path: Path) -> None:
         pa.float32(),
         nullable=False,
     )
-    assert session._indexes.list() == []
+    assert vectors.list_indexes() == []
 
 
 def test_exact_search_applies_prefilter_before_top_k(tmp_path: Path) -> None:
@@ -44,7 +44,7 @@ def test_exact_search_applies_prefilter_before_top_k(tmp_path: Path) -> None:
     session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
 
-    result = session.to_arrow(
+    result = session.collect(
         vectors.search([9.0, 0.0])
         .bypass_vector_index()
         .where("id < 2")
@@ -87,7 +87,7 @@ def test_exact_search_rejects_index_only_options(
     vectors = register_source(session, source)
 
     with pytest.raises(parqdb.InvalidArgumentError, match=message):
-        session.to_arrow(query(vectors))
+        session.collect(query(vectors))
 
 
 def test_exact_search_requires_column_for_multiple_vector_columns(
@@ -116,9 +116,9 @@ def test_exact_search_requires_column_for_multiple_vector_columns(
     vectors = register_source(session, source)
 
     with pytest.raises(parqdb.InvalidArgumentError, match="multiple vector columns"):
-        session.to_arrow(vectors.search([0.0, 0.0]).bypass_vector_index())
+        session.collect(vectors.search([0.0, 0.0]).bypass_vector_index())
 
-    result = session.to_arrow(
+    result = session.collect(
         vectors.search([1.0, 0.0], column="embedding_b")
         .bypass_vector_index()
         .select(["id"])

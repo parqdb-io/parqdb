@@ -278,7 +278,7 @@ def test_invalid_sources_fail_without_publication(
     assert status.state == "failed"
     assert status.current_snapshot_id is None
     assert status.error is not None
-    assert session._indexes.list(namespace=vectors.identifier.index_namespace) == []
+    assert vectors.list_indexes() == []
 
 
 def test_nullable_source_schema_accepts_non_null_values(tmp_path: Path) -> None:
@@ -304,7 +304,7 @@ def test_nullable_source_schema_accepts_non_null_values(tmp_path: Path) -> None:
 
     build_index(vectors, nlist=1)
 
-    hits = session.to_arrow(vectors.search([0.0, 0.0]).nprobes(1).limit(2))
+    hits = session.collect(vectors.search([0.0, 0.0]).nprobes(1).limit(2))
     assert hits["id"].to_pylist() == [0, 1]
     snapshot = load_table_index(session, vectors, "vectors_embedding").metadata[
         "snapshots"
@@ -400,7 +400,7 @@ def test_supported_source_key_types_round_trip_through_postings(
     vectors = register_source(session, source)
     build_index(vectors, key=keys)
 
-    hits = session.to_arrow(vectors.search([0.5, 0.0]).nprobes(2).limit(2))
+    hits = session.collect(vectors.search([0.5, 0.0]).nprobes(2).limit(2))
     assert set(hits["flag"].to_pylist()) == {False, True}
     assert hits["_distance"].to_pylist() == [0.25, 0.25]
     snapshot = load_table_index(session, vectors, "vectors_embedding").metadata[

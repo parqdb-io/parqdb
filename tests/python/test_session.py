@@ -7,7 +7,13 @@ from typing import Any, cast
 import parqdb
 import pyarrow
 import pytest
-from _support import build_index, load_table_index, register_source, write_vectors
+from _support import (
+    build_index,
+    embedded_native,
+    load_table_index,
+    register_source,
+    write_vectors,
+)
 
 
 def test_connect_rejects_invalid_capabilities(tmp_path: Path) -> None:
@@ -25,6 +31,18 @@ def test_session_has_explicit_idempotent_lifecycle(tmp_path: Path) -> None:
     assert hasattr(session, "close")
     assert hasattr(session, "__enter__")
     assert not hasattr(session, "indexes")
+    assert not hasattr(session, "_indexes")
+    assert not hasattr(session, "_repository")
+    assert not hasattr(session, "_native")
+    assert not hasattr(session, "_embedded_host")
+    assert not hasattr(session, "_list_table_indexes")
+    assert not hasattr(session, "_drop_table_index")
+    assert not hasattr(session, "_run")
+    assert not hasattr(session, "to_arrow")
+    assert not hasattr(parqdb.AsyncSession, "_create_index")
+    assert not hasattr(parqdb.AsyncSession, "_refresh_index")
+    assert not hasattr(parqdb.AsyncSession, "_open_stream")
+    assert not hasattr(parqdb.AsyncSession, "to_arrow")
     assert not hasattr(parqdb, "open_index_catalog")
     assert not hasattr(session, "context")
     session.close()
@@ -35,9 +53,10 @@ def test_session_has_explicit_idempotent_lifecycle(tmp_path: Path) -> None:
 
 def test_native_sql_stream_is_an_async_arrow_iterator(tmp_path: Path) -> None:
     session = parqdb.connect(tmp_path / "async-stream")
+    native = embedded_native(session)
 
     async def consume() -> list[int]:
-        stream = await session._native.stream_sql(
+        stream = await native.stream_sql(
             "SELECT value FROM UNNEST([1, 2, 3]) AS values(value)"
         )
         assert stream.schema() == pyarrow.schema([("value", pyarrow.int64())])
@@ -53,21 +72,22 @@ def test_native_sql_stream_is_an_async_arrow_iterator(tmp_path: Path) -> None:
 
 def test_cancelling_queued_native_stream_releases_admission(tmp_path: Path) -> None:
     session = parqdb.connect(tmp_path / "cancelled-stream")
+    native = embedded_native(session)
 
     async def wait_for_stats(expected: tuple[int, int]) -> None:
         for _ in range(1_000):
-            if session._native.query_admission_stats() == expected:
+            if native.query_admission_stats() == expected:
                 return
             await asyncio.sleep(0.001)
         raise AssertionError(
             f"query admission did not reach {expected}: "
-            f"{session._native.query_admission_stats()}"
+            f"{native.query_admission_stats()}"
         )
 
     async def cancel_queued() -> None:
-        first = await session._native.stream_sql("SELECT 1 AS value")
+        first = await native.stream_sql("SELECT 1 AS value")
         await wait_for_stats((1, 0))
-        waiting = asyncio.ensure_future(session._native.stream_sql("SELECT 2 AS value"))
+        waiting = asyncio.ensure_future(native.stream_sql("SELECT 2 AS value"))
         await wait_for_stats((1, 1))
 
         waiting.cancel()
@@ -85,16 +105,15 @@ def test_sync_stream_close_releases_runtime_admission(tmp_path: Path) -> None:
     session = parqdb.connect(tmp_path / "sync-stream")
 
     reader = session.stream("SELECT * FROM range(1000000)")
+    native = embedded_native(session)
 
     assert isinstance(reader, pyarrow.RecordBatchReader)
-    assert not session._async._streams
-    assert session._native.query_admission_stats() == (1, 0)
+    assert native.query_admission_stats() == (1, 0)
     reader.close()
-    assert session._native.query_admission_stats() == (0, 0)
+    assert native.query_admission_stats() == (0, 0)
 
     reader = session.stream("SELECT * FROM range(1000000)")
-    assert session._native.query_admission_stats() == (1, 0)
-    native = session._native
+    assert native.query_admission_stats() == (1, 0)
     session.close()
     assert native.query_admission_stats() == (0, 0)
 
@@ -117,7 +136,7 @@ def test_async_facade_matches_portable_embedded_operations(tmp_path: Path) -> No
             stream = await session.stream("SELECT * FROM vectors WHERE false")
             assert stream.schema == vectors.schema
             assert [batch async for batch in stream] == []
-            native = cast(Any, session)._transport._service.host._native
+            native = embedded_native(session)
             assert native.query_admission_stats() == (0, 0)
             await session.stream("SELECT * FROM range(1000000)")
             assert native.query_admission_stats() == (1, 0)
@@ -150,19 +169,20 @@ def test_query_runtime_settings_apply_at_session_creation(tmp_path: Path) -> Non
         .with_information_schema()
     )
     session = parqdb.connect(tmp_path / "query-runtime", config=config)
+    native = embedded_native(session)
     assert session.sql("SHOW datafusion.execution.target_partitions").to_pydict()[
         "value"
     ] == ["2"]
 
     async def occupy_both_slots() -> None:
-        first = await session._native.stream_sql("SELECT 1 AS value")
-        second = await session._native.stream_sql("SELECT 2 AS value")
-        assert session._native.query_admission_stats() == (2, 0)
+        first = await native.stream_sql("SELECT 1 AS value")
+        second = await native.stream_sql("SELECT 2 AS value")
+        assert native.query_admission_stats() == (2, 0)
         with pytest.raises(parqdb._native.QueryQueueFullError):
-            await session._native.stream_sql("SELECT 3 AS value")
+            await native.stream_sql("SELECT 3 AS value")
         await first.aclose()
         await second.aclose()
-        assert session._native.query_admission_stats() == (0, 0)
+        assert native.query_admission_stats() == (0, 0)
 
     asyncio.run(occupy_both_slots())
 
@@ -299,7 +319,7 @@ def test_deregister_releases_the_native_source_binding(tmp_path: Path) -> None:
         "id": [2],
         "payload": ["row-2"],
     }
-    assert session.to_arrow(query)["id"].to_pylist() == [2]
+    assert session.collect(query)["id"].to_pylist() == [2]
 
 
 def test_registered_parquet_table_has_parqdb_index_capabilities(tmp_path: Path) -> None:

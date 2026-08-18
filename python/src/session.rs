@@ -17,7 +17,6 @@ use pyo3::prelude::*;
 use tokio::runtime::Runtime;
 
 use crate::errors::{InvalidArgumentError, core_error, runtime_error};
-use crate::index::PyNativeIndexRepository;
 use crate::stream::{AbortOnDrop, PyNativeQueryStream};
 
 type PySourceField = (String, String, bool);
@@ -194,13 +193,6 @@ impl PyNativeSession {
         self.session.warehouse_root().to_owned()
     }
 
-    fn index_repository(&self) -> PyNativeIndexRepository {
-        PyNativeIndexRepository::from_repository(
-            self.session.index_repository(),
-            Arc::clone(&self.runtime),
-        )
-    }
-
     fn context(&self) -> PySessionContext {
         PySessionContext::from(self.session.context())
     }
@@ -320,25 +312,6 @@ impl PyNativeSession {
             .map_err(|error| core_error(&error))
     }
 
-    fn index_exists(&self, name: &str) -> PyResult<bool> {
-        self.session
-            .index_exists(name)
-            .map_err(|error| core_error(&error))
-    }
-
-    fn list_indexes(&self) -> PyResult<Vec<String>> {
-        self.session
-            .list_indexes()
-            .map_err(|error| core_error(&error))
-    }
-
-    fn load_index_entry(&self, py: Python<'_>, name: String) -> PyResult<(String, String)> {
-        let session = Arc::clone(&self.session);
-        let runtime = Arc::clone(&self.runtime);
-        py.detach(move || runtime.block_on(session.load_index_entry(&name)))
-            .map_err(|error| core_error(&error))
-    }
-
     fn register_index(
         &self,
         py: Python<'_>,
@@ -383,35 +356,6 @@ impl PyNativeSession {
         .map_err(|error| core_error(&error))
     }
 
-    #[pyo3(signature = (source, index_namespace, index=None, column=None))]
-    fn select_index(
-        &self,
-        py: Python<'_>,
-        source: &str,
-        index_namespace: Vec<String>,
-        index: Option<String>,
-        column: Option<String>,
-    ) -> PyResult<(String, String, String)> {
-        let source = parse_relation_reference(source)?;
-        let session = Arc::clone(&self.session);
-        let runtime = Arc::clone(&self.runtime);
-        let loaded = py
-            .detach(move || {
-                runtime.block_on(session.select_index_in(
-                    &index_namespace,
-                    &source,
-                    index.as_deref(),
-                    column.as_deref(),
-                ))
-            })
-            .map_err(|error| core_error(&error))?;
-        Ok((
-            loaded.entry.identifier.name().to_owned(),
-            loaded.entry.metadata_location,
-            serde_json::to_string_pretty(&loaded.metadata).map_err(runtime_error)?,
-        ))
-    }
-
     fn register_iceberg_relation(
         &self,
         py: Python<'_>,
@@ -431,12 +375,6 @@ impl PyNativeSession {
         })
         .map(PyDataFrame::new)
         .map_err(|error| core_error(&error))
-    }
-
-    fn drop_index(&self, name: &str) -> PyResult<()> {
-        self.session
-            .drop_index(name)
-            .map_err(|error| core_error(&error))
     }
 
     fn parquet_page_cache_stats(&self) -> PyParquetPageCacheStats {

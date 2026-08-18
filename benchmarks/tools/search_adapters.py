@@ -47,7 +47,7 @@ def parqdb_search(
             .limit(k)
             .select([id_column])
         )
-        result = session.to_arrow(request)
+        result = session.collect(request)
         return result[id_column].to_numpy(zero_copy_only=False)
 
     return search

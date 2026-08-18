@@ -357,7 +357,7 @@ def test_full_probe_omits_the_cluster_predicate(
 
     assert "cid IN" not in plan
     assert "cid =" not in plan
-    assert session.to_arrow(query)["id"].to_pylist() == [0, 1]
+    assert session.collect(query)["id"].to_pylist() == [0, 1]
 
 
 def test_large_nprobe_prunes_postings_files_during_planning(tmp_path: Path) -> None:
@@ -381,7 +381,7 @@ def test_large_nprobe_prunes_postings_files_during_planning(tmp_path: Path) -> N
     assert 'parqdb_selected_clusters("cid") AS (' in sql
     assert "VALUES (" in sql
     assert session.sql(sql).to_pydict()["id"] == [0, 1, 2]
-    assert session.to_arrow(query)["id"].to_pylist() == [0, 1, 2]
+    assert session.collect(query)["id"].to_pylist() == [0, 1, 2]
 
 
 def test_explain_plan_validates_verbose_argument(tmp_path: Path) -> None:

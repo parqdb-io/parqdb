@@ -90,13 +90,13 @@ def test_s3_build_search_refresh_and_gc(
         wait_timeout=WAIT,
     )
 
-    first = session.to_arrow(documents.search([0.0, 0.0]).nprobes(2).limit(4))
+    first = session.collect(documents.search([0.0, 0.0]).nprobes(2).limit(4))
     assert first["id"].to_pylist() == [0, 1, 2, 3]
     assert first["_distance"].to_pylist() == [0.0, 1.0, 4.0, 9.0]
 
     _write_source(filesystem, source_path, 5)
     documents.refresh_index("documents_embedding", wait_timeout=WAIT)
-    refreshed = session.to_arrow(documents.search([4.0, 0.0]).nprobes(2).limit(1))
+    refreshed = session.collect(documents.search([4.0, 0.0]).nprobes(2).limit(1))
     assert refreshed["id"].to_pylist() == [4]
     assert refreshed["_distance"].to_pylist() == [0.0]
 

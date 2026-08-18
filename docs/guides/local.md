@@ -124,7 +124,7 @@ query = (
     .limit(1_000)
     .select(["document_id", "category"])
 )
-hits = session.to_arrow(query)
+hits = session.collect(query)
 ```
 
 Compile the vector query as a SQL subquery when relational work follows:

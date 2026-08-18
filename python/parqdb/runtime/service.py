@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from functools import partial
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Literal, Protocol, cast
 
 import pyarrow
@@ -24,7 +25,7 @@ from ..session import (
     _index_namespace,
     _wrap_datafusion_context,
 )
-from .catalog import IndexInfo
+from ..table import IndexInfo
 
 
 class AsyncBatchStream(Protocol):
@@ -291,11 +292,33 @@ class SessionService:
 
     async def list_indexes(self, identifier: TableIdentifier) -> list[IndexInfo]:
         self._ensure_open()
-        return await asyncio.to_thread(self._host._list_table_indexes, identifier)
+        source = await self._source_reference(identifier)
+        values = await asyncio.to_thread(
+            self._host._native.list_source_indexes,
+            source,
+            _index_namespace(identifier),
+        )
+        return [
+            IndexInfo(
+                name=name,
+                column=column,
+                family=family,
+                metric=metric,
+                parameters=MappingProxyType(dict(parameters)),
+                current_snapshot_id=current_snapshot_id,
+            )
+            for name, column, family, metric, parameters, current_snapshot_id in values
+        ]
 
     async def drop_index(self, identifier: TableIdentifier, index: str) -> None:
         self._ensure_open()
-        await asyncio.to_thread(self._host._drop_table_index, identifier, index)
+        source = await self._source_reference(identifier)
+        await asyncio.to_thread(
+            self._host._native.drop_source_index,
+            source,
+            _index_namespace(identifier),
+            index,
+        )
 
     def datafusion_context(self) -> Any:
         self._ensure_open()

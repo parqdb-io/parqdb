@@ -9,7 +9,7 @@ from urllib.parse import unquote, urlparse
 import parqdb
 import pyarrow.parquet as pq
 import pytest
-from _support import register_source
+from _support import load_table_index, register_source
 
 FIXTURES = Path(__file__).parents[2] / "spec" / "fixtures" / "v1"
 VALID = FIXTURES / "valid"
@@ -187,7 +187,7 @@ def test_valid_metadata_fixture_is_accepted_by_the_native_reader(
     session = parqdb.connect(tmp_path / "parqdb-data")
     table = register_fixture(session, VALID, "fixture")
 
-    entry = session._indexes.load("fixture", namespace=table.identifier.index_namespace)
+    entry = load_table_index(session, table, "fixture")
     assert entry.metadata["format-version"] == 1
     assert entry.metadata["current-snapshot-id"] == 701
 
@@ -198,9 +198,7 @@ def test_composite_metadata_fixture_is_accepted_by_the_native_reader(
     session = parqdb.connect(tmp_path / "parqdb-data")
     table = register_fixture(session, COMPOSITE, "composite")
 
-    entry = session._indexes.load(
-        "composite", namespace=table.identifier.index_namespace
-    )
+    entry = load_table_index(session, table, "composite")
     snapshot = entry.metadata["snapshots"][0]
     assert snapshot["source-key-fields"] == ("tenant_id", "document_id")
     assert snapshot["parameters"]["posting_encoding"] == "source"
@@ -214,7 +212,7 @@ def test_lvq_metadata_fixtures_are_accepted_by_the_native_reader(
     session = parqdb.connect(tmp_path / "parqdb-data")
     table = register_fixture(session, VALID / encoding, encoding)
 
-    entry = session._indexes.load(encoding, namespace=table.identifier.index_namespace)
+    entry = load_table_index(session, table, encoding)
     snapshot = entry.metadata["snapshots"][0]
     assert snapshot["index-schema-version"] == 1
     assert snapshot["parameters"]["posting_encoding"] == encoding
@@ -237,7 +235,7 @@ def test_lvq_pyarrow_fixtures_are_queryable_by_the_native_reader(
     )
     case = json.loads((directory / "queries.json").read_text(encoding="utf-8"))[0]
 
-    hits = session.to_arrow(
+    hits = session.collect(
         documents.search(case["query-vector"], index=encoding)
         .nprobes(case["nprobe"])
         .select(case["projection"])

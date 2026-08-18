@@ -14,8 +14,8 @@ from ..datafusion import SessionConfig as DataFusionSessionConfig
 from ..datafusion.expr import SortKey
 from ..identifier import TableIdentifier
 from ..query import VectorQuery
-from ..runtime.catalog import IndexInfo
 from ..runtime.service import AsyncBatchStream, SessionService, TableDescriptor
+from ..table import IndexInfo
 
 
 class SessionTransport(Protocol):

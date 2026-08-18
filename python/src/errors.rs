@@ -1,5 +1,4 @@
 use parqdb_catalog::Error as CatalogErrorKind;
-use parqdb_index::Error as IndexError;
 use parqdb_local::{BuildFailureKind, Error as LocalError};
 use pyo3::create_exception;
 use pyo3::exceptions::PyRuntimeError;
@@ -147,19 +146,6 @@ pub(crate) fn core_error(error: &LocalError) -> PyErr {
         | LocalError::Arrow(_)
         | LocalError::Kernel(_)
         | LocalError::Iceberg(_) => BackendError::new_err(message),
-    }
-}
-
-pub(crate) fn index_error(error: &IndexError) -> PyErr {
-    let message = error.to_string();
-    match error {
-        IndexError::InvalidMetadata(_) => InvalidMetadataError::new_err(message),
-        IndexError::InvalidTimestamp(_) => InvalidArgumentError::new_err(message),
-        IndexError::IndexNotFound(_) => IndexNotFoundError::new_err(message),
-        IndexError::AmbiguousIndex(_) => AmbiguousIndexError::new_err(message),
-        IndexError::Catalog(error) => catalog_error(error, message),
-        IndexError::Storage(_) | IndexError::Json(_) => StorageError::new_err(message),
-        _ => ParqDBError::new_err(message),
     }
 }
 

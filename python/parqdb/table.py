@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Protocol, SupportsFloat, runtime_checkable
 
@@ -8,7 +9,18 @@ from .build import IndexStatus
 from .config import IVF, WriteOptions
 from .identifier import TableIdentifier
 from .query import VectorQuery
-from .runtime.catalog import IndexInfo
+
+
+@dataclass(frozen=True, slots=True)
+class IndexInfo:
+    """Published index information for one registered source table."""
+
+    name: str
+    column: str
+    family: str
+    metric: str
+    parameters: Mapping[str, str]
+    current_snapshot_id: int
 
 
 @runtime_checkable

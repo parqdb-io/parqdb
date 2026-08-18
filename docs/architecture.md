@@ -58,8 +58,8 @@ refresh calls acknowledge submission, while clients poll portable index status.
 The Python package mirrors those ownership boundaries: `parqdb.server` owns
 the public ASGI factory and server-only deployment policy; `parqdb.transport`
 owns the portable HTTP, Arrow IPC, and in-process transports; and
-`parqdb.runtime` owns the transport-neutral session service and repository
-bridge. The public `parqdb.server` import remains stable while its server
+`parqdb.runtime` owns the transport-neutral session service. The public
+`parqdb.server` import remains stable while its server
 implementation evolves behind that package boundary.
 
 ## Rust Components
