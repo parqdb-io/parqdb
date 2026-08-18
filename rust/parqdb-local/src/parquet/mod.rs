@@ -12,6 +12,7 @@ pub(crate) use page_cache::{
 };
 
 use std::io::Cursor;
+use std::ops::Range;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -38,15 +39,17 @@ use datafusion::physical_plan::{Partitioning as PhysicalPartitioning, SendableRe
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 #[cfg(test)]
 use datafusion::prelude::{col, lit};
+use futures::future::BoxFuture;
 use futures::{StreamExt, TryStreamExt};
 use object_store::{ObjectStore, ObjectStoreExt, PutMode};
-use parqdb_meta::{IvfPostingsFile, IvfPostingsManifest};
+use parqdb_meta::{IvfPostingsFile, IvfPostingsManifest, StaticIndexObject};
 use parqdb_storage::StorageRegistry;
-use parquet::arrow::async_writer::ParquetObjectWriter;
+use parquet::arrow::async_writer::{AsyncFileWriter, ParquetObjectWriter};
 use parquet::arrow::{ArrowWriter, AsyncArrowWriter};
 use parquet::basic::{Compression, Encoding};
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use parquet::schema::types::ColumnPath;
+use sha2::{Digest, Sha256};
 use url::Url;
 
 use crate::{Error, Result};
@@ -230,6 +233,70 @@ impl ParquetStore {
                 Bytes::from(bytes).into(),
                 PutMode::Create.into(),
             )
+            .await
+            .map_err(parqdb_storage::Error::from)?;
+        Ok(())
+    }
+
+    pub(crate) async fn write_static_parquet_object(
+        &self,
+        location: &str,
+        relative_path: &str,
+        batch: &RecordBatch,
+        row_groups: &[Range<usize>],
+        options: &ParquetWriterOptions,
+    ) -> Result<StaticIndexObject> {
+        options.validate()?;
+        if row_groups.is_empty()
+            || row_groups.iter().any(Range::is_empty)
+            || row_groups.first().map(|range| range.start) != Some(0)
+            || row_groups.last().map(|range| range.end) != Some(batch.num_rows())
+            || row_groups
+                .windows(2)
+                .any(|ranges| ranges[0].end != ranges[1].start)
+        {
+            return Err(Error::InvalidArgument(
+                "static Parquet row groups must exactly partition the batch".into(),
+            ));
+        }
+        let mut bytes = Vec::new();
+        {
+            let mut writer = ArrowWriter::try_new(
+                Cursor::new(&mut bytes),
+                batch.schema(),
+                Some(options.writer_properties()?),
+            )?;
+            for range in row_groups {
+                writer.write(&batch.slice(range.start, range.len()))?;
+                writer.flush()?;
+            }
+            writer.close()?;
+        }
+        let size = u64::try_from(bytes.len())
+            .map_err(|_| Error::InvalidArgument("static Parquet object is too large".into()))?;
+        let sha256 = lowercase_hex(&Sha256::digest(&bytes));
+        let resolved = self.registry.resolve(location)?;
+        resolved
+            .store()
+            .put_opts(
+                resolved.path(),
+                Bytes::from(bytes).into(),
+                PutMode::Create.into(),
+            )
+            .await
+            .map_err(parqdb_storage::Error::from)?;
+        Ok(StaticIndexObject {
+            path: relative_path.to_owned(),
+            size,
+            sha256,
+        })
+    }
+
+    pub(crate) async fn write_new_object(&self, location: &str, bytes: Bytes) -> Result<()> {
+        let resolved = self.registry.resolve(location)?;
+        resolved
+            .store()
+            .put_opts(resolved.path(), bytes.into(), PutMode::Create.into())
             .await
             .map_err(parqdb_storage::Error::from)?;
         Ok(())
@@ -516,7 +583,7 @@ async fn write_manifested_cid_files(
 }
 
 struct OpenPostingsFile {
-    writer: AsyncArrowWriter<ParquetObjectWriter>,
+    writer: AsyncArrowWriter<HashingParquetObjectWriter>,
     store: Arc<dyn ObjectStore>,
     object_path: object_store::path::Path,
     relative_path: String,
@@ -527,8 +594,9 @@ struct OpenPostingsFile {
 }
 
 impl OpenPostingsFile {
-    async fn finish(self) -> Result<IvfPostingsFile> {
-        self.writer.close().await?;
+    async fn finish(mut self) -> Result<IvfPostingsFile> {
+        self.writer.finish().await?;
+        let digest = self.writer.into_inner().finalize();
         let metadata = self
             .store
             .head(&self.object_path)
@@ -541,7 +609,47 @@ impl OpenPostingsFile {
             max_cid: self.max_cid,
             rows: self.rows,
             size: metadata.size,
+            sha256: lowercase_hex(&digest),
         })
+    }
+}
+
+struct HashingParquetObjectWriter {
+    inner: ParquetObjectWriter,
+    hasher: Sha256,
+}
+
+impl HashingParquetObjectWriter {
+    fn new(inner: ParquetObjectWriter) -> Self {
+        Self {
+            inner,
+            hasher: Sha256::new(),
+        }
+    }
+
+    fn finalize(self) -> sha2::digest::Output<Sha256> {
+        self.hasher.finalize()
+    }
+}
+
+fn lowercase_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(char::from(HEX[usize::from(byte >> 4)]));
+        output.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    output
+}
+
+impl AsyncFileWriter for HashingParquetObjectWriter {
+    fn write(&mut self, bytes: Bytes) -> BoxFuture<'_, parquet::errors::Result<()>> {
+        self.hasher.update(&bytes);
+        self.inner.write(bytes)
+    }
+
+    fn complete(&mut self) -> BoxFuture<'_, parquet::errors::Result<()>> {
+        self.inner.complete()
     }
 }
 
@@ -559,7 +667,10 @@ fn open_postings_file(
     let resolved = registry.resolve(&file)?;
     let store = resolved.store();
     let object_path = resolved.path().clone();
-    let object_writer = ParquetObjectWriter::new(Arc::clone(&store), object_path.clone());
+    let object_writer = HashingParquetObjectWriter::new(ParquetObjectWriter::new(
+        Arc::clone(&store),
+        object_path.clone(),
+    ));
     Ok(OpenPostingsFile {
         writer: AsyncArrowWriter::try_new(object_writer, schema, Some(properties))?,
         store,

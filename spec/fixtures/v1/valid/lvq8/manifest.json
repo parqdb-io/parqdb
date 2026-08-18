@@ -1,0 +1,47 @@
+{
+  "format-version": 1,
+  "hierarchy": {
+    "centroids": {
+      "path": "centroids.parquet",
+      "sha256": "fd22a96c4f57a95c7957c2cbdcaa638dec7828236377643283c582c09dba0732",
+      "size": 1087
+    },
+    "cid-offsets": [
+      0,
+      2
+    ],
+    "root-count": 1,
+    "roots": {
+      "path": "roots.parquet",
+      "sha256": "feef3cfdbc6ab528be45361293745cbcaeffe5ae741004d9f57fdc0aa059c19a",
+      "size": 1336
+    }
+  },
+  "index": {
+    "dimension": 3,
+    "metric": "l2_squared",
+    "nlist": 2,
+    "ntotal": 3,
+    "posting-encoding": "lvq8",
+    "source-key-fields": [
+      {
+        "name": "document_id",
+        "type": "string"
+      }
+    ]
+  },
+  "package-uuid": "24691ca8-c58e-51d4-bbed-c78ba6fedb62",
+  "postings": {
+    "files": [
+      {
+        "cid-bucket": 0,
+        "max-cid": 1,
+        "min-cid": 0,
+        "path": "ivf_postings/cid_bucket=000000/part-00000.parquet",
+        "rows": 3,
+        "sha256": "f0608ef3e1bf3a16838e7e9c9bf6fa7c9e575fa760dede6aedaa8eadfb6412d3",
+        "size": 2056
+      }
+    ]
+  }
+}

@@ -3806,6 +3806,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "parqdb-browser-kernels"
+version = "0.2.0-rc.1"
+dependencies = [
+ "parqdb-kernels",
+]
+
+[[package]]
 name = "parqdb-catalog"
 version = "0.2.0-rc.1"
 dependencies = [
@@ -3903,6 +3910,7 @@ dependencies = [
  "parquet",
  "rusqlite",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror",
  "tokio",

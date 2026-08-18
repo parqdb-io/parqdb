@@ -43,7 +43,7 @@ from exactly one `manifest.json` below the relation root. Readers must not list
 the relation prefix. The strict manifest contains `format-version`, `nlist`,
 `ntotal`, the hierarchy's `cid-offsets`, and the complete ordered `files`
 inventory. Each file entry contains `path`, `cid-bucket`, inclusive `min-cid`
-and `max-cid`, `rows`, and `size`.
+and `max-cid`, `rows`, `size`, and the lowercase whole-object `sha256`.
 
 The canonical object paths are
 `cid_bucket=<six-digit-root-id>/part-<five-digit-sequence>.parquet`.

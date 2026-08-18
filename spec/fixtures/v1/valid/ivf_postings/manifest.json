@@ -10,6 +10,7 @@
       "min-cid": 0,
       "path": "cid_bucket=000000/part-00000.parquet",
       "rows": 3,
+      "sha256": "276594d7e2e91cf21c098cc2e94fb46c8760e3d5495186722cea292f3c306d13",
       "size": 928
     }
   ],

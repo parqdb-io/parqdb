@@ -1,0 +1,18 @@
+[package]
+name = "parqdb-browser-kernels"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "WebAssembly distance and bounded top-k kernels for ParqDB static packages"
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+parqdb-kernels = { path = "../parqdb-kernels" }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import shutil
 import uuid
@@ -61,6 +62,7 @@ def write_postings(directory: Path, table: pa.Table) -> None:
                     "max-cid": 1,
                     "rows": table.num_rows,
                     "size": path.stat().st_size,
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                 }
             ],
         },

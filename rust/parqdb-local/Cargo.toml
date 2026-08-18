@@ -40,6 +40,7 @@ parqdb-kmeans = { version = "0.2.0-rc.1", path = "../parqdb-kmeans" }
 parqdb-meta = { version = "0.2.0-rc.1", path = "../parqdb-meta" }
 parqdb-storage = { version = "0.2.0-rc.1", path = "../parqdb-storage" }
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

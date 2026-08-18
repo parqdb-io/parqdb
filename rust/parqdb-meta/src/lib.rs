@@ -7,6 +7,7 @@ mod metadata;
 mod postings_manifest;
 mod relation;
 mod serde_helpers;
+mod static_package;
 
 pub use error::{Error, Result};
 pub use family::{IVF_SCHEMA_VERSION, PostingEncoding, ivf_centroids_reference};
@@ -20,3 +21,7 @@ pub use metadata::{
 };
 pub use postings_manifest::{IvfPostingsFile, IvfPostingsManifest};
 pub use relation::RelationReference;
+pub use static_package::{
+    JSON_SAFE_INTEGER_MAX, StaticIndexDescriptor, StaticIndexHierarchy, StaticIndexObject,
+    StaticIndexPackageManifest, StaticIndexPostings, StaticPostingsFile, StaticSourceKeyField,
+};

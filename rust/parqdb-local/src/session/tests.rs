@@ -16,11 +16,12 @@ use parqdb_catalog::{IvfCentroidsCatalogEntry, IvfCentroidsClaim, IvfCentroidsCl
 use parqdb_meta::{
     DistanceMetric, IVF_CLUSTERING_PROFILE_VERSION, IndexMetadata, IvfCentroidsDescriptor,
     IvfCentroidsMetadata, IvfCentroidsReference, PostingEncoding, SnapshotLogEntry,
-    ivf_centroids_reference,
+    StaticIndexPackageManifest, ivf_centroids_reference,
 };
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
+use parquet::file::reader::FileReader;
 use rusqlite::Connection;
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -1149,7 +1150,15 @@ async fn lvq_indexes_build_and_query_through_parquet() {
         .metadata_store()
         .resolve_location(&lvq8.index_relations["ivf_postings"], true)
         .unwrap();
-    let roots = [centroids, ivf_roots, lvq4_postings, lvq8_postings];
+    let lvq4_package = lvq4_postings
+        .strip_suffix("ivf_postings/")
+        .unwrap()
+        .to_owned();
+    let lvq8_package = lvq8_postings
+        .strip_suffix("ivf_postings/")
+        .unwrap()
+        .to_owned();
+    let roots = [centroids, ivf_roots, lvq4_package, lvq8_package];
     let objects = session.warehouse.list("indexes").await.unwrap();
     assert!(!objects.is_empty());
     let mut observed_roots = [false; 4];
@@ -1186,6 +1195,38 @@ async fn assert_lvq_index(
         .metadata_store()
         .resolve_location(&snapshot.index_relations["ivf_postings"], true)
         .unwrap();
+    let package_root = uri.strip_suffix("ivf_postings/").unwrap();
+    let package_path = file_uri_to_path(package_root).unwrap();
+    let manifest = StaticIndexPackageManifest::from_json_slice(
+        &std::fs::read(package_path.join("manifest.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(manifest.index.posting_encoding, encoding);
+    assert_eq!(manifest.index.source_key_fields.len(), 1);
+    assert_eq!(manifest.index.source_key_fields[0].name, "source_pid");
+    assert_eq!(manifest.index.source_key_fields[0].data_type, "long");
+    assert_eq!(manifest.index.ntotal, 3);
+    assert!(package_path.join(&manifest.hierarchy.roots.path).is_file());
+    assert!(
+        package_path
+            .join(&manifest.hierarchy.centroids.path)
+            .is_file()
+    );
+    assert!(
+        manifest
+            .postings
+            .files
+            .iter()
+            .all(|file| package_path.join(&file.path).is_file())
+    );
+    let centroid_file = parquet::file::reader::SerializedFileReader::new(
+        std::fs::File::open(package_path.join(&manifest.hierarchy.centroids.path)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        centroid_file.metadata().num_row_groups(),
+        usize::try_from(manifest.hierarchy.root_count).unwrap()
+    );
     let postings = session.parquet.dataframe(&uri).await.unwrap();
     assert_lvq_postings_schema(postings.schema().inner());
 

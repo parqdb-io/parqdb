@@ -8338,6 +8338,26 @@
       "version": "0.9.12"
     },
     {
+      "bom-ref": "pkg:cargo/parqdb-browser-kernels@0.2.0-rc.1",
+      "description": "WebAssembly distance and bounded top-k kernels for ParqDB static packages",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/parqdb-io/parqdb"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "parqdb-browser-kernels",
+      "purl": "pkg:cargo/parqdb-browser-kernels@0.2.0-rc.1",
+      "scope": "required",
+      "type": "library",
+      "version": "0.2.0-rc.1"
+    },
+    {
       "bom-ref": "pkg:cargo/parqdb-catalog@0.2.0-rc.1",
       "description": "ParqDB catalog abstraction, identifiers, and SQLite implementation",
       "externalReferences": [
@@ -18130,6 +18150,12 @@
     },
     {
       "dependsOn": [
+        "pkg:cargo/parqdb-kernels@0.2.0-rc.1"
+      ],
+      "ref": "pkg:cargo/parqdb-browser-kernels@0.2.0-rc.1"
+    },
+    {
+      "dependsOn": [
         "pkg:cargo/parqdb-meta@0.2.0-rc.1",
         "pkg:cargo/rusqlite@0.40.1",
         "pkg:cargo/serde_json@1.0.151",
@@ -18218,6 +18244,7 @@
         "pkg:cargo/parquet@58.4.0",
         "pkg:cargo/rusqlite@0.40.1",
         "pkg:cargo/serde_json@1.0.151",
+        "pkg:cargo/sha2@0.11.0",
         "pkg:cargo/tempfile@3.27.0",
         "pkg:cargo/thiserror@2.0.19",
         "pkg:cargo/tokio-util@0.7.19",
@@ -20207,7 +20234,7 @@
     "properties": [
       {
         "name": "parqdb:cargo-lock-sha256",
-        "value": "f10d4f8b997740b2971ef5f25cca7e94bcffc04feb398fe42399dcfc1a36cdb9"
+        "value": "ec11f0d8c31589c25fe8ea14fda5d31c76bdd5fd32080c9b2948b5bfe54b9047"
       }
     ]
   },
