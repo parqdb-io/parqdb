@@ -357,7 +357,8 @@
           byId('query-time').textContent = `${queryMs.toFixed(1)} ms`
           byId('latency').textContent = openMs === undefined ? `${queryMs.toFixed(1)} ms / CACHE HIT` : `${openMs.toFixed(1)} ms OPEN / ${queryMs.toFixed(1)} ms QUERY`
           byId('trace-state').textContent = 'COMPLETE'
-          status.textContent = `${openedIndex.manifest.packageUuid} · no object listing · no remote compute`
+          const rangeCount = requests.filter(request => request.method === 'RANGE').length
+          status.textContent = `${hits.length.toLocaleString()} hits · ${rangeCount.toLocaleString()} range requests · ${formatBytes(transferred)} transferred`
         } catch (error) {
           status.className = 'status error'
           status.textContent = error instanceof Error ? error.message : String(error)
