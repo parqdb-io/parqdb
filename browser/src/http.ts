@@ -56,7 +56,10 @@ export class HttpRangeBuffer implements AsyncBuffer {
     if (fetcher === undefined) throw new Error('ParqDB browser client requires fetch')
     const complete = start === 0 && end === this.byteLength
     const request: RequestInit = {
-      cache: 'force-cache',
+      // Browsers are allowed to cache partial responses, but some intermediary and
+      // browser-cache combinations have incorrectly reused a different cached 206.
+      // The Parquet reader already caches metadata and centroids above this layer.
+      cache: complete ? 'force-cache' : 'no-store',
       credentials: 'omit',
       redirect: 'follow',
     }
@@ -72,13 +75,28 @@ export class HttpRangeBuffer implements AsyncBuffer {
     if (response.status !== 206) {
       throw new Error(`range request must return 206, received ${response.status}`)
     }
-    const expected = `bytes ${start}-${end - 1}/${this.byteLength}`
-    if (response.headers.get('content-range') !== expected) {
-      throw new Error(`invalid Content-Range; expected ${expected}`)
-    }
+    validateContentRange(response.headers.get('content-range'), start, end - 1, this.byteLength)
     const bytes = await response.arrayBuffer()
     if (bytes.byteLength !== end - start) throw new Error('range response length does not match Content-Range')
     return bytes
+  }
+}
+
+function validateContentRange(header: string | null, start: number, end: number, size: number): void {
+  const expected = `bytes ${start}-${end}/${size}`
+  if (header === null) {
+    throw new Error(
+      `missing Content-Range; expected ${expected}. For cross-origin indexes, expose it with Access-Control-Expose-Headers`,
+    )
+  }
+  const match = /^bytes\s+([0-9]+)-([0-9]+)\/([0-9]+)$/i.exec(header.trim())
+  if (
+    match === null ||
+    Number(match[1]) !== start ||
+    Number(match[2]) !== end ||
+    Number(match[3]) !== size
+  ) {
+    throw new Error(`invalid Content-Range ${JSON.stringify(header)}; expected ${expected}`)
   }
 }
 

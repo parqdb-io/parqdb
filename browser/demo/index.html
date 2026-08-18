@@ -75,7 +75,8 @@
       .route-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #b8c0b8; }
       .route-state { padding: 2px 6px; border: 1px solid currentColor; font-size: 9px; }
       .route.legacy { color: #765252; background: repeating-linear-gradient(-45deg, transparent 0 12px, rgba(255,107,107,.035) 12px 13px); }
-      .route.legacy .route-path { color: #765f5f; text-decoration: line-through; text-decoration-thickness: 1px; }
+      .route.legacy .route-path { color: #817171; }
+      .route.legacy del { color: #c86f6f; text-decoration-color: var(--red); text-decoration-thickness: 2px; }
       .route.legacy .route-state { color: var(--red); }
       .route.direct .route-name, .route.direct .route-path { color: #a9c9b0; }
       .route.direct .route-state { color: var(--green); }
@@ -197,18 +198,18 @@
   <body>
     <header class="topbar">
       <strong>PARQDB://CONSOLE</strong>
-      <span class="topbar-center">STATIC_HTTP_INDEX_PACKAGE_V1</span>
+      <span class="topbar-center">PARQUET_INDEX / HTTP_RANGE / WASM</span>
       <span class="topbar-right"><span><i class="pulse"></i> CLIENT ONLINE</span><a class="repo-link" href="https://github.com/parqdb-io/parqdb" target="_blank" rel="noreferrer">GITHUB ↗</a></span>
     </header>
 
     <main>
       <section class="boot">
-        <div class="prompt">parqdb inspect --transport=http-range --runtime=wasm</div>
-        <h1>QUERY THE INDEX. WATCH THE BYTES.</h1>
-        <p class="boot-copy">A live execution console for immutable Parquet indexes. <b>No simulated traffic.</b> Every line below is emitted by the browser while it routes, prunes and ranks the query locally.</p>
+        <div class="prompt">live query attached · no database endpoint configured</div>
+        <h1>THIS QUERY NEVER HITS A VECTOR DATABASE.</h1>
+        <p class="boot-copy">It runs in this tab. ParqDB reads selected Parquet byte ranges straight from object storage, ranks candidates in WASM, and accounts for every transferred byte below. <b>Change the query and execute it yourself.</b></p>
         <div class="routes" aria-label="Architecture comparison">
-          <div class="route legacy"><span class="route-name">LEGACY</span><span class="route-path">browser ──RPC──&gt; API server ──&gt; vector database</span><span class="route-state">KILLED ×</span></div>
-          <div class="route direct"><span class="route-name">PARQDB</span><span class="route-path">browser ──GET bytes=n-m──&gt; parquet ──&gt; wasm top-k</span><span class="route-state">LIVE</span></div>
+          <div class="route legacy"><span class="route-name">LEGACY</span><span class="route-path">browser ──RPC──&gt; <del>vector DB</del> ──GET──&gt; object storage</span><span class="route-state">VECTOR DB ×</span></div>
+          <div class="route direct"><span class="route-name">PARQDB</span><span class="route-path">browser + WASM ──HTTP RANGE──&gt; object storage / Parquet</span><span class="route-state">DIRECT</span></div>
         </div>
       </section>
 
@@ -216,7 +217,7 @@
         <aside class="pane controls">
           <div class="pane-head"><span>01 / query input</span><code>ctrl+enter to run</code></div>
           <form class="form" id="query-form">
-            <div class="field"><label for="manifest">PACKAGE URI <span>immutable manifest</span></label><input id="manifest" value="./fixtures/lvq8/manifest.json" spellcheck="false" autocapitalize="off" /></div>
+            <div class="field"><label for="manifest">INDEX URL <span>manifest.json</span></label><input id="manifest" value="./fixtures/lvq8/manifest.json" spellcheck="false" autocapitalize="off" /></div>
             <div class="field"><label for="query">QUERY VECTOR <span>float32[]</span></label><input id="query" value="0, 0, 0" spellcheck="false" inputmode="decimal" /></div>
             <div class="pair">
               <div class="field"><label for="nprobe">NPROBE</label><input id="nprobe" type="number" min="1" value="1" /></div>
@@ -230,7 +231,7 @@
               <div class="kv"><span>transport</span><b>HTTP RANGE</b></div>
               <div class="kv"><span>compute</span><b>LOCAL WASM</b></div>
             </div>
-            <p class="status" id="status">Ready. No package loaded.</p>
+            <p class="status" id="status">Ready. No index loaded.</p>
           </form>
         </aside>
 
@@ -322,7 +323,7 @@
         searchButton.disabled = true
         byId('trace-state').textContent = 'EXECUTING'
         status.className = 'status'
-        status.textContent = 'Opening immutable package…'
+        status.textContent = 'Opening remote index…'
         byId('latency').textContent = ''
         byId('query-time').textContent = '—'
         byId('cid-count').textContent = '—'
