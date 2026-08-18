@@ -92,9 +92,72 @@ fn hierarchical_shape_preserves_requested_cluster_count() {
 }
 
 #[test]
+fn proportional_leaf_allocation_preserves_total_and_root_capacity() {
+    let offsets = [0, 50, 80, 95, 100];
+    let children = proportional_child_counts(&offsets, 16).unwrap();
+
+    assert_eq!(children, [7, 5, 3, 1]);
+    assert_eq!(children.iter().sum::<usize>(), 16);
+    for (count, range) in children.iter().zip(offsets.windows(2)) {
+        assert!(*count >= 1);
+        assert!(*count <= range[1] - range[0]);
+    }
+}
+
+#[test]
+fn proportional_leaf_allocation_is_deterministic_and_exact_for_4096() {
+    let populations = [2, 17, 63, 101, 509, 1_024, 4_380];
+    let offsets = populations
+        .iter()
+        .scan(0_usize, |offset, population| {
+            let current = *offset;
+            *offset += *population;
+            Some(current)
+        })
+        .chain(std::iter::once(populations.iter().sum()))
+        .collect::<Vec<_>>();
+
+    let first = proportional_child_counts(&offsets, 4_096).unwrap();
+    let second = proportional_child_counts(&offsets, 4_096).unwrap();
+    assert_eq!(first, second);
+    assert_eq!(first.iter().sum::<usize>(), 4_096);
+    assert!(
+        first
+            .iter()
+            .zip(populations)
+            .all(|(children, population)| *children >= 1 && *children <= population)
+    );
+}
+
+#[test]
+fn proportional_leaf_allocation_rejects_impossible_shapes() {
+    assert!(proportional_child_counts(&[0, 2, 3], 1).is_err());
+    assert!(proportional_child_counts(&[0, 1, 1], 2).is_err());
+    assert!(proportional_child_counts(&[0, 1, 2], 3).is_err());
+}
+
+#[test]
 fn root_partitions_need_enough_rows_for_every_leaf_centroid() {
-    assert!(has_sufficient_root_rows(&[0, 100, 200], &[64, 64]));
-    assert!(!has_sufficient_root_rows(&[0, 127, 200], &[128, 64]));
+    assert_eq!(deficient_root_partition(&[0, 100, 200], &[64, 64]), None);
+    assert_eq!(
+        deficient_root_partition(&[0, 63, 200], &[64, 64]),
+        Some((0, 63, 64))
+    );
+}
+
+#[test]
+fn root_recovery_reseeds_from_a_populated_partition_farthest_point() {
+    let vectors = [0.0_f32, 1.0, 2.0, 100.0];
+    let rows = [0, 1, 2, 3];
+    let offsets = [0, 3, 4];
+    let mut centroids = [1.0_f32, 100.0];
+
+    reseed_deficient_roots(&vectors, 1, &rows, &offsets, &[1, 2], &mut centroids).unwrap();
+
+    assert_eq!(
+        centroids.map(f32::to_bits),
+        [1.0_f32.to_bits(), 0.0_f32.to_bits()]
+    );
 }
 
 #[test]
@@ -106,21 +169,9 @@ fn partition_rows_rejects_out_of_range_labels() {
 }
 
 #[test]
-fn auto_mode_uses_hierarchical_training_only_for_large_cluster_counts() {
-    assert_eq!(resolved_mode(KMeansOptions::new(8_191)), KMeansMode::Flat);
-    assert_eq!(
-        resolved_mode(KMeansOptions::new(8_192)),
-        KMeansMode::Hierarchical
-    );
-    assert_eq!(
-        resolved_mode(KMeansOptions {
-            n_clusters: 8_192,
-            max_iter: 1,
-            seed: 42,
-            mode: KMeansMode::Flat,
-        }),
-        KMeansMode::Flat
-    );
+fn hierarchical_training_is_the_default() {
+    assert_eq!(KMeansOptions::new(1).mode, KMeansMode::Hierarchical);
+    assert_eq!(KMeansOptions::new(65_536).mode, KMeansMode::Hierarchical);
 }
 
 #[test]
@@ -148,18 +199,30 @@ fn hierarchical_mode_returns_flattened_leaf_centroids() {
 
     assert_eq!(first.centroids.len(), 64 * 2);
     assert!(first.centroids.iter().all(|value| value.is_finite()));
+    let hierarchy = first.hierarchy.as_ref().unwrap();
+    assert_eq!(hierarchy.root_centroids.len(), 8 * 2);
+    assert_eq!(hierarchy.cid_offsets.first(), Some(&0));
+    assert_eq!(hierarchy.cid_offsets.last(), Some(&64));
+    assert_eq!(hierarchy.cid_offsets.len(), 9);
+    assert!(
+        hierarchy
+            .cid_offsets
+            .windows(2)
+            .all(|range| range[0] < range[1])
+    );
+    assert!(hierarchy.fallback.is_none());
     assert_eq!(first, second);
 }
 
 #[test]
-fn hierarchical_failure_falls_back_only_in_auto_mode() {
+fn hierarchical_shortage_falls_back_to_flat_training() {
     let vectors = vec![1.0_f32; 128];
     let context = ParalliteContext::with_executor(Executor::serial());
-    let mut options = KMeansOptions {
+    let options = KMeansOptions {
         n_clusters: 64,
         max_iter: 1,
         seed: 42,
-        mode: KMeansMode::Auto,
+        mode: KMeansMode::Hierarchical,
     };
 
     let model = fit_hierarchical_kmeans_with_progress(
@@ -171,24 +234,14 @@ fn hierarchical_failure_falls_back_only_in_auto_mode() {
         &|_| {},
     )
     .unwrap();
-    assert_eq!(model.centroids.len(), options.n_clusters);
+    let hierarchy = model.hierarchy.unwrap();
+    assert_eq!(hierarchy.cid_offsets, [0, 8, 16, 24, 32, 40, 48, 56, 64]);
+    let fallback = hierarchy.fallback.unwrap();
+    assert!(fallback.root < 8);
+    assert_eq!(fallback.available_rows, 0);
+    assert_eq!(fallback.required_rows, 1);
+    assert_eq!(model.centroids.len(), 64);
     assert!(model.centroids.iter().all(|value| value.is_finite()));
-
-    options.mode = KMeansMode::Hierarchical;
-    let error = fit_hierarchical_kmeans_with_progress(
-        &vectors,
-        1,
-        vectors.len(),
-        &context,
-        options,
-        &|_| {},
-    )
-    .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("root partitions cannot form the requested leaf centroids")
-    );
 }
 
 #[test]
@@ -361,15 +414,12 @@ fn identical_vectors_keep_empty_cluster_recovery_finite() {
 #[test]
 fn one_centroid_per_vector_is_an_exact_zero_iteration_model() {
     let vectors = vec![0.0, 1.0, 10.0, 11.0];
-    let model = fit_lloyd_kmeans(
-        &vectors,
-        2,
-        &ParalliteContext::default(),
-        KMeansOptions::new(2),
-    )
-    .unwrap();
+    let mut options = KMeansOptions::new(2);
+    options.mode = KMeansMode::Flat;
+    let model = fit_lloyd_kmeans(&vectors, 2, &ParalliteContext::default(), options).unwrap();
 
     assert_eq!(model.centroids, vectors);
+    assert!(model.hierarchy.is_none());
     assert_eq!(model.iterations, 0);
 }
 

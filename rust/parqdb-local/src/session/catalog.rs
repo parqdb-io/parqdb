@@ -148,6 +148,17 @@ impl LocalSession {
             snapshot.parameter_usize("nlist")?,
             snapshot.parameter_usize("dimension")?,
         )?;
+        let roots_location = self.indexes.metadata_store().resolve_location(
+            &centroids.metadata.roots,
+            centroids.metadata.roots.ends_with('/'),
+        )?;
+        let roots_batch = self.parquet.read(&roots_location, None).await?;
+        let (_, cid_offsets) = crate::ivf::read_roots(
+            &roots_batch,
+            snapshot.parameter_usize("nlist")?,
+            snapshot.parameter_usize("dimension")?,
+        )?;
+        crate::ivf::validate_centroid_buckets(&centroids_batch, &cid_offsets)?;
 
         let postings_location = snapshot
             .index_relations
@@ -157,11 +168,20 @@ impl LocalSession {
             .indexes
             .metadata_store()
             .resolve_location(postings_location, postings_location.ends_with('/'))?;
+        self.index_relation_providers
+            .validate_manifested_cid_identity(
+                &postings_location,
+                snapshot.parameter_usize("nlist")?,
+                snapshot.parameter_usize("ntotal")?,
+                &cid_offsets,
+                &self.context.state(),
+            )
+            .await?;
         let postings = self
             .index_relation_providers
             .get_or_create_parquet(
                 &postings_location,
-                IndexRelationLayout::HiveCid,
+                IndexRelationLayout::ManifestedCid,
                 &self.context.state(),
             )
             .await?;

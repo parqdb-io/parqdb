@@ -35,6 +35,13 @@ def assert_query_result(
     assert sorted(actual, key=canonical) == sorted(expected, key=canonical)
 
 
+def read_postings(directory: Path) -> list[dict[str, object]]:
+    root = directory / "ivf_postings"
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    files = [root / entry["path"] for entry in manifest["files"]]
+    return pq.read_table(files).to_pylist()
+
+
 def reference_search(
     case: dict[str, Any],
     directory: Path = VALID,
@@ -48,9 +55,7 @@ def reference_search(
         for row in pq.read_table(directory / "source.parquet").to_pylist()
     }
     centroids = pq.read_table(directory / "ivf_centroids.parquet").to_pylist()
-    postings = pq.read_table(
-        directory / "ivf_postings", partitioning="hive"
-    ).to_pylist()
+    postings = read_postings(directory)
     assert all("vector" not in posting for posting in postings)
     query = case["query-vector"]
     selected = {
@@ -96,9 +101,7 @@ def reference_lvq_search(
     bits = 4 if encoding == "lvq4" else 8
     dimension = int(snapshot["parameters"]["dimension"])
     centroids = pq.read_table(directory / "ivf_centroids.parquet").to_pylist()
-    postings = pq.read_table(
-        directory / "ivf_postings", partitioning="hive"
-    ).to_pylist()
+    postings = read_postings(directory)
     query = case["query-vector"]
     selected = {
         row["cid"]
@@ -152,6 +155,7 @@ def localize_fixture(
     centroids_metadata_path = local / "ivf-centroids.metadata.json"
     centroids_metadata = json.loads(centroids_metadata_path.read_text(encoding="utf-8"))
     centroids_metadata["centroids"] = f"{prefix}{centroids_metadata['centroids']}"
+    centroids_metadata["roots"] = f"{prefix}{centroids_metadata['roots']}"
     centroids_metadata_path.write_text(
         json.dumps(centroids_metadata, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -300,9 +304,7 @@ def test_lvq_query_fixtures_are_internally_consistent(
 ) -> None:
     directory = VALID / encoding
     cases = json.loads((directory / "queries.json").read_text(encoding="utf-8"))
-    postings = pq.read_table(
-        directory / "ivf_postings", partitioning="hive"
-    ).to_pylist()
+    postings = read_postings(directory)
     first_code = next(row["code"] for row in postings if row["key_1"] == "a")
     assert first_code.hex() == expected_code
 

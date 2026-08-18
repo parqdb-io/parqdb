@@ -2,11 +2,14 @@
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Int32Array};
+use arrow::array::{Array, ArrayRef, Int32Array};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion::common::ScalarValue;
+use datafusion::execution::FunctionRegistry;
 use datafusion::execution::context::SQLOptions;
+use datafusion::logical_expr::Expr;
 use datafusion::prelude::{SessionContext, col, lit};
 use parqdb_index::LoadedIndex;
 use parqdb_meta::{DistanceMetric, PostingEncoding, RelationReference};
@@ -114,6 +117,7 @@ impl LocalSession {
     /// Compiles one search into executable SQL for this session's registered tables.
     pub async fn search_sql(&self, request: &SearchRequest) -> Result<String> {
         let resolved = self.resolve_search(request).await?;
+        let mut execution = resolved.clone();
         let source_name = if datafusion_source_relation_required(&resolved)? {
             Some(
                 self.source_binding(&resolved.source_relation_key)?
@@ -127,12 +131,16 @@ impl LocalSession {
         } else {
             None
         };
-        let postings_name = match &resolved.postings_relation_key {
-            Some(key) => Some(
-                self.register_sql_relation("postings", key, IndexRelationLayout::HiveCid)
+        let postings_name = match (&resolved.postings_relation_key, &resolved.cluster_selection) {
+            (Some(key), Some(ClusterSelection::Native(cids))) => {
+                execution.cluster_selection = Some(ClusterSelection::All);
+                Some(self.register_sql_manifested_cids(key, cids).await?)
+            }
+            (Some(key), _) => Some(
+                self.register_sql_relation("postings", key, IndexRelationLayout::ManifestedCid)
                     .await?,
             ),
-            None => None,
+            (None, _) => None,
         };
         let centroids_name = match &resolved.cluster_selection {
             Some(ClusterSelection::Relational {
@@ -149,7 +157,7 @@ impl LocalSession {
             _ => None,
         };
         compile_datafusion_sql(
-            &resolved,
+            &execution,
             source_name.as_deref(),
             postings_name.as_deref(),
             centroids_name.as_deref(),
@@ -299,13 +307,12 @@ impl LocalSession {
                 Some(ClusterSelection::Native(cids)) => {
                     execution.cluster_selection = Some(ClusterSelection::All);
                     select_clusters(
-                        self.index_relation_dataframe(key, IndexRelationLayout::HiveCid)
-                            .await?,
+                        self.index_relation_dataframe_for_cids(key, cids).await?,
                         cids,
                     )?
                 }
                 _ => {
-                    self.index_relation_dataframe(key, IndexRelationLayout::HiveCid)
+                    self.index_relation_dataframe(key, IndexRelationLayout::ManifestedCid)
                         .await?
                 }
             };
@@ -360,7 +367,7 @@ impl LocalSession {
             .index_relation_dataframe(
                 &relation_key(&reference),
                 if role == "ivf_postings" {
-                    IndexRelationLayout::HiveCid
+                    IndexRelationLayout::ManifestedCid
                 } else {
                     IndexRelationLayout::Plain
                 },
@@ -378,6 +385,18 @@ impl LocalSession {
         let provider = self
             .index_relation_providers
             .get_or_create_parquet(key, layout, &self.context.state())
+            .await?;
+        Ok(self.context.read_table(provider)?)
+    }
+
+    async fn index_relation_dataframe_for_cids(
+        &self,
+        key: &str,
+        cids: &[i32],
+    ) -> Result<datafusion::dataframe::DataFrame> {
+        let provider = self
+            .index_relation_providers
+            .manifested_cid_provider(key, cids, &self.context.state())
             .await?;
         Ok(self.context.read_table(provider)?)
     }
@@ -417,6 +436,45 @@ impl LocalSession {
         Ok(name)
     }
 
+    async fn register_sql_manifested_cids(&self, key: &str, cids: &[i32]) -> Result<String> {
+        let mut identity = Vec::with_capacity(
+            key.len()
+                .saturating_add(cids.len().saturating_mul(4).saturating_add(1)),
+        );
+        identity.extend_from_slice(key.as_bytes());
+        identity.push(0);
+        for cid in cids {
+            identity.extend_from_slice(&cid.to_le_bytes());
+        }
+        let token = Uuid::new_v5(&Uuid::NAMESPACE_OID, &identity).simple();
+        let name = format!("parqdb_postings_selected_{token}");
+        let cache_key = format!("postings-selected\0{token}");
+        if let Some(existing) = self
+            .sql_relations
+            .read()
+            .map_err(|_| sql_relation_lock_error())?
+            .get(&cache_key)
+            .cloned()
+        {
+            return Ok(existing);
+        }
+        let dataframe = select_clusters(
+            self.index_relation_dataframe_for_cids(key, cids).await?,
+            cids,
+        )?;
+        let mut relations = self
+            .sql_relations
+            .write()
+            .map_err(|_| sql_relation_lock_error())?;
+        if let Some(existing) = relations.get(&cache_key) {
+            return Ok(existing.clone());
+        }
+        self.context
+            .register_table(name.clone(), dataframe.into_view())?;
+        relations.insert(cache_key, name.clone());
+        Ok(name)
+    }
+
     async fn index_only_postings(
         &self,
         resolved: &ResolvedSearch,
@@ -429,12 +487,11 @@ impl LocalSession {
         };
         match &resolved.cluster_selection {
             Some(ClusterSelection::Native(cids)) => Ok(Some(select_clusters(
-                self.index_relation_dataframe(key, IndexRelationLayout::HiveCid)
-                    .await?,
+                self.index_relation_dataframe_for_cids(key, cids).await?,
                 cids,
             )?)),
             Some(ClusterSelection::All) => Ok(Some(
-                self.index_relation_dataframe(key, IndexRelationLayout::HiveCid)
+                self.index_relation_dataframe(key, IndexRelationLayout::ManifestedCid)
                     .await?,
             )),
             Some(ClusterSelection::Relational { .. }) | None => Ok(None),
@@ -478,16 +535,74 @@ impl LocalSession {
                 .collect::<Result<Vec<_>>>()?;
             ClusterSelection::Native(selected)
         } else {
-            ClusterSelection::Relational {
-                centroids_relation_key: relation_key(&index_relation(
-                    &self.warehouse,
-                    loaded,
-                    "ivf_centroids",
-                )?),
-                nprobe,
-            }
+            let centroids_relation_key =
+                relation_key(&index_relation(&self.warehouse, loaded, "ivf_centroids")?);
+            ClusterSelection::Native(
+                self.route_centroids_with_datafusion(&centroids_relation_key, query, nprobe)
+                    .await?,
+            )
         };
         Ok((selection, nlist))
+    }
+
+    pub(super) async fn route_centroids_with_datafusion(
+        &self,
+        relation_key: &str,
+        query: &[f32],
+        nprobe: usize,
+    ) -> Result<Vec<i32>> {
+        let query = query
+            .iter()
+            .copied()
+            .map(|value| ScalarValue::Float32(Some(value)))
+            .collect::<Vec<_>>();
+        let query = Expr::Literal(
+            ScalarValue::List(ScalarValue::new_list(
+                &query,
+                &arrow::datatypes::DataType::Float32,
+                false,
+            )),
+            None,
+        );
+        let distance = self.context.udf("parqdb_squared_l2")?;
+        let batches = self
+            .index_relation_dataframe(relation_key, IndexRelationLayout::Plain)
+            .await?
+            .select(vec![
+                col("cid"),
+                distance
+                    .call(vec![col("centroid"), query])
+                    .alias("__parqdb_distance"),
+            ])?
+            .sort(vec![
+                col("__parqdb_distance").sort(true, false),
+                col("cid").sort(true, false),
+            ])?
+            .limit(0, Some(nprobe))?
+            .select_columns(&["cid"])?
+            .collect()
+            .await?;
+        let mut selected = Vec::with_capacity(nprobe);
+        for batch in batches {
+            let cids = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .ok_or_else(|| Error::InvalidSchema("ivf_centroids.cid must be INT32".into()))?;
+            if cids.null_count() != 0 {
+                return Err(Error::InvalidSchema(
+                    "ivf_centroids.cid must be required".into(),
+                ));
+            }
+            selected.extend(cids.values().iter().copied());
+        }
+        if selected.len() != nprobe {
+            return Err(Error::InvalidSchema(format!(
+                "ivf_centroids returned {} rows for nprobe {nprobe}",
+                selected.len()
+            )));
+        }
+        Ok(selected)
     }
 }
 

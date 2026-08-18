@@ -9,6 +9,13 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- IVF training now defaults to a persisted two-level hierarchy. Postings are
+  grouped into root-aligned `cid_bucket` files, discovered through an immutable
+  manifest, and pruned with explicit Parquet row-group access plans. Root
+  training samples 512 points per root, re-seeds empty roots from populated
+  donor partitions, then assigns the exact leaf budget proportionally to the
+  sampled root populations. It falls back after bounded empty-root recovery to
+  flat leaf training followed by a synthetic valid hierarchy.
 - Python index discovery and removal now stay behind the table-centered API;
   internal catalog and native repository bridges are no longer exposed through
   session facade attributes.

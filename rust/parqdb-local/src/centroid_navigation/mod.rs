@@ -90,6 +90,13 @@ impl CentroidNavigator {
         Self::new_with_policy(nlist, dimension, values, MIN_HNSW_CENTROIDS, parallel)
     }
 
+    pub(crate) fn name(&self) -> &'static str {
+        match &self.strategy {
+            NavigatorStrategy::Exact(_) => "exact",
+            NavigatorStrategy::Hnsw(_) => "hnsw_lvq8",
+        }
+    }
+
     fn new_with_policy(
         nlist: usize,
         dimension: usize,
@@ -128,13 +135,6 @@ impl CentroidNavigator {
             dimension,
             strategy,
         })
-    }
-
-    pub(crate) fn name(&self) -> &'static str {
-        match &self.strategy {
-            NavigatorStrategy::Exact(_) => "exact",
-            NavigatorStrategy::Hnsw(_) => "hnsw_lvq8",
-        }
     }
 
     pub(crate) fn validate_shape(&self, nlist: usize, dimension: usize) -> Result<()> {

@@ -4,6 +4,7 @@ mod error;
 mod family;
 mod ivf_centroids;
 mod metadata;
+mod postings_manifest;
 mod relation;
 mod serde_helpers;
 
@@ -17,4 +18,5 @@ pub use metadata::{
     IndexMetadata, IndexSnapshot, SnapshotLogEntry, validate_absolute_location,
     validate_relative_location,
 };
+pub use postings_manifest::{IvfPostingsFile, IvfPostingsManifest};
 pub use relation::RelationReference;

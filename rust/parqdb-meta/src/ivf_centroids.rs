@@ -125,6 +125,9 @@ pub struct IvfCentroidsMetadata {
     pub descriptor: IvfCentroidsDescriptor,
     /// Artifact-root-relative path containing the centroid rows.
     pub centroids: String,
+    /// Artifact-root-relative path containing hierarchical root centroids and
+    /// their contiguous leaf-CID ranges.
+    pub roots: String,
 }
 
 impl IvfCentroidsMetadata {
@@ -155,6 +158,10 @@ impl IvfCentroidsMetadata {
             return invalid("IVF centroid fingerprint does not match its descriptor");
         }
         validate_relative_location(&self.centroids)?;
+        validate_relative_location(&self.roots)?;
+        if self.centroids == self.roots {
+            return invalid("IVF centroid and root locations must be different");
+        }
         Ok(())
     }
 }
@@ -237,6 +244,7 @@ mod tests {
             created_at_ms: 1,
             descriptor,
             centroids: "centroids/".into(),
+            roots: "roots/".into(),
         };
 
         metadata.validate().unwrap();

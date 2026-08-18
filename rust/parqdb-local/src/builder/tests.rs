@@ -56,6 +56,7 @@ fn builds_ivf_relations_with_source_keys_in_postings() {
     assert_eq!(artifacts.dimension, 2);
     assert_eq!(artifacts.ntotal, 4);
     assert_eq!(artifacts.centroids.num_rows(), 2);
+    assert_eq!(artifacts.roots.num_rows(), 1);
     assert_eq!(artifacts.postings.num_rows(), 4);
     assert_eq!(
         artifacts
@@ -65,7 +66,22 @@ fn builds_ivf_relations_with_source_keys_in_postings() {
             .iter()
             .map(|field| (field.name().as_str(), field.is_nullable()))
             .collect::<Vec<_>>(),
-        [("cid", false), ("centroid", false)]
+        [("cid", false), ("cid_bucket", false), ("centroid", false),]
+    );
+    assert_eq!(
+        artifacts
+            .roots
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| (field.name().as_str(), field.is_nullable()))
+            .collect::<Vec<_>>(),
+        [
+            ("cid_bucket", false),
+            ("cid_begin", false),
+            ("cid_end", false),
+            ("centroid", false),
+        ]
     );
     assert_eq!(
         artifacts

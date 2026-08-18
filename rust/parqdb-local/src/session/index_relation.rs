@@ -2,7 +2,7 @@
 
 mod bounded_cache;
 mod centroid;
-mod hive_cid;
+mod manifested_cid;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -20,7 +20,7 @@ use parqdb_storage::StorageRegistry;
 use bounded_cache::BoundedAsyncCache;
 use centroid::CentroidCache;
 pub(super) use centroid::CentroidNavigator;
-use hive_cid::HiveCidParquetProvider;
+use manifested_cid::ManifestedCidParquetProvider;
 
 use crate::config::{IndexIoMode, IndexRelationCacheConfig};
 use crate::parquet::uniform_dataset_listing_table;
@@ -31,17 +31,17 @@ const PLAIN_PROVIDER_CHARGE: usize = 4 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum IndexRelationLayout {
     Plain,
-    HiveCid,
+    ManifestedCid,
 }
 
 impl IndexRelationLayout {
     fn filter_pushdown(self, filter: &Expr) -> TableProviderFilterPushDown {
         match self {
             Self::Plain => TableProviderFilterPushDown::Inexact,
-            Self::HiveCid if hive_cid::cid_filter_values(filter).is_some() => {
-                TableProviderFilterPushDown::Exact
+            Self::ManifestedCid if manifested_cid::cid_filter_values(filter).is_some() => {
+                TableProviderFilterPushDown::Inexact
             }
-            Self::HiveCid => TableProviderFilterPushDown::Unsupported,
+            Self::ManifestedCid => TableProviderFilterPushDown::Unsupported,
         }
     }
 }
@@ -59,6 +59,7 @@ pub(super) struct IndexRelationProviderRegistry {
     storage: StorageRegistry,
     registered: RwLock<HashMap<String, Provider>>,
     parquet: BoundedAsyncCache<ParquetProviderKey, Provider>,
+    manifested: BoundedAsyncCache<String, Arc<ManifestedCidParquetProvider>>,
     centroids: CentroidCache,
     index_io: IndexIoMode,
 }
@@ -83,6 +84,10 @@ impl IndexRelationProviderRegistry {
             storage,
             registered: RwLock::new(HashMap::new()),
             parquet: BoundedAsyncCache::new(config.manifest_max_entries, config.manifest_max_bytes),
+            manifested: BoundedAsyncCache::new(
+                config.manifest_max_entries,
+                config.manifest_max_bytes,
+            ),
             centroids: CentroidCache::new(config.centroid_max_entries, config.centroid_max_bytes),
             index_io,
         }
@@ -113,6 +118,9 @@ impl IndexRelationProviderRegistry {
         if let Some(provider) = self.registered(relation_key)? {
             return Ok(provider);
         }
+        if layout == IndexRelationLayout::ManifestedCid {
+            return Ok(self.get_or_create_manifested(relation_key, state).await? as Provider);
+        }
 
         let key = ParquetProviderKey {
             relation_key: relation_key.to_owned(),
@@ -131,20 +139,61 @@ impl IndexRelationProviderRegistry {
                         .await?;
                         Ok((listing as Provider, PLAIN_PROVIDER_CHARGE))
                     }
-                    IndexRelationLayout::HiveCid => {
-                        let provider = HiveCidParquetProvider::load(
-                            &self.storage,
-                            relation_key,
-                            state,
-                            self.index_io,
-                        )
-                        .await?;
-                        let charge = provider.resident_size();
-                        Ok((Arc::new(provider) as Provider, charge))
-                    }
+                    IndexRelationLayout::ManifestedCid => unreachable!("handled above"),
                 }
             })
             .await
+    }
+
+    async fn get_or_create_manifested(
+        &self,
+        relation_key: &str,
+        state: &dyn Session,
+    ) -> Result<Arc<ManifestedCidParquetProvider>> {
+        self.manifested
+            .get_or_try_insert(relation_key.to_owned(), || async {
+                let provider = ManifestedCidParquetProvider::load(
+                    &self.storage,
+                    relation_key,
+                    state,
+                    self.index_io,
+                )
+                .await?;
+                let charge = provider.resident_size();
+                Ok((Arc::new(provider), charge))
+            })
+            .await
+    }
+
+    pub(super) async fn manifested_cid_provider(
+        &self,
+        relation_key: &str,
+        cids: &[i32],
+        state: &dyn Session,
+    ) -> Result<Provider> {
+        if self.registered(relation_key)?.is_some() {
+            return Err(Error::InvalidArgument(
+                "typed CID selection is unavailable for an overridden postings provider".into(),
+            ));
+        }
+        let provider = self
+            .get_or_create_manifested(relation_key, state)
+            .await?
+            .with_cid_selection(cids)?;
+        Ok(Arc::new(provider))
+    }
+
+    pub(super) async fn validate_manifested_cid_identity(
+        &self,
+        relation_key: &str,
+        nlist: usize,
+        ntotal: usize,
+        cid_offsets: &[usize],
+        state: &dyn Session,
+    ) -> Result<()> {
+        self.get_or_create_manifested(relation_key, state)
+            .await?
+            .validate_identity(nlist, ntotal, cid_offsets)
     }
 
     pub(super) async fn deferred_parquet_provider(

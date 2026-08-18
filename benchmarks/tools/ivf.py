@@ -69,7 +69,7 @@ TRAINING_SAMPLING = {
     "parqdb": "streaming-reservoir-v2",
     "faiss": "uniform-without-replacement-v1",
 }
-PARQDB_POSTINGS_LAYOUT = "hive-cid-file-v1"
+PARQDB_POSTINGS_LAYOUT = "manifested-cid-bucket-rg-v1"
 PARQDB_ENCODINGS = ("lvq8", "lvq4", "source")
 FAISS_ENCODINGS = ("sq8", "sq4", "flat")
 

@@ -162,25 +162,40 @@ async fn projection_preserves_requested_order() {
 }
 
 #[tokio::test]
-async fn hive_writer_allows_postings_without_vectors() {
+async fn manifested_writer_allows_postings_without_vectors() {
     let temporary = TempDir::new().unwrap();
     let (store, location) = relation(&temporary, "postings");
     let expected = postings();
+    let input = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("cid_bucket", DataType::Int32, false),
+            Field::new("cid", DataType::Int32, false),
+            Field::new("key_1", DataType::Int64, false),
+        ])),
+        vec![
+            Arc::new(Int32Array::from(vec![0, 0, 1, 1])),
+            Arc::clone(expected.column(0)),
+            Arc::clone(expected.column(1)),
+        ],
+    )
+    .unwrap();
     let context = store.context();
-    context
-        .register_batch("postings", expected.clone())
-        .unwrap();
+    context.register_batch("postings", input).unwrap();
     let dataframe = context.table("postings").await.unwrap();
 
     store
-        .write_hive_cid_dataframe(&location, dataframe, 1, &ParquetWriterOptions::default())
+        .write_manifested_cid_dataframe(
+            &location,
+            dataframe,
+            1,
+            &[0, 1, 2],
+            expected.num_rows(),
+            &ParquetWriterOptions::default(),
+        )
         .await
         .unwrap();
 
-    let dataframe = store
-        .partitioned_dataframe(&location, vec![("cid".into(), DataType::Int32)])
-        .await
-        .unwrap();
+    let dataframe = store.dataframe(&location).await.unwrap();
     let schema = Arc::clone(dataframe.schema().inner());
     let actual = concat_batches(&schema, &dataframe.collect().await.unwrap()).unwrap();
     assert_eq!(actual.num_rows(), expected.num_rows());

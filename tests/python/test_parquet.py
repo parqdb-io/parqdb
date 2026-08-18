@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from itertools import pairwise
 from pathlib import Path
 
 import parqdb
@@ -10,6 +12,7 @@ from _support import (
     load_table_index,
     register_source,
     relation_files,
+    relation_root,
     write_vectors,
 )
 
@@ -87,7 +90,7 @@ def test_zstd_writer_options_reach_every_index_relation(tmp_path: Path) -> None:
     for role, reference in snapshot["index-relations"].items():
         paths = relation_files(reference, session.warehouse)
         if role == "ivf_postings":
-            assert len(paths) == 2
+            assert paths
         for path in paths:
             parquet_file = pq.ParquetFile(path)
             for row_group_index in range(parquet_file.metadata.num_row_groups):
@@ -126,7 +129,7 @@ def test_postings_row_groups_default_to_bounded_average_cluster_size(
     assert max(row_group.num_rows for row_group in row_groups) <= 8_192
 
 
-def test_postings_use_one_hive_partitioned_file_per_cluster(tmp_path: Path) -> None:
+def test_postings_group_leaf_clusters_into_root_bucket_files(tmp_path: Path) -> None:
     row_count = 512
     source = tmp_path / "vectors"
     source.mkdir()
@@ -156,8 +159,39 @@ def test_postings_use_one_hive_partitioned_file_per_cluster(tmp_path: Path) -> N
     ][0]
     postings = snapshot["index-relations"]["ivf_postings"]
     paths = relation_files(postings, session.warehouse)
-    assert len(paths) == 16
+    assert len(paths) == 4
     assert sum(pq.ParquetFile(path).metadata.num_rows for path in paths) == row_count
     assert {path.name for path in paths} == {"part-00000.parquet"}
-    assert {path.parent.name for path in paths} == {f"cid={cid}" for cid in range(16)}
-    assert all(pq.ParquetFile(path).schema_arrow.names == ["key_1"] for path in paths)
+    assert {path.parent.name for path in paths} == {
+        f"cid_bucket={bucket:06}" for bucket in range(4)
+    }
+    assert all(
+        pq.ParquetFile(path).schema_arrow.names == ["cid", "key_1"] for path in paths
+    )
+    manifest = json.loads(
+        (relation_root(postings, session.warehouse) / "manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    cid_offsets = manifest["cid-offsets"]
+    assert len(cid_offsets) == 5
+    assert cid_offsets[0] == 0
+    assert cid_offsets[-1] == 16
+    assert all(begin < end for begin, end in pairwise(cid_offsets))
+    assert [entry["path"] for entry in manifest["files"]] == [
+        str(path.relative_to(relation_root(postings, session.warehouse)))
+        for path in paths
+    ]
+    for path in paths:
+        bucket = int(path.parent.name.removeprefix("cid_bucket="))
+        parquet_file = pq.ParquetFile(path)
+        cid_index = parquet_file.schema_arrow.get_field_index("cid")
+        for row_group_index in range(parquet_file.metadata.num_row_groups):
+            statistics = (
+                parquet_file.metadata.row_group(row_group_index)
+                .column(cid_index)
+                .statistics
+            )
+            assert statistics is not None
+            assert statistics.min == statistics.max
+            assert cid_offsets[bucket] <= statistics.min < cid_offsets[bucket + 1]

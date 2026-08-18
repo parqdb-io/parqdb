@@ -38,15 +38,31 @@ Family schemas determine which mappings are used.
 
 ## IVF Postings Layout
 
-For IVF schema version `1`, an `ivf_postings` Parquet relation must use `cid`
-as a Hive-style partition column. Every non-empty cluster is stored as exactly
-one Parquet file below a directory named `cid=<value>`. The `cid` field is
-omitted from the Parquet file schema and reconstructed as a required `INT32`
-partition column by the reader.
+For IVF schema version `1`, an `ivf_postings` Parquet relation is discovered
+from exactly one `manifest.json` below the relation root. Readers must not list
+the relation prefix. The strict manifest contains `format-version`, `nlist`,
+`ntotal`, the hierarchy's `cid-offsets`, and the complete ordered `files`
+inventory. Each file entry contains `path`, `cid-bucket`, inclusive `min-cid`
+and `max-cid`, `rows`, and `size`.
 
-This layout lets a reader resolve a selected set of clusters to files while
-planning the scan. It does not change the logical `ivf_postings` schema in the
-IVF index specification.
+The canonical object paths are
+`cid_bucket=<six-digit-root-id>/part-<five-digit-sequence>.parquet`.
+`cid_bucket` is physical layout metadata and is not exposed as a relation
+column. Each file belongs to one hierarchical root and may contain multiple
+consecutive CIDs. The required physical `INT32` `cid` column remains in every
+Parquet file.
+
+Each row group contains exactly one non-null CID, although one CID may span
+consecutive row groups and files. Exact `cid` min/max statistics are required
+in every row group. A reader first intersects selected CIDs with manifest file
+ranges, then reads candidate footers and attaches an explicit row-group access
+plan. A residual `cid` predicate remains a correctness check; expression
+optimizer handling of a large `IN` list must not control physical pruning.
+
+Writers create all data files before creating `manifest.json` with
+create-if-absent semantics. File sizes and row totals in the manifest must
+match the completed objects. This layout does not change the logical
+`ivf_postings` schema in the IVF index specification.
 
 ## Relation Reference
 

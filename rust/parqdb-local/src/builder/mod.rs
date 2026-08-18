@@ -56,6 +56,7 @@ pub(crate) struct IvfTables {
     pub nlist: usize,
     pub ntotal: usize,
     pub centroids: RecordBatch,
+    pub roots: RecordBatch,
     pub postings: RecordBatch,
 }
 
@@ -90,6 +91,8 @@ pub(crate) struct TrainedIvf {
     nlist: usize,
     ntotal: usize,
     centroids: Arc<[f32]>,
+    root_centroids: Arc<[f32]>,
+    cid_offsets: Arc<[usize]>,
 }
 
 struct AssignIvf {
@@ -97,6 +100,12 @@ struct AssignIvf {
     signature: Signature,
     dimension: usize,
     navigator: Arc<CentroidNavigator>,
+}
+
+struct CidBucket {
+    id: u64,
+    signature: Signature,
+    cid_offsets: Arc<[usize]>,
 }
 
 struct RequireNonNull {
@@ -137,6 +146,84 @@ impl Eq for AssignIvf {}
 impl Hash for AssignIvf {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.id.hash(state);
+    }
+}
+
+impl std::fmt::Debug for CidBucket {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CidBucket")
+            .field("id", &self.id)
+            .field("roots", &self.cid_offsets.len().saturating_sub(1))
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for CidBucket {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for CidBucket {}
+
+impl Hash for CidBucket {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
+impl ScalarUDFImpl for CidBucket {
+    fn name(&self) -> &'static str {
+        "parqdb_cid_bucket"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _argument_types: &[DataType]) -> datafusion::common::Result<DataType> {
+        Ok(DataType::Int32)
+    }
+
+    fn return_field_from_args(
+        &self,
+        _arguments: ReturnFieldArgs<'_>,
+    ) -> datafusion::common::Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Int32, false)))
+    }
+
+    fn invoke_with_args(
+        &self,
+        arguments: ScalarFunctionArgs,
+    ) -> datafusion::common::Result<ColumnarValue> {
+        let arrays = ColumnarValue::values_to_arrays(&arguments.args)?;
+        let cids = arrays
+            .first()
+            .and_then(|array| array.as_any().downcast_ref::<Int32Array>())
+            .ok_or_else(|| DataFusionError::Execution("cid must be required int32".into()))?;
+        if cids.null_count() != 0 {
+            return Err(DataFusionError::Execution(
+                "cid must be required int32".into(),
+            ));
+        }
+        let values = cids
+            .values()
+            .iter()
+            .map(|cid| {
+                let cid = usize::try_from(*cid)
+                    .map_err(|_| DataFusionError::Execution("cid must be non-negative".into()))?;
+                let boundary = self.cid_offsets.partition_point(|offset| *offset <= cid);
+                if boundary == 0 || boundary == self.cid_offsets.len() {
+                    return Err(DataFusionError::Execution(
+                        "cid is outside the hierarchical leaf range".into(),
+                    ));
+                }
+                i32::try_from(boundary - 1)
+                    .map_err(|_| DataFusionError::Execution("cid_bucket exceeds int32".into()))
+            })
+            .collect::<datafusion::common::Result<Vec<_>>>()?;
+        Ok(ColumnarValue::Array(Arc::new(Int32Array::from(values))))
     }
 }
 
@@ -424,15 +511,31 @@ pub(crate) fn train_prepared_ivf(
             let _ = progress.advance(assigned_rows);
         },
     )?;
+    let hierarchy = model.hierarchy.ok_or_else(|| {
+        Error::InvalidSchema("default IVF training did not produce a hierarchy".into())
+    })?;
+    if let Some(fallback) = hierarchy.fallback {
+        eprintln!(
+            "ParqDB warning: hierarchical root {} has {} training rows but requires at least {}; falling back to flat leaf training with a synthetic hierarchy",
+            fallback.root, fallback.available_rows, fallback.required_rows
+        );
+    }
     Ok(TrainedIvf {
         dimension: prepared.dimension,
         nlist: prepared.nlist,
         ntotal: prepared.ntotal,
         centroids: model.centroids.into(),
+        root_centroids: hierarchy.root_centroids.into(),
+        cid_offsets: hierarchy.cid_offsets.into(),
     })
 }
 
-pub(crate) fn reused_ivf(prepared: &PreparedIvf, centroids: Vec<f32>) -> Result<TrainedIvf> {
+pub(crate) fn reused_ivf(
+    prepared: &PreparedIvf,
+    centroids: Vec<f32>,
+    root_centroids: Vec<f32>,
+    cid_offsets: Vec<usize>,
+) -> Result<TrainedIvf> {
     let expected = prepared
         .dimension
         .checked_mul(prepared.nlist)
@@ -442,27 +545,61 @@ pub(crate) fn reused_ivf(prepared: &PreparedIvf, centroids: Vec<f32>) -> Result<
             "IVF centroid relation does not match the build descriptor".into(),
         ));
     }
+    if cid_offsets.len() < 2
+        || cid_offsets.first() != Some(&0)
+        || cid_offsets.last() != Some(&prepared.nlist)
+        || cid_offsets.windows(2).any(|pair| pair[0] >= pair[1])
+    {
+        return Err(Error::InvalidSchema(
+            "IVF root CID offsets do not form a complete hierarchy".into(),
+        ));
+    }
+    let root_count = cid_offsets.len() - 1;
+    let expected_roots = prepared
+        .dimension
+        .checked_mul(root_count)
+        .ok_or_else(|| Error::InvalidSchema("IVF root centroid shape overflows usize".into()))?;
+    if root_centroids.len() != expected_roots
+        || root_centroids.iter().any(|value| !value.is_finite())
+    {
+        return Err(Error::InvalidSchema(
+            "IVF root centroid relation does not match the build descriptor".into(),
+        ));
+    }
     Ok(TrainedIvf {
         dimension: prepared.dimension,
         nlist: prepared.nlist,
         ntotal: prepared.ntotal,
         centroids: centroids.into(),
+        root_centroids: root_centroids.into(),
+        cid_offsets: cid_offsets.into(),
     })
 }
 
 pub(crate) async fn write_ivf_centroids(
     parquet: &ParquetStore,
-    location: &str,
+    centroids_location: &str,
+    roots_location: &str,
     trained: &TrainedIvf,
     writer_options: &ParquetWriterOptions,
     progress: &LocalBuildProgress,
 ) -> Result<()> {
-    let centroid_table = centroids_batch(&trained.centroids, trained.dimension)?;
-    progress.begin(BuildPhase::WritingCentroids, 1);
+    let centroid_table =
+        centroids_batch(&trained.centroids, trained.dimension, &trained.cid_offsets)?;
+    let roots_table = roots_batch(
+        &trained.root_centroids,
+        trained.dimension,
+        &trained.cid_offsets,
+    )?;
+    progress.begin(BuildPhase::WritingCentroids, 2);
     parquet
-        .write_batch(location, &centroid_table, writer_options)
+        .write_batch(centroids_location, &centroid_table, writer_options)
         .await?;
     progress.set_completed(1);
+    parquet
+        .write_batch(roots_location, &roots_table, writer_options)
+        .await?;
+    progress.set_completed(2);
     Ok(())
 }
 
@@ -595,12 +732,20 @@ async fn write_postings(
         parallel,
     )?;
     let (mut state, plan) = postings.into_parts();
-    state.config_mut().options_mut().execution.target_partitions = writers;
+    state.config_mut().options_mut().execution.target_partitions = parallel.thread_count();
     state.config_mut().options_mut().execution.batch_size = writer_options.write_batch_rows;
     let postings = DataFrame::new(state, plan);
     parquet
-        .write_hive_cid_dataframe(output_location, postings, writers, &writer_options)
+        .write_manifested_cid_dataframe(
+            output_location,
+            postings,
+            writers,
+            &trained.cid_offsets,
+            trained.ntotal,
+            &writer_options,
+        )
         .await
+        .map(|_| ())
 }
 
 fn project_postings(
@@ -662,11 +807,15 @@ fn project_postings(
     let postings = source
         .repartition(Partitioning::RoundRobinBatch(parallel.thread_count()))?
         .select(expressions)?;
+    let postings = postings.with_column(
+        "cid_bucket",
+        cid_bucket_udf(Arc::clone(&trained.cid_offsets)).call(vec![col("cid")]),
+    )?;
     let postings = if matches!(
         posting_encoding,
         PostingEncoding::Lvq4 | PostingEncoding::Lvq8
     ) {
-        let mut output = vec![col("cid")];
+        let mut output = vec![col("cid_bucket"), col("cid")];
         output.extend((1..=source_key_fields.len()).map(|index| col(format!("key_{index}"))));
         output.extend([
             get_field(col("__parqdb_lvq"), "offset").alias("offset"),
@@ -755,6 +904,15 @@ fn assignment_udf(
         dimension: trained.dimension,
         navigator,
     }))
+}
+
+fn cid_bucket_udf(cid_offsets: Arc<[usize]>) -> ScalarUDF {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+    ScalarUDF::new_from_impl(CidBucket {
+        id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+        signature: Signature::exact(vec![DataType::Int32], Volatility::Immutable),
+        cid_offsets,
+    })
 }
 
 fn require_non_null_udf(data_type: DataType, vector: bool) -> ScalarUDF {
@@ -908,10 +1066,14 @@ pub(crate) async fn build_ivf_with_options(
     let output_root = Url::from_directory_path(output_root)
         .map_err(|()| Error::InvalidArgument("output path is not absolute".into()))?;
     let centroids_location = child_location(output_root.as_str(), "ivf_centroids", true)?;
+    let roots_location = child_location(output_root.as_str(), "ivf_roots", true)?;
     let postings_location = child_location(output_root.as_str(), "ivf_postings", true)?;
     let parquet = ParquetStore::new(StorageRegistry::default());
     parquet
         .write_batch(&centroids_location, &tables.centroids, writer_options)
+        .await?;
+    parquet
+        .write_batch(&roots_location, &tables.roots, writer_options)
         .await?;
     let postings_writer_options =
         resolved_postings_writer_options(writer_options, tables.ntotal, tables.nlist);
@@ -992,12 +1154,16 @@ pub(crate) fn build_ivf_tables(
     options.seed = DEFAULT_SEED;
     let parallel = ParalliteContext::default();
     let model = fit_lloyd_kmeans(&training, dimension, &parallel, options)?;
+    let hierarchy = model.hierarchy.as_ref().ok_or_else(|| {
+        Error::InvalidSchema("default IVF training did not produce a hierarchy".into())
+    })?;
     let cells = assign_to_centroids(vectors, dimension, &model.centroids, &parallel)?;
     Ok(IvfTables {
         dimension,
         nlist,
         ntotal,
-        centroids: centroids_batch(&model.centroids, dimension)?,
+        centroids: centroids_batch(&model.centroids, dimension, &hierarchy.cid_offsets)?,
+        roots: roots_batch(&hierarchy.root_centroids, dimension, &hierarchy.cid_offsets)?,
         postings: postings_batch(&cells, &key_arrays, None)?,
     })
 }
@@ -1024,11 +1190,28 @@ fn validate_request(vector_field: &str, source_key_fields: &[String], nlist: usi
     Ok(())
 }
 
-fn centroids_batch(centroids: &[f32], dimension: usize) -> Result<RecordBatch> {
+fn centroids_batch(
+    centroids: &[f32],
+    dimension: usize,
+    cid_offsets: &[usize],
+) -> Result<RecordBatch> {
     let nlist = centroids.len() / dimension;
     let cids = Int32Array::from_iter_values(
         (0..nlist).map(|cid| i32::try_from(cid).expect("nlist was validated as int32")),
     );
+    let cid_buckets = Int32Array::from_iter_values(cid_offsets.windows(2).enumerate().flat_map(
+        |(bucket, range)| {
+            std::iter::repeat_n(
+                i32::try_from(bucket).expect("root count is bounded by nlist"),
+                range[1] - range[0],
+            )
+        },
+    ));
+    if cid_buckets.len() != nlist {
+        return Err(Error::InvalidSchema(
+            "IVF CID offsets do not cover every leaf centroid".into(),
+        ));
+    }
     let mut builder = ListBuilder::new(Float32Builder::new()).with_field(Arc::new(Field::new(
         "element",
         DataType::Float32,
@@ -1041,11 +1224,70 @@ fn centroids_batch(centroids: &[f32], dimension: usize) -> Result<RecordBatch> {
     let centroid_array = builder.finish();
     let schema = Arc::new(Schema::new(vec![
         Field::new("cid", DataType::Int32, false),
+        Field::new("cid_bucket", DataType::Int32, false),
         Field::new("centroid", centroid_array.data_type().clone(), false),
     ]));
     Ok(RecordBatch::try_new(
         schema,
-        vec![Arc::new(cids), Arc::new(centroid_array)],
+        vec![
+            Arc::new(cids),
+            Arc::new(cid_buckets),
+            Arc::new(centroid_array),
+        ],
+    )?)
+}
+
+fn roots_batch(
+    root_centroids: &[f32],
+    dimension: usize,
+    cid_offsets: &[usize],
+) -> Result<RecordBatch> {
+    let root_count = cid_offsets.len().checked_sub(1).ok_or_else(|| {
+        Error::InvalidSchema("IVF CID offsets must contain at least two entries".into())
+    })?;
+    if root_centroids.len() != root_count.saturating_mul(dimension) {
+        return Err(Error::InvalidSchema(
+            "IVF root centroid shape does not match CID offsets".into(),
+        ));
+    }
+    let buckets = Int32Array::from_iter_values(
+        (0..root_count)
+            .map(|bucket| i32::try_from(bucket).expect("root count is bounded by nlist")),
+    );
+    let cid_begin = Int32Array::from_iter_values(
+        cid_offsets[..root_count]
+            .iter()
+            .map(|offset| i32::try_from(*offset).expect("nlist was validated as int32")),
+    );
+    let cid_end = Int32Array::from_iter_values(
+        cid_offsets[1..]
+            .iter()
+            .map(|offset| i32::try_from(*offset).expect("nlist was validated as int32")),
+    );
+    let mut builder = ListBuilder::new(Float32Builder::new()).with_field(Arc::new(Field::new(
+        "element",
+        DataType::Float32,
+        false,
+    )));
+    for centroid in root_centroids.chunks_exact(dimension) {
+        builder.values().append_slice(centroid);
+        builder.append(true);
+    }
+    let centroid_array = builder.finish();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("cid_bucket", DataType::Int32, false),
+        Field::new("cid_begin", DataType::Int32, false),
+        Field::new("cid_end", DataType::Int32, false),
+        Field::new("centroid", centroid_array.data_type().clone(), false),
+    ]));
+    Ok(RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(buckets),
+            Arc::new(cid_begin),
+            Arc::new(cid_end),
+            Arc::new(centroid_array),
+        ],
     )?)
 }
 

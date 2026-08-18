@@ -1,0 +1,19 @@
+{
+  "cid-offsets": [
+    0,
+    2
+  ],
+  "files": [
+    {
+      "cid-bucket": 0,
+      "max-cid": 1,
+      "min-cid": 0,
+      "path": "cid_bucket=000000/part-00000.parquet",
+      "rows": 3,
+      "size": 2056
+    }
+  ],
+  "format-version": 1,
+  "nlist": 2,
+  "ntotal": 3
+}
