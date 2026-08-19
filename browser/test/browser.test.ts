@@ -94,7 +94,7 @@ describe('HTTP Range query', () => {
     ])
   })
 
-  test('serves repeated aligned ranges from a bounded in-memory cache', async () => {
+  test('serves repeated and contained ranges without expanding cold reads', async () => {
     requests.length = 0
     const path = 'centroids.parquet'
     const bytes = await readFile(resolve(fixtureRoot, path))
@@ -103,19 +103,19 @@ describe('HTTP Range query', () => {
       rangeCacheBytes: 128,
     })
 
-    const first = await file.slice(10, 20)
+    const first = await file.slice(10, 30)
     const repeated = await file.slice(10, 20)
     const overlapping = await file.slice(16, 24)
 
-    expect(new Uint8Array(first)).toEqual(Uint8Array.from(bytes.subarray(10, 20)))
+    expect(new Uint8Array(first)).toEqual(Uint8Array.from(bytes.subarray(10, 30)))
     expect(new Uint8Array(repeated)).toEqual(Uint8Array.from(bytes.subarray(10, 20)))
     expect(new Uint8Array(overlapping)).toEqual(Uint8Array.from(bytes.subarray(16, 24)))
     expect(requests.filter(request => request.path === path)).toEqual([
-      { path, range: 'bytes=0-127' },
+      { path, range: 'bytes=10-29' },
     ])
   })
 
-  test('evicts least-recently-used chunks at the configured byte budget', async () => {
+  test('evicts least-recently-used ranges at the configured byte budget', async () => {
     requests.length = 0
     const path = 'centroids.parquet'
     const bytes = await readFile(resolve(fixtureRoot, path))
@@ -124,18 +124,18 @@ describe('HTTP Range query', () => {
       rangeCacheBytes: 128,
     })
 
-    await file.slice(0, 8)
-    await file.slice(128, 136)
+    await file.slice(0, 80)
+    await file.slice(128, 208)
     await file.slice(0, 8)
 
     expect(requests.filter(request => request.path === path)).toEqual([
-      { path, range: 'bytes=0-127' },
-      { path, range: 'bytes=128-255' },
-      { path, range: 'bytes=0-127' },
+      { path, range: 'bytes=0-79' },
+      { path, range: 'bytes=128-207' },
+      { path, range: 'bytes=0-7' },
     ])
   })
 
-  test('deduplicates in-flight chunks across buffers sharing one cache', async () => {
+  test('deduplicates covered in-flight ranges across buffers sharing one cache', async () => {
     requests.length = 0
     const path = 'centroids.parquet'
     const bytes = await readFile(resolve(fixtureRoot, path))
@@ -144,10 +144,10 @@ describe('HTTP Range query', () => {
     const first = new HttpRangeBuffer(new URL(`${baseUrl}/${path}`), bytes.byteLength, options)
     const second = new HttpRangeBuffer(new URL(`${baseUrl}/${path}`), bytes.byteLength, options)
 
-    await Promise.all([first.slice(0, 8), second.slice(16, 24)])
+    await Promise.all([first.slice(0, 24), second.slice(16, 24)])
 
     expect(requests.filter(request => request.path === path)).toEqual([
-      { path, range: 'bytes=0-127' },
+      { path, range: 'bytes=0-23' },
     ])
   })
 
