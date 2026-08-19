@@ -470,6 +470,15 @@ manifests and Parquet metadata by the manifest URL plus object path. A client
 must not treat a mutable Hugging Face branch URL or overwriteable S3 prefix as
 an immutable cache key.
 
+The browser client additionally keeps a byte-bounded in-memory LRU below the
+Parquet reader. Its default 32 MiB budget is shared by every object opened by
+one client, uses 256 KiB aligned chunks keyed by immutable object URL, declared
+size, and byte offset, and deduplicates in-flight loads. Partial HTTP requests
+still bypass the browser's implicit `206` cache; an LRU hit is resolved before
+`fetch` is called. Applications may supply one cache to both the index and a
+manifested source relation so the combined working set remains under one
+budget.
+
 Whole-object SHA-256 digests support publication validation, mirroring, and
 full-download verification. A range reader cannot prove a whole-object digest
 from one fragment; it still validates HTTP range boundaries, expected object

@@ -20,3 +20,12 @@ of the same object are coalesced into fewer HTTP requests when their total gaps
 fit within 64 KiB. Set `maxRangeGapBytes` when opening the index to tune that
 bounded over-read, or set it to zero to merge only overlapping and adjacent
 ranges.
+
+Partial object reads also use a 32 MiB in-memory cache shared by all postings
+files opened by one `ParqDB` instance. The cache stores immutable, 256 KiB
+aligned chunks, deduplicates in-flight loads, and evicts least-recently-used
+chunks at the byte budget. A cache hit does not call `fetch`. Set
+`rangeCacheBytes` when opening the index to change the budget, or set it to zero
+to disable this cache. The underlying partial requests continue to use
+`cache: 'no-store'` so correctness does not depend on browser-specific caching
+of `206 Partial Content` responses.
