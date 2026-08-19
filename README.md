@@ -40,6 +40,10 @@ on billion-scale multimodal data, with Parquet storage and Arrow-native executio
   <sub>IVF-LVQ8 over HTTP Range · Parquet · WebAssembly · no query server</sub>
 </p>
 
+<p align="center">
+  <sub>⭐ If ParqDB is useful, star the repo to help more people find it.</sub>
+</p>
+
 **Key Features**
 
 - **Billion-scale search in bounded memory.** Search one billion vectors
