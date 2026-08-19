@@ -22,8 +22,9 @@ export interface HttpRangeCacheStats {
   evictions: number
 }
 
-interface CachedChunk {
+interface CachedRange {
   key: string
+  objectKey: string
   start: number
   end: number
   bytes: Promise<ArrayBuffer>
@@ -32,36 +33,27 @@ interface CachedChunk {
 }
 
 const DEFAULT_RANGE_CACHE_BYTES = 32 * 1024 * 1024
-const DEFAULT_RANGE_CACHE_CHUNK_BYTES = 256 * 1024
 
-/** A byte-bounded LRU of aligned ranges from immutable HTTP objects. */
+/** A byte-bounded LRU of exact ranges from immutable HTTP objects. */
 export class HttpRangeCache {
-  private readonly chunks = new Map<string, CachedChunk>()
-  private readonly chunkBytes: number
+  private readonly ranges = new Map<string, CachedRange>()
   private sizeBytes = 0
   private clock = 0
   private hitCount = 0
   private missCount = 0
   private evictionCount = 0
 
-  constructor(
-    readonly capacityBytes = DEFAULT_RANGE_CACHE_BYTES,
-    chunkBytes = DEFAULT_RANGE_CACHE_CHUNK_BYTES,
-  ) {
+  constructor(readonly capacityBytes = DEFAULT_RANGE_CACHE_BYTES) {
     if (!Number.isSafeInteger(capacityBytes) || capacityBytes < 0) {
       throw new RangeError('rangeCacheBytes must be a non-negative portable integer')
     }
-    if (!Number.isSafeInteger(chunkBytes) || chunkBytes <= 0) {
-      throw new RangeError('HTTP Range cache chunk size must be a positive portable integer')
-    }
-    this.chunkBytes = capacityBytes === 0 ? chunkBytes : Math.min(chunkBytes, capacityBytes)
   }
 
   stats(): HttpRangeCacheStats {
     return {
       capacityBytes: this.capacityBytes,
       sizeBytes: this.sizeBytes,
-      entries: this.chunks.size,
+      entries: this.ranges.size,
       hits: this.hitCount,
       misses: this.missCount,
       evictions: this.evictionCount,
@@ -73,104 +65,63 @@ export class HttpRangeCache {
     objectSize: number,
     start: number,
     end: number,
-    maxFetchBytes: number,
     load: (start: number, end: number) => Promise<ArrayBuffer>,
   ): Promise<ArrayBuffer> {
-    if (this.capacityBytes === 0 || maxFetchBytes < this.chunkBytes) return load(start, end)
+    if (this.capacityBytes === 0) return load(start, end)
     const objectKey = `${url.href}\u0000${objectSize}`
-    const specs: Array<{ key: string; start: number; end: number }> = []
-    for (let chunkStart = Math.floor(start / this.chunkBytes) * this.chunkBytes; chunkStart < end; chunkStart += this.chunkBytes) {
-      specs.push({
-        key: `${objectKey}\u0000${chunkStart}`,
-        start: chunkStart,
-        end: Math.min(chunkStart + this.chunkBytes, objectSize),
-      })
+    let covering: CachedRange | undefined
+    for (const entry of this.ranges.values()) {
+      if (
+        entry.objectKey === objectKey &&
+        entry.start <= start &&
+        entry.end >= end &&
+        (covering === undefined || entry.end - entry.start < covering.end - covering.start)
+      ) covering = entry
     }
+    if (covering !== undefined) {
+      this.hitCount += 1
+      covering.lastUsed = ++this.clock
+      const bytes = await covering.bytes
+      return bytes.slice(start - covering.start, end - covering.start)
+    }
+    this.missCount += 1
+    const length = end - start
+    if (length > this.capacityBytes) return load(start, end)
 
-    let missingStart = -1
-    let missingEnd = -1
-    let hits = 0
-    const flushMissing = () => {
-      if (missingStart < 0) return
-      this.loadChunks(objectKey, objectSize, missingStart, missingEnd, load)
-      missingStart = -1
-      missingEnd = -1
+    const key = `${objectKey}\u0000${start}\u0000${end}`
+    const entry: CachedRange = {
+      key,
+      objectKey,
+      start,
+      end,
+      bytes: Promise.resolve().then(() => load(start, end)),
+      settled: false,
+      lastUsed: ++this.clock,
     }
-    for (const spec of specs) {
-      if (this.chunks.has(spec.key)) {
-        hits += 1
-        flushMissing()
-        continue
-      }
-      if (missingStart < 0) {
-        missingStart = spec.start
-        missingEnd = spec.end
-      } else if (spec.end - missingStart <= maxFetchBytes) {
-        missingEnd = spec.end
-      } else {
-        flushMissing()
-        missingStart = spec.start
-        missingEnd = spec.end
-      }
-    }
-    flushMissing()
-    this.hitCount += hits
-
-    const entries = specs.map(spec => {
-      const entry = this.chunks.get(spec.key)
-      if (entry === undefined) throw new Error('HTTP Range cache failed to admit an in-flight chunk')
-      entry.lastUsed = ++this.clock
-      return entry
-    })
-    const chunks = await Promise.all(entries.map(entry => entry.bytes))
-    const result = new Uint8Array(end - start)
-    chunks.forEach((bytes, position) => {
-      const spec = specs[position]!
-      const copyStart = Math.max(start, spec.start)
-      const copyEnd = Math.min(end, spec.end)
-      result.set(new Uint8Array(bytes, copyStart - spec.start, copyEnd - copyStart), copyStart - start)
-    })
-    return result.buffer
-  }
-
-  private loadChunks(
-    objectKey: string,
-    objectSize: number,
-    start: number,
-    end: number,
-    load: (start: number, end: number) => Promise<ArrayBuffer>,
-  ): void {
-    const loading = Promise.resolve().then(() => load(start, end))
-    for (let chunkStart = start; chunkStart < end; chunkStart += this.chunkBytes) {
-      const chunkEnd = Math.min(chunkStart + this.chunkBytes, objectSize)
-      const key = `${objectKey}\u0000${chunkStart}`
-      if (this.chunks.has(key)) continue
-      const entry: CachedChunk = {
-        key,
-        start: chunkStart,
-        end: chunkEnd,
-        bytes: loading.then(bytes => bytes.slice(chunkStart - start, chunkEnd - start)),
-        settled: false,
-        lastUsed: ++this.clock,
-      }
-      this.chunks.set(key, entry)
-      this.sizeBytes += chunkEnd - chunkStart
-      this.missCount += 1
-      void entry.bytes.then(
-        () => {
-          if (this.chunks.get(key) !== entry) return
-          entry.settled = true
-          this.evict()
-        },
-        () => this.remove(entry),
-      )
-    }
+    this.ranges.set(key, entry)
+    this.sizeBytes += length
+    void entry.bytes.then(
+      () => {
+        if (this.ranges.get(key) !== entry) return
+        entry.settled = true
+        for (const candidate of this.ranges.values()) {
+          if (
+            candidate !== entry && candidate.settled &&
+            candidate.objectKey === objectKey &&
+            candidate.start >= start && candidate.end <= end
+          ) this.remove(candidate)
+        }
+        this.evict()
+      },
+      () => this.remove(entry),
+    )
+    return entry.bytes
   }
 
   private evict(): void {
     while (this.sizeBytes > this.capacityBytes) {
-      let oldest: CachedChunk | undefined
-      for (const entry of this.chunks.values()) {
+      let oldest: CachedRange | undefined
+      for (const entry of this.ranges.values()) {
         if (entry.settled && (oldest === undefined || entry.lastUsed < oldest.lastUsed)) oldest = entry
       }
       if (oldest === undefined) return
@@ -179,9 +130,9 @@ export class HttpRangeCache {
     }
   }
 
-  private remove(entry: CachedChunk): void {
-    if (this.chunks.get(entry.key) !== entry) return
-    this.chunks.delete(entry.key)
+  private remove(entry: CachedRange): void {
+    if (this.ranges.get(entry.key) !== entry) return
+    this.ranges.delete(entry.key)
     this.sizeBytes -= entry.end - entry.start
   }
 
@@ -295,7 +246,6 @@ export class HttpRangeBuffer implements AsyncBuffer {
           this.byteLength,
           range.start,
           range.end,
-          maxRangeBytes,
           (start, end) => this.fetchSlice(start, end, true),
         )
         for (const read of range.reads) {

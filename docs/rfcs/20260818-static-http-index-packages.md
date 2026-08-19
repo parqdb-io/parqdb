@@ -472,12 +472,13 @@ an immutable cache key.
 
 The browser client additionally keeps a byte-bounded in-memory LRU below the
 Parquet reader. Its default 32 MiB budget is shared by every object opened by
-one client, uses 256 KiB aligned chunks keyed by immutable object URL, declared
-size, and byte offset, and deduplicates in-flight loads. Partial HTTP requests
-still bypass the browser's implicit `206` cache; an LRU hit is resolved before
-`fetch` is called. Applications may supply one cache to both the index and a
-manifested source relation so the combined working set remains under one
-budget.
+one client. It stores validated, coalesced ranges exactly as fetched, keyed by
+immutable object URL, declared size, start, and end, and deduplicates covered
+in-flight loads. Cache admission never expands a cold HTTP request. Partial
+HTTP requests still bypass the browser's implicit `206` cache; a covering LRU
+hit is resolved before `fetch` is called. Applications may supply one cache to
+both the index and a manifested source relation so the combined working set
+remains under one budget.
 
 Whole-object SHA-256 digests support publication validation, mirroring, and
 full-download verification. A range reader cannot prove a whole-object digest
