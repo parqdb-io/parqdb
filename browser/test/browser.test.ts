@@ -5,7 +5,7 @@ import { resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 
 import { ParqDB } from '../src/index.js'
-import { HttpRangeBuffer } from '../src/http.js'
+import { HttpRangeBuffer, HttpRangeCache } from '../src/http.js'
 import { parseManifest } from '../src/manifest.js'
 
 const fixtureRoot = resolve('../spec/fixtures/v1/valid/lvq8')
@@ -74,6 +74,7 @@ describe('HTTP Range query', () => {
     const file = new HttpRangeBuffer(new URL(`${baseUrl}/${path}`), bytes.byteLength, {
       allowHttp: true,
       maxRangeGapBytes: 8,
+      rangeCacheBytes: 0,
     })
 
     const [first, second, third, distant] = await Promise.all([
@@ -90,6 +91,63 @@ describe('HTTP Range query', () => {
     expect(requests.filter(request => request.path === path)).toEqual([
       { path, range: 'bytes=0-29' },
       { path, range: 'bytes=200-209' },
+    ])
+  })
+
+  test('serves repeated aligned ranges from a bounded in-memory cache', async () => {
+    requests.length = 0
+    const path = 'centroids.parquet'
+    const bytes = await readFile(resolve(fixtureRoot, path))
+    const file = new HttpRangeBuffer(new URL(`${baseUrl}/${path}`), bytes.byteLength, {
+      allowHttp: true,
+      rangeCacheBytes: 128,
+    })
+
+    const first = await file.slice(10, 20)
+    const repeated = await file.slice(10, 20)
+    const overlapping = await file.slice(16, 24)
+
+    expect(new Uint8Array(first)).toEqual(Uint8Array.from(bytes.subarray(10, 20)))
+    expect(new Uint8Array(repeated)).toEqual(Uint8Array.from(bytes.subarray(10, 20)))
+    expect(new Uint8Array(overlapping)).toEqual(Uint8Array.from(bytes.subarray(16, 24)))
+    expect(requests.filter(request => request.path === path)).toEqual([
+      { path, range: 'bytes=0-127' },
+    ])
+  })
+
+  test('evicts least-recently-used chunks at the configured byte budget', async () => {
+    requests.length = 0
+    const path = 'centroids.parquet'
+    const bytes = await readFile(resolve(fixtureRoot, path))
+    const file = new HttpRangeBuffer(new URL(`${baseUrl}/${path}`), bytes.byteLength, {
+      allowHttp: true,
+      rangeCacheBytes: 128,
+    })
+
+    await file.slice(0, 8)
+    await file.slice(128, 136)
+    await file.slice(0, 8)
+
+    expect(requests.filter(request => request.path === path)).toEqual([
+      { path, range: 'bytes=0-127' },
+      { path, range: 'bytes=128-255' },
+      { path, range: 'bytes=0-127' },
+    ])
+  })
+
+  test('deduplicates in-flight chunks across buffers sharing one cache', async () => {
+    requests.length = 0
+    const path = 'centroids.parquet'
+    const bytes = await readFile(resolve(fixtureRoot, path))
+    const rangeCache = new HttpRangeCache(128)
+    const options = { allowHttp: true, rangeCache }
+    const first = new HttpRangeBuffer(new URL(`${baseUrl}/${path}`), bytes.byteLength, options)
+    const second = new HttpRangeBuffer(new URL(`${baseUrl}/${path}`), bytes.byteLength, options)
+
+    await Promise.all([first.slice(0, 8), second.slice(16, 24)])
+
+    expect(requests.filter(request => request.path === path)).toEqual([
+      { path, range: 'bytes=0-127' },
     ])
   })
 
@@ -110,6 +168,11 @@ describe('HTTP Range query', () => {
     expect(requests.filter(request => request.path === 'centroids.parquet')).toEqual([
       { path: 'centroids.parquet' },
     ])
+
+    const requestCount = requests.length
+    const repeated = await index.search([0, 0, 0], { nprobe: 1, k: 2 })
+    expect(repeated.map(hit => hit.document_id)).toEqual(['a', 'b'])
+    expect(requests).toHaveLength(requestCount)
   })
 
   test('returns all available candidates when k exceeds the index size', async () => {

@@ -2,7 +2,7 @@ import { parquetMetadata, parquetMetadataAsync, parquetReadObjects } from 'hypar
 import type { FileMetaData, RowGroup } from 'hyparquet'
 import { compressors } from 'hyparquet-compressors'
 
-import { HttpRangeBuffer, fetchManifest, objectUrl } from './http.js'
+import { HttpRangeBuffer, HttpRangeCache, fetchManifest, objectUrl } from './http.js'
 import type { HttpOptions } from './http.js'
 import { WasmKernel } from './kernel.js'
 import type { WasmSource } from './kernel.js'
@@ -11,6 +11,8 @@ import type { PackageManifest, PostingsFile, SourceKeyField } from './manifest.j
 
 export type SourceKeyValue = boolean | number | bigint | string | Date | Uint8Array
 export type SearchHit = Record<string, SourceKeyValue | number> & { _distance: number }
+export { HttpRangeCache } from './http.js'
+export type { HttpRangeCacheStats } from './http.js'
 
 export interface OpenOptions extends HttpOptions {
   wasm?: WasmSource
@@ -71,6 +73,7 @@ export class ParqDB {
     if (!url.pathname.endsWith('/manifest.json') && !url.pathname.endsWith('manifest.json')) {
       throw new Error('ParqDB.open requires the exact top-level manifest.json URL')
     }
+    const rangeCache = options.rangeCache ?? new HttpRangeCache(options.rangeCacheBytes)
     const manifest = parseManifest(await fetchManifest(url, options))
     if (manifest.postings.files.length + 2 > (options.maxObjects ?? 1_000_000)) {
       throw new Error('package object count exceeds client limit')
@@ -82,7 +85,11 @@ export class ParqDB {
       throw new Error('package nlist exceeds client limit')
     }
     const kernel = await WasmKernel.load(options.wasm)
-    return new ParqDB(manifest, url, kernel, options)
+    const httpOptions: HttpOptions = {
+      ...options,
+      rangeCache,
+    }
+    return new ParqDB(manifest, url, kernel, httpOptions)
   }
 
   async search(query: Iterable<number>, options: SearchOptions): Promise<SearchHit[]> {
