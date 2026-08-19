@@ -19,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
+      browser_only: ${{ steps.scope.outputs.browser_only }}
+      browser_changed: ${{ steps.scope.outputs.browser_changed }}
       base: ${{ steps.scope.outputs.base }}
 
     steps:
@@ -39,17 +41,25 @@ jobs:
           fi
 
           docs_only=true
+          browser_only=true
+          browser_changed=false
           while IFS= read -r -d '' path; do
             case "$path" in
               *.md|assets/*|.github/workflows/ci.yml) ;;
+              browser/*|crates/parqdb-browser-kernels/*)
+                docs_only=false
+                browser_changed=true
+                ;;
               *)
                 docs_only=false
-                break
+                browser_only=false
                 ;;
             esac
           done < <(git diff --name-only -z "$base" "$GITHUB_SHA")
 
           echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+          echo "browser_only=$browser_only" >> "$GITHUB_OUTPUT"
+          echo "browser_changed=$browser_changed" >> "$GITHUB_OUTPUT"
           echo "base=$base" >> "$GITHUB_OUTPUT"
 
   docs:
@@ -87,7 +97,7 @@ jobs:
   python:
     name: Python checks
     needs: scope
-    if: needs.scope.outputs.docs_only != 'true'
+    if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.browser_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -125,7 +135,7 @@ jobs:
   rust:
     name: Rust checks
     needs: scope
-    if: needs.scope.outputs.docs_only != 'true'
+    if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.browser_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -146,3 +156,40 @@ jobs:
 
       - name: Run Rust checks
         run: make check-rust
+
+  browser:
+    name: Browser checks
+    needs: scope
+    if: needs.scope.outputs.browser_changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.96.0"
+          targets: wasm32-unknown-unknown
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: browser/package-lock.json
+
+      - name: Install browser dependencies
+        working-directory: browser
+        run: npm ci
+
+      - name: Build WebAssembly kernel
+        run: cargo build --locked --release --target wasm32-unknown-unknown -p parqdb-browser-kernels
+
+      - name: Run browser checks
+        working-directory: browser
+        run: |
+          npm run check
+          npm test
