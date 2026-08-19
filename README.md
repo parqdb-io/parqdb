@@ -32,7 +32,7 @@ on billion-scale multimodal data, with Parquet storage and Arrow-native executio
 
 <p align="center">
   <a href="https://search.parqdb.io/">
-    <img src="assets/browser-demo.gif" alt="ParqDB querying a published Wikipedia vector index directly from the browser" width="960">
+    <img src="assets/browser-demo-v2.gif" alt="ParqDB querying a published Wikipedia vector index directly from the browser" width="960">
   </a>
   <br>
   <a href="https://search.parqdb.io/"><strong>Try the live browser demo →</strong></a>
