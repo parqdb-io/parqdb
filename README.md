@@ -129,6 +129,37 @@ The packaged dataset makes this example self-contained. The
 covers persistent tables, existing indexes, query inspection, and source schema
 requirements.
 
+Publish a source table and an immutable browser index in one command. For raw
+text, ParqDB uses the pinned MiniLM ONNX model for both offline embeddings and
+browser parity metadata, then builds hierarchical IVF-LVQ8 and uploads every
+object before exposing `index/manifest.json`:
+
+```bash
+python -m pip install "parqdb[publish]"
+
+parqdb publish \
+  --source documents.parquet \
+  --key chunk_id \
+  --text-column title \
+  --text-column heading \
+  --text-column text \
+  --nlist 4096 \
+  --destination s3://my-bucket/kb/v1 \
+  --s3-endpoint https://ACCOUNT_ID.r2.cloudflarestorage.com \
+  --s3-region auto \
+  --public-url https://data.example.com/kb/v1
+```
+
+Credentials come from the standard `AWS_ACCESS_KEY_ID` and
+`AWS_SECRET_ACCESS_KEY` environment variables. If `documents.parquet` already
+contains embeddings, replace the three `--text-column` options with
+`--vector-column embedding`. Publication refuses to overwrite an existing
+prefix and verifies public HTTP Range and CORS behavior before succeeding.
+
+For a complete document-to-GitHub-Pages knowledge base, including token-aware
+chunking and the search UI, see
+[`parqdb-knowledgebase`](https://github.com/parqdb-io/parqdb-knowledgebase).
+
 ## Status
 
 | Runtime | Storage | Current capability | Status |

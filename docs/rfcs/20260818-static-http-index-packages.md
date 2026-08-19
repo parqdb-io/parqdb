@@ -337,13 +337,20 @@ An interrupted build may leave unreachable objects but cannot expose a valid
 partial package because the entry-point manifest does not exist. The builder
 uses create-if-absent behavior for every object, including `manifest.json`.
 
-No package exporter or service-specific publisher is required. A user may copy
-the completed snapshot directory with ordinary tools such as `cp`, an S3 sync,
-or a Hugging Face dataset upload. The upload operation must preserve relative
-paths and bytes, target a fresh immutable prefix or revision, and make the
-top-level manifest visible only after all referenced Parquet objects have been
-uploaded. When an upload tool cannot guarantee that order, the user uploads
-`manifest.json` in a final operation.
+The package remains compatible with ordinary copy tools, but ParqDB also
+provides `parqdb publish` for repeatable publication of the static index and
+its manifested source table. The command validates source-key compatibility,
+object sizes, SHA-256 digests, and Parquet row-group layout; targets a fresh
+immutable local or S3-compatible prefix; uploads all data objects before the
+entry-point manifest; and can verify the public HTTP Range and CORS contract.
+Service-specific credentials remain deployment inputs and are never part of
+the package manifest.
+
+An external copy or Hugging Face dataset upload must preserve relative paths
+and bytes, target a fresh immutable prefix or revision, and make the top-level
+manifest visible only after all referenced objects have been uploaded. When an
+upload tool cannot guarantee that order, the user uploads `manifest.json` in a
+final operation.
 
 Hugging Face publication identifies an immutable dataset commit, not a moving
 branch such as `main`. S3 publication uses a fresh immutable key prefix. Bucket
