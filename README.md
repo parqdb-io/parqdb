@@ -141,7 +141,7 @@ parqdb publish \
   --source documents.parquet \
   --key chunk_id \
   --text-column title \
-  --text-column heading \
+  --text-column section \
   --text-column text \
   --nlist 4096 \
   --destination s3://my-bucket/kb/v1 \
