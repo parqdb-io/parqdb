@@ -40,6 +40,10 @@ ParqDB 是一个嵌入式向量数据库，用于在内存容量有限的环境�
   <sub>IVF-LVQ8 · HTTP Range · Parquet · WebAssembly · 无查询服务端</sub>
 </p>
 
+<p align="center">
+  <sub>⭐ 如果 ParqDB 对你有用，欢迎 Star 仓库，帮助更多人发现它。</sub>
+</p>
+
 **核心特性**
 
 - **有限内存下的十亿级检索。** 仅使用 2 个 CPU 核心和 4 GB 内存，即可在
