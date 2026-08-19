@@ -32,7 +32,7 @@ ParqDB 是一个嵌入式向量数据库，用于在内存容量有限的环境�
 
 <p align="center">
   <a href="https://search.parqdb.io/">
-    <img src="assets/browser-demo.gif" alt="ParqDB 在浏览器中直接查询已发布的 Wikipedia 向量索引" width="960">
+    <img src="assets/browser-demo-v2.gif" alt="ParqDB 在浏览器中直接查询已发布的 Wikipedia 向量索引" width="960">
   </a>
   <br>
   <a href="https://search.parqdb.io/"><strong>在线体验浏览器演示 →</strong></a>
