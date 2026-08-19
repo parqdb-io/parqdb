@@ -1,7 +1,7 @@
 <div align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/parqdb-io/parqdb/docs/vision-centents/assets/parqdb/logo-dark.svg">
-    <img src="https://raw.githubusercontent.com/parqdb-io/parqdb/docs/vision-centents/assets/parqdb/logo.svg" alt="ParqDB" width="520">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/parqdb-io/parqdb/main/assets/parqdb/logo-dark.svg">
+    <img src="https://raw.githubusercontent.com/parqdb-io/parqdb/main/assets/parqdb/logo.svg" alt="ParqDB" width="520">
   </picture>
   <p>
     <a href="https://github.com/parqdb-io/parqdb/blob/main/README.md">English</a> |
@@ -18,6 +18,7 @@
     <a href="https://github.com/parqdb-io/parqdb/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT%20AND%20Apache--2.0-green.svg"></a>
   </p>
   <p>
+    <a href="https://search.parqdb.io/">浏览器演示</a> |
     <a href="#快速开始">快速开始</a> |
     <a href="#当前状态">当前状态</a> |
     <a href="#文档">文档</a>
@@ -29,16 +30,29 @@
 ParqDB 是一个嵌入式向量数据库，用于在内存容量有限的环境中搜索和分析
 十亿级多模态数据；存储层采用 Parquet，计算层采用 Arrow 原生执行。
 
+<p align="center">
+  <a href="https://search.parqdb.io/">
+    <img src="assets/browser-demo.gif" alt="ParqDB 在浏览器中直接查询已发布的 Wikipedia 向量索引" width="960">
+  </a>
+  <br>
+  <a href="https://search.parqdb.io/"><strong>在线体验浏览器演示 →</strong></a>
+  <br>
+  <sub>IVF-LVQ8 · HTTP Range · Parquet · WebAssembly · 无查询服务端</sub>
+</p>
+
 **核心特性**
 
 - **有限内存下的十亿级检索。** 仅使用 2 个 CPU 核心和 4 GB 内存，即可在
-  10 亿向量上以 90.3% 召回率实现 63.05 ms 中位延迟。
+  [10 亿向量（SIFT1B）](benchmarks/results/linux-x86_64-2026-08-17/README.md)上以
+  90.3% 召回率实现 63.05 ms 中位延迟。
 - **一切皆 Parquet。** 源数据和向量索引均使用标准 Parquet，而非专有二进制
   格式，因此索引可以轻松地跨引擎和应用进行版本管理、发布与共享。
+- **一次发布，到处查询。** 将不可变 IVF-LVQ 索引发布到对象存储，浏览器通过
+  HTTP Range 和 WebAssembly 直接检索，无需查询服务端。
 - **多模态数据，SQL 原生检索。** 向量检索以关系运算表达，SQL 优化器可以在
   同一执行计划中将其与过滤、Join 和聚合组合。
-- **同时面向在线服务与分析。** 可跨查询并行以提升在线吞吐，也可在单次查询
-  内并行，以支持低延迟分析和大 K 检索。
+- **同时面向在线服务与分析。** 单查询内并行降低分析查询和大 K 检索延迟，
+  查询间并行提升在线服务吞吐。
 - **从单核扩展到数千核。** 既可嵌入单机运行，也可通过 Spark 或 StarRocks
   在集群规模上使用同一份 Parquet 索引。
 
@@ -110,6 +124,7 @@ print(summary.to_pydict())
 | 运行时 | 存储 | 当前能力 | 状态 |
 | --- | --- | --- | --- |
 | 内嵌 DataFusion | Parquet | 构建和查询 IVF、IVF-LVQ4 与 IVF-LVQ8 索引 | 已支持 |
+| 浏览器/WASM | 公共 HTTPS 对象存储 | 通过 HTTP Range 查询不可变 IVF-LVQ4 与 IVF-LVQ8 索引 | 实验性 |
 | 内嵌 DataFusion | Iceberg | 通过 PyIceberg 查询精确表快照 | 实验性 |
 | 客户端/服务端 | 已授权的 Parquet 数据源 | 通过 HTTP API 构建和查询索引 | 实验性 |
 
