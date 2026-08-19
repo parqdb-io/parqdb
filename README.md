@@ -18,6 +18,7 @@
     <a href="https://github.com/parqdb-io/parqdb/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT%20AND%20Apache--2.0-green.svg"></a>
   </p>
   <p>
+    <a href="https://search.parqdb.io/">Browser Demo</a> |
     <a href="#quick-start">Quick Start</a> |
     <a href="#status">Status</a> |
     <a href="#documentation">Documentation</a>
@@ -29,18 +30,33 @@
 ParqDB is an embedded vector database for larger-than-memory search and analytics
 on billion-scale multimodal data, with Parquet storage and Arrow-native execution.
 
+<p align="center">
+  <a href="https://search.parqdb.io/">
+    <img src="assets/browser-demo.gif" alt="ParqDB querying a published Wikipedia vector index directly from the browser" width="960">
+  </a>
+  <br>
+  <a href="https://search.parqdb.io/"><strong>Try the live browser demo →</strong></a>
+  <br>
+  <sub>IVF-LVQ8 over HTTP Range · Parquet · WebAssembly · no query server</sub>
+</p>
+
 **Key Features**
 
-- **Billion-scale search in bounded memory.** Search 1B vectors at 90.3% recall
-  with 63.05 ms median latency using just 2 CPU cores and 4 GB of memory.
+- **Billion-scale search in bounded memory.** Search one billion vectors
+  (SIFT1B) at 90.3% recall with 63.05 ms median latency using just 2 CPU cores
+  and 4 GB of memory.
 - **Everything is Parquet.** Source data and vector indexes use standard Parquet
   rather than proprietary binary formats, making indexes easy to version,
   publish, and share across engines and applications.
+- **Publish once, query anywhere.** Publish immutable IVF-LVQ indexes to object
+  storage and search them directly from a browser over HTTP Range and
+  WebAssembly, without a query server.
 - **Multimodal data, SQL-native search.** Vector search is expressed as relational
   operations, allowing the SQL optimizer to combine it with filters, joins, and
   aggregations in a single execution plan.
-- **Built for serving and analytics.** Parallelize across queries for online
-  throughput, or within a query for low-latency analytical and large-k search.
+- **Built for serving and analytics.** Use intra-query parallelism for
+  low-latency analytical and large-k searches, and inter-query parallelism for
+  high-throughput online serving.
 - **Scale from one core to thousands.** Run embedded on a single machine, then
   use the same Parquet index with Spark or StarRocks at cluster scale.
 
