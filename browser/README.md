@@ -19,7 +19,9 @@ options to a value from 1 through 64 to tune the transport. Concurrent slices
 of the same object are coalesced into fewer HTTP requests when their total gaps
 fit within 64 KiB. Set `maxRangeGapBytes` when opening the index to tune that
 bounded over-read, or set it to zero to merge only overlapping and adjacent
-ranges.
+ranges. Opening a candidate postings file starts with a bounded 128 KiB tail
+read for its Parquet metadata instead of the reader's general 512 KiB default.
+Larger metadata remains valid and is completed with a second exact read.
 
 Partial object reads also use a 32 MiB in-memory cache shared by all postings
 files opened by one `ParqDB` instance. The cache stores validated, coalesced
