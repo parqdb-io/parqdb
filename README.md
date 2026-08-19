@@ -1,7 +1,7 @@
 <div align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/parqdb-io/parqdb/docs/vision-centents/assets/parqdb/logo-dark.svg">
-    <img src="https://raw.githubusercontent.com/parqdb-io/parqdb/docs/vision-centents/assets/parqdb/logo.svg" alt="ParqDB" width="520">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/parqdb-io/parqdb/main/assets/parqdb/logo-dark.svg">
+    <img src="https://raw.githubusercontent.com/parqdb-io/parqdb/main/assets/parqdb/logo.svg" alt="ParqDB" width="520">
   </picture>
   <p>
     English |
@@ -43,8 +43,8 @@ on billion-scale multimodal data, with Parquet storage and Arrow-native executio
 **Key Features**
 
 - **Billion-scale search in bounded memory.** Search one billion vectors
-  (SIFT1B) at 90.3% recall with 63.05 ms median latency using just 2 CPU cores
-  and 4 GB of memory.
+  ([SIFT1B](benchmarks/results/linux-x86_64-2026-08-17/README.md)) at 90.3%
+  recall with 63.05 ms median latency using just 2 CPU cores and 4 GB of memory.
 - **Everything is Parquet.** Source data and vector indexes use standard Parquet
   rather than proprietary binary formats, making indexes easy to version,
   publish, and share across engines and applications.
@@ -130,6 +130,7 @@ requirements.
 | Runtime | Storage | Current capability | Status |
 | --- | --- | --- | --- |
 | Embedded DataFusion | Parquet | Build and query IVF, IVF-LVQ4, and IVF-LVQ8 indexes | Supported |
+| Browser/WASM | Public HTTPS object storage | Query immutable IVF-LVQ4 and IVF-LVQ8 indexes over HTTP Range | Experimental |
 | Embedded DataFusion | Iceberg | Query exact table snapshots through PyIceberg | Experimental |
 | Client/server | Authorized Parquet sources | Build and query through the HTTP API | Experimental |
 
