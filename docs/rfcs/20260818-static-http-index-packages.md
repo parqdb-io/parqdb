@@ -379,12 +379,17 @@ Range GET all LVQ8 leaf-centroid column chunks
     -> WASM distance/top-k globally selects leaf CIDs
 manifest file-range lookup
     -> select postings files whose CID intervals intersect selected CIDs
-Range GET selected postings footers
+Range GET selected postings footers (128 KiB initial tail)
     -> select row groups whose cid min=max is selected
 Range GET selected postings column chunks
     -> WASM LVQ distance/top-k
 return source keys + _distance
 ```
+
+The 128 KiB initial tail is a transport optimization, not a format limit. If a
+valid footer is larger, the client fetches the remaining metadata with a
+second exact range. This bound avoids applying a general 512 KiB Parquet
+metadata prefetch independently to every candidate postings file.
 
 Root centroids are not part of version 1 query routing. Selecting roots first
 would make the candidate leaf set differ from native global `nprobe` routing

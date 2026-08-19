@@ -49,6 +49,8 @@ interface RowSpan {
   end: number
 }
 
+const POSTINGS_METADATA_PREFETCH_BYTES = 128 * 1024
+
 export class ParqDB {
   readonly manifest: PackageManifest
   private centroidData: Promise<{
@@ -279,7 +281,7 @@ export class ParqDB {
     const rangeFile = new HttpRangeBuffer(objectUrl(this.manifestUrl, file.path), file.size, options)
     let loading = this.postingsMetadata.get(file.path)
     if (loading === undefined) {
-      loading = parquetMetadataAsync(rangeFile)
+      loading = parquetMetadataAsync(rangeFile, { initialFetchSize: POSTINGS_METADATA_PREFETCH_BYTES })
       this.postingsMetadata.set(file.path, loading)
     }
     let metadata: FileMetaData
