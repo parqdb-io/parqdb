@@ -30,15 +30,15 @@ humantime.workspace = true
 libc.workspace = true
 object_store.workspace = true
 parquet.workspace = true
-parallite = { version = "0.2.0-rc.2", path = "../parallite" }
-parqdb-catalog = { version = "0.2.0-rc.2", path = "../parqdb-catalog" }
-parqdb-core = { version = "0.2.0-rc.2", path = "../parqdb-core" }
-parqdb-index = { version = "0.2.0-rc.2", path = "../parqdb-index" }
-parqdb-iceberg = { version = "0.2.0-rc.2", path = "../parqdb-iceberg" }
-parqdb-kernels = { version = "0.2.0-rc.2", path = "../parqdb-kernels" }
-parqdb-kmeans = { version = "0.2.0-rc.2", path = "../parqdb-kmeans" }
-parqdb-meta = { version = "0.2.0-rc.2", path = "../parqdb-meta" }
-parqdb-storage = { version = "0.2.0-rc.2", path = "../parqdb-storage" }
+parallite = { version = "0.2.0-rc.3", path = "../parallite" }
+parqdb-catalog = { version = "0.2.0-rc.3", path = "../parqdb-catalog" }
+parqdb-core = { version = "0.2.0-rc.3", path = "../parqdb-core" }
+parqdb-index = { version = "0.2.0-rc.3", path = "../parqdb-index" }
+parqdb-iceberg = { version = "0.2.0-rc.3", path = "../parqdb-iceberg" }
+parqdb-kernels = { version = "0.2.0-rc.3", path = "../parqdb-kernels" }
+parqdb-kmeans = { version = "0.2.0-rc.3", path = "../parqdb-kmeans" }
+parqdb-meta = { version = "0.2.0-rc.3", path = "../parqdb-meta" }
+parqdb-storage = { version = "0.2.0-rc.3", path = "../parqdb-storage" }
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true

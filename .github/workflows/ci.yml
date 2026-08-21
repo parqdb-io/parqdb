@@ -132,6 +132,48 @@ jobs:
       - name: Run Python checks
         run: make check-python
 
+  wheel:
+    name: Installed wheel checks
+    needs: scope
+    if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.browser_only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+          python-version: "3.12"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.96.0"
+
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: ci
+          save-if: false
+
+      - name: Install build and verification dependencies
+        run: uv sync --locked --no-install-project
+
+      - name: Build wheel
+        run: uv run --no-sync maturin build --release --locked --compatibility pypi --out dist
+
+      - name: Verify installed wheel on Python 3.11
+        shell: bash
+        run: |
+          wheel="$(find dist -maxdepth 1 -name 'parqdb-*.whl' -print -quit)"
+          test -n "$wheel"
+          uv run --no-sync python tools/verify_release.py "$wheel" --python 3.11
+
   rust:
     name: Rust checks
     needs: scope

@@ -10,7 +10,7 @@ import pytest
 from parqdb.cli import main
 from parqdb.publish import build_index, publish
 
-FIXTURE = Path("spec/fixtures/v1/valid/lvq8")
+FIXTURE = Path(__file__).parents[2] / "spec" / "fixtures" / "v1" / "valid" / "lvq8"
 
 
 def _inputs(tmp_path: Path, keys: list[int] | None = None) -> tuple[Path, Path]:

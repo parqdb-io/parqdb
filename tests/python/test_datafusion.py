@@ -186,11 +186,21 @@ def test_embedded_datafusion_does_not_replace_top_level_package(
         """
     )
 
-    subprocess.run(
-        [sys.executable, "-c", script, str(tmp_path / "coexistence")],
-        check=True,
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-X",
+            "faulthandler",
+            "-c",
+            script,
+            str(tmp_path / "coexistence"),
+        ],
         capture_output=True,
         text=True,
+    )
+    assert result.returncode == 0, (
+        f"embedded DataFusion subprocess exited with {result.returncode}\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
 
 

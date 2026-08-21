@@ -7,6 +7,17 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0rc3] - 2026-08-21
+
+### Fixed
+
+- Installed-wheel tests now resolve repository fixtures independently of the
+  process working directory, preserving source-tree isolation during release
+  verification.
+- Pull requests now build and exercise an installed wheel on Python 3.11,
+  including the embedded DataFusion namespace-coexistence check, before a
+  release tag can be created.
+
 ## [0.2.0rc2] - 2026-08-21
 
 ### Added

@@ -1,6 +1,6 @@
 {
   "name": "@parqdb/browser",
-  "version": "0.2.0-rc.2",
+  "version": "0.2.0-rc.3",
   "description": "HTTP Range client for immutable ParqDB IVF-LVQ packages",
   "type": "module",
   "sideEffects": false,
