@@ -255,6 +255,19 @@ make check
 See [CONTRIBUTING.md](https://github.com/parqdb-io/parqdb/blob/main/CONTRIBUTING.md)
 for quality gates, fixtures, benchmarks, and contribution guidelines.
 
+## Contributors
+
+<a href="https://github.com/parqdb-io/parqdb/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=parqdb-io/parqdb" alt="ParqDB contributors">
+</a>
+
+Made with [contrib.rocks](https://contrib.rocks).
+
+## Star History
+
+<!-- star-history:start -->
+<!-- star-history:end -->
+
 ## License
 
 ParqDB's original code is available under the
