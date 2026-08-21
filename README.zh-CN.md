@@ -241,6 +241,17 @@ make check
 质量门禁、测试数据、基准测试和贡献流程参见
 [CONTRIBUTING.md](https://github.com/parqdb-io/parqdb/blob/main/CONTRIBUTING.md)。
 
+## Star 历史
+
+<p align="center">
+  <a href="https://github.com/parqdb-io/parqdb/stargazers">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="assets/star-history/star-history-dark.svg">
+      <img alt="ParqDB Star 历史" src="assets/star-history/star-history-light.svg">
+    </picture>
+  </a>
+</p>
+
 ## 许可证
 
 ParqDB 的原创代码采用

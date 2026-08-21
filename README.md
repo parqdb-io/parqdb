@@ -255,6 +255,11 @@ make check
 See [CONTRIBUTING.md](https://github.com/parqdb-io/parqdb/blob/main/CONTRIBUTING.md)
 for quality gates, fixtures, benchmarks, and contribution guidelines.
 
+## Star History
+
+<!-- star-history:start -->
+<!-- star-history:end -->
+
 ## License
 
 ParqDB's original code is available under the
