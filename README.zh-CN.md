@@ -241,6 +241,14 @@ make check
 质量门禁、测试数据、基准测试和贡献流程参见
 [CONTRIBUTING.md](https://github.com/parqdb-io/parqdb/blob/main/CONTRIBUTING.md)。
 
+## 贡献者
+
+<a href="https://github.com/parqdb-io/parqdb/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=parqdb-io/parqdb" alt="ParqDB 贡献者">
+</a>
+
+由 [contrib.rocks](https://contrib.rocks) 生成。
+
 ## Star 历史
 
 <p align="center">
