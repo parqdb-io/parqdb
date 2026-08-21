@@ -12,6 +12,7 @@ import pyarrow.fs as fs
 import pyarrow.parquet as pq
 import pytest
 from _support import WAIT, drop_table_index_entry, register_source, vector_type
+from parqdb.publish import build_index, publish
 from support.config import S3Config
 
 pytestmark = pytest.mark.requires("s3")
@@ -124,3 +125,69 @@ def test_s3_build_search_refresh_and_gc(
     warehouse = filesystem.get_file_info(f"{base_path}/warehouse")
     assert warehouse.type == fs.FileType.NotFound
     filesystem.delete_dir(base_path)
+
+
+def test_publish_static_index_to_s3(
+    tmp_path: Path,
+    s3: S3Config,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "documents.parquet"
+    schema = pa.schema(
+        [
+            pa.field("id", pa.int64(), nullable=False),
+            pa.field("embedding", pa.list_(pa.float32(), 2), nullable=False),
+        ]
+    )
+    pq.write_table(
+        pa.Table.from_arrays(
+            [
+                pa.array(range(4), type=pa.int64()),
+                pa.array(
+                    [[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0], [0.0, -1.0]],
+                    type=schema.field("embedding").type,
+                ),
+            ],
+            schema=schema,
+        ),
+        source,
+    )
+    built = build_index(
+        source=source,
+        source_key="id",
+        work=tmp_path / "work",
+        nlist=2,
+        encoding="lvq8",
+        metric="cosine",
+        threads=1,
+        vector_column="embedding",
+    )
+
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", s3.access_key)
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", s3.secret_key)
+    destination = f"{s3.uri}/publication-{uuid.uuid4().hex}/v1"
+    result = publish(
+        index_manifest=built.manifest,
+        source=source,
+        source_key="id",
+        destination=destination,
+        s3_endpoint=s3.endpoint,
+        s3_region=s3.region,
+    )
+
+    filesystem = _s3_filesystem(s3)
+    parsed = urlsplit(destination)
+    prefix = f"{parsed.netloc}/{parsed.path.strip('/')}"
+    try:
+        assert result.destination == destination
+        assert result.files > 1
+        assert (
+            filesystem.get_file_info(f"{prefix}/index/manifest.json").type
+            == fs.FileType.File
+        )
+        assert (
+            filesystem.get_file_info(f"{prefix}/source-manifest.json").type
+            == fs.FileType.File
+        )
+    finally:
+        filesystem.delete_dir(prefix)

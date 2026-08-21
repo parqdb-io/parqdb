@@ -5346,7 +5346,7 @@
       "version": "0.3.0"
     },
     {
-      "bom-ref": "pkg:cargo/h2@0.4.15",
+      "bom-ref": "pkg:cargo/h2@0.4.16",
       "description": "An HTTP/2 client and server",
       "externalReferences": [
         {
@@ -5357,7 +5357,7 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "6cb093c84e8bd9b188d4c4a8cb6579fc016968d14c99882163cd3ff402a4f155"
+          "content": "a9f37a958b41b3b19ee2707c06439c0e9e547e847223eb791ecb0cb821c65e27"
         }
       ],
       "licenses": [
@@ -5366,10 +5366,10 @@
         }
       ],
       "name": "h2",
-      "purl": "pkg:cargo/h2@0.4.15",
+      "purl": "pkg:cargo/h2@0.4.16",
       "scope": "required",
       "type": "library",
-      "version": "0.4.15"
+      "version": "0.4.16"
     },
     {
       "bom-ref": "pkg:cargo/half@2.7.1",
@@ -8240,7 +8240,7 @@
       "version": "0.7.3"
     },
     {
-      "bom-ref": "pkg:cargo/parallite@0.2.0-rc.1",
+      "bom-ref": "pkg:cargo/parallite@0.2.0-rc.2",
       "description": "Local parallel dataflow execution for ParqDB index construction",
       "externalReferences": [
         {
@@ -8254,10 +8254,10 @@
         }
       ],
       "name": "parallite",
-      "purl": "pkg:cargo/parallite@0.2.0-rc.1",
+      "purl": "pkg:cargo/parallite@0.2.0-rc.2",
       "scope": "required",
       "type": "library",
-      "version": "0.2.0-rc.1"
+      "version": "0.2.0-rc.2"
     },
     {
       "bom-ref": "pkg:cargo/parking@2.2.1",
@@ -8338,7 +8338,7 @@
       "version": "0.9.12"
     },
     {
-      "bom-ref": "pkg:cargo/parqdb-browser-kernels@0.2.0-rc.1",
+      "bom-ref": "pkg:cargo/parqdb-browser-kernels@0.2.0-rc.2",
       "description": "WebAssembly distance and bounded top-k kernels for ParqDB static packages",
       "externalReferences": [
         {
@@ -8352,13 +8352,13 @@
         }
       ],
       "name": "parqdb-browser-kernels",
-      "purl": "pkg:cargo/parqdb-browser-kernels@0.2.0-rc.1",
+      "purl": "pkg:cargo/parqdb-browser-kernels@0.2.0-rc.2",
       "scope": "required",
       "type": "library",
-      "version": "0.2.0-rc.1"
+      "version": "0.2.0-rc.2"
     },
     {
-      "bom-ref": "pkg:cargo/parqdb-catalog@0.2.0-rc.1",
+      "bom-ref": "pkg:cargo/parqdb-catalog@0.2.0-rc.2",
       "description": "ParqDB catalog abstraction, identifiers, and SQLite implementation",
       "externalReferences": [
         {
@@ -8372,13 +8372,13 @@
         }
       ],
       "name": "parqdb-catalog",
-      "purl": "pkg:cargo/parqdb-catalog@0.2.0-rc.1",
+      "purl": "pkg:cargo/parqdb-catalog@0.2.0-rc.2",
       "scope": "required",
       "type": "library",
-      "version": "0.2.0-rc.1"
+      "version": "0.2.0-rc.2"
     },
     {
-      "bom-ref": "pkg:cargo/parqdb-core@0.2.0-rc.1",
+      "bom-ref": "pkg:cargo/parqdb-core@0.2.0-rc.2",
       "description": "Backend-neutral index and query models for ParqDB",
       "externalReferences": [
         {
@@ -8392,13 +8392,13 @@
         }
       ],
       "name": "parqdb-core",
-      "purl": "pkg:cargo/parqdb-core@0.2.0-rc.1",
+      "purl": "pkg:cargo/parqdb-core@0.2.0-rc.2",
       "scope": "required",
       "type": "library",
-      "version": "0.2.0-rc.1"
+      "version": "0.2.0-rc.2"
     },
     {
-      "bom-ref": "pkg:cargo/parqdb-iceberg@0.2.0-rc.1",
+      "bom-ref": "pkg:cargo/parqdb-iceberg@0.2.0-rc.2",
       "description": "Exact Apache Iceberg snapshot resolution for ParqDB",
       "externalReferences": [
         {
@@ -8412,13 +8412,13 @@
         }
       ],
       "name": "parqdb-iceberg",
-      "purl": "pkg:cargo/parqdb-iceberg@0.2.0-rc.1",
+      "purl": "pkg:cargo/parqdb-iceberg@0.2.0-rc.2",
       "scope": "required",
       "type": "library",
-      "version": "0.2.0-rc.1"
+      "version": "0.2.0-rc.2"
     },
     {
-      "bom-ref": "pkg:cargo/parqdb-index@0.2.0-rc.1",
+      "bom-ref": "pkg:cargo/parqdb-index@0.2.0-rc.2",
       "description": "Backend-neutral ParqDB index repository and publication",
       "externalReferences": [
         {
@@ -8432,13 +8432,13 @@
         }
       ],
       "name": "parqdb-index",
-      "purl": "pkg:cargo/parqdb-index@0.2.0-rc.1",
+      "purl": "pkg:cargo/parqdb-index@0.2.0-rc.2",
       "scope": "required",
       "type": "library",
-      "version": "0.2.0-rc.1"
+      "version": "0.2.0-rc.2"
     },
     {
-      "bom-ref": "pkg:cargo/parqdb-kernels@0.2.0-rc.1",
+      "bom-ref": "pkg:cargo/parqdb-kernels@0.2.0-rc.2",
       "description": "Shared numerical kernels for ParqDB construction and query execution",
       "externalReferences": [
         {
@@ -8452,13 +8452,13 @@
         }
       ],
       "name": "parqdb-kernels",
-      "purl": "pkg:cargo/parqdb-kernels@0.2.0-rc.1",
+      "purl": "pkg:cargo/parqdb-kernels@0.2.0-rc.2",
       "scope": "required",
       "type": "library",
-      "version": "0.2.0-rc.1"
+      "version": "0.2.0-rc.2"
     },
     {
-      "bom-ref": "pkg:cargo/parqdb-kmeans@0.2.0-rc.1",
+      "bom-ref": "pkg:cargo/parqdb-kmeans@0.2.0-rc.2",
       "description": "Parallel dense K-means training for ParqDB index construction",
       "externalReferences": [
         {
@@ -8472,13 +8472,13 @@
         }
       ],
       "name": "parqdb-kmeans",
-      "purl": "pkg:cargo/parqdb-kmeans@0.2.0-rc.1",
+      "purl": "pkg:cargo/parqdb-kmeans@0.2.0-rc.2",
       "scope": "required",
       "type": "library",
-      "version": "0.2.0-rc.1"
+      "version": "0.2.0-rc.2"
     },
     {
-      "bom-ref": "pkg:cargo/parqdb-local@0.2.0-rc.1",
+      "bom-ref": "pkg:cargo/parqdb-local@0.2.0-rc.2",
       "description": "Embedded DataFusion and Parquet implementation of ParqDB",
       "externalReferences": [
         {
@@ -8492,13 +8492,13 @@
         }
       ],
       "name": "parqdb-local",
-      "purl": "pkg:cargo/parqdb-local@0.2.0-rc.1",
+      "purl": "pkg:cargo/parqdb-local@0.2.0-rc.2",
       "scope": "required",
       "type": "library",
-      "version": "0.2.0-rc.1"
+      "version": "0.2.0-rc.2"
     },
     {
-      "bom-ref": "pkg:cargo/parqdb-meta@0.2.0-rc.1",
+      "bom-ref": "pkg:cargo/parqdb-meta@0.2.0-rc.2",
       "description": "Portable ParqDB index metadata types and validation",
       "externalReferences": [
         {
@@ -8512,26 +8512,26 @@
         }
       ],
       "name": "parqdb-meta",
-      "purl": "pkg:cargo/parqdb-meta@0.2.0-rc.1",
+      "purl": "pkg:cargo/parqdb-meta@0.2.0-rc.2",
       "scope": "required",
       "type": "library",
-      "version": "0.2.0-rc.1"
+      "version": "0.2.0-rc.2"
     },
     {
-      "bom-ref": "pkg:cargo/parqdb-python@0.2.0-rc.1",
+      "bom-ref": "pkg:cargo/parqdb-python@0.2.0-rc.2",
       "licenses": [
         {
           "expression": "MIT"
         }
       ],
       "name": "parqdb-python",
-      "purl": "pkg:cargo/parqdb-python@0.2.0-rc.1",
+      "purl": "pkg:cargo/parqdb-python@0.2.0-rc.2",
       "scope": "required",
       "type": "library",
-      "version": "0.2.0-rc.1"
+      "version": "0.2.0-rc.2"
     },
     {
-      "bom-ref": "pkg:cargo/parqdb-storage@0.2.0-rc.1",
+      "bom-ref": "pkg:cargo/parqdb-storage@0.2.0-rc.2",
       "description": "URI-based storage registry and warehouse layout for ParqDB",
       "externalReferences": [
         {
@@ -8545,10 +8545,10 @@
         }
       ],
       "name": "parqdb-storage",
-      "purl": "pkg:cargo/parqdb-storage@0.2.0-rc.1",
+      "purl": "pkg:cargo/parqdb-storage@0.2.0-rc.2",
       "scope": "required",
       "type": "library",
-      "version": "0.2.0-rc.1"
+      "version": "0.2.0-rc.2"
     },
     {
       "bom-ref": "pkg:cargo/parquet@58.4.0",
@@ -15218,9 +15218,9 @@
   "dependencies": [
     {
       "dependsOn": [
-        "pkg:cargo/parqdb-python@0.2.0-rc.1"
+        "pkg:cargo/parqdb-python@0.2.0-rc.2"
       ],
-      "ref": "pkg:pypi/parqdb@0.2.0rc1"
+      "ref": "pkg:pypi/parqdb@0.2.0rc2"
     },
     {
       "dependsOn": [],
@@ -16929,7 +16929,7 @@
     {
       "dependsOn": [
         "pkg:cargo/libc@0.2.189",
-        "pkg:cargo/windows-sys@0.60.2"
+        "pkg:cargo/windows-sys@0.52.0"
       ],
       "ref": "pkg:cargo/errno@0.3.14"
     },
@@ -17176,7 +17176,7 @@
         "pkg:cargo/tokio@1.53.1",
         "pkg:cargo/tracing@0.1.44"
       ],
-      "ref": "pkg:cargo/h2@0.4.15"
+      "ref": "pkg:cargo/h2@0.4.16"
     },
     {
       "dependsOn": [
@@ -17377,7 +17377,7 @@
         "pkg:cargo/bytes@1.12.1",
         "pkg:cargo/futures-channel@0.3.33",
         "pkg:cargo/futures-core@0.3.33",
-        "pkg:cargo/h2@0.4.15",
+        "pkg:cargo/h2@0.4.16",
         "pkg:cargo/http-body@1.1.0",
         "pkg:cargo/http@1.4.2",
         "pkg:cargo/httparse@1.10.1",
@@ -18125,7 +18125,7 @@
       "dependsOn": [
         "pkg:cargo/rayon@1.12.0"
       ],
-      "ref": "pkg:cargo/parallite@0.2.0-rc.1"
+      "ref": "pkg:cargo/parallite@0.2.0-rc.2"
     },
     {
       "dependsOn": [],
@@ -18150,13 +18150,13 @@
     },
     {
       "dependsOn": [
-        "pkg:cargo/parqdb-kernels@0.2.0-rc.1"
+        "pkg:cargo/parqdb-kernels@0.2.0-rc.2"
       ],
-      "ref": "pkg:cargo/parqdb-browser-kernels@0.2.0-rc.1"
+      "ref": "pkg:cargo/parqdb-browser-kernels@0.2.0-rc.2"
     },
     {
       "dependsOn": [
-        "pkg:cargo/parqdb-meta@0.2.0-rc.1",
+        "pkg:cargo/parqdb-meta@0.2.0-rc.2",
         "pkg:cargo/rusqlite@0.40.1",
         "pkg:cargo/serde_json@1.0.151",
         "pkg:cargo/tempfile@3.27.0",
@@ -18164,14 +18164,14 @@
         "pkg:cargo/url@2.5.8",
         "pkg:cargo/uuid@1.24.0"
       ],
-      "ref": "pkg:cargo/parqdb-catalog@0.2.0-rc.1"
+      "ref": "pkg:cargo/parqdb-catalog@0.2.0-rc.2"
     },
     {
       "dependsOn": [
-        "pkg:cargo/parqdb-catalog@0.2.0-rc.1",
-        "pkg:cargo/parqdb-meta@0.2.0-rc.1"
+        "pkg:cargo/parqdb-catalog@0.2.0-rc.2",
+        "pkg:cargo/parqdb-meta@0.2.0-rc.2"
       ],
-      "ref": "pkg:cargo/parqdb-core@0.2.0-rc.1"
+      "ref": "pkg:cargo/parqdb-core@0.2.0-rc.2"
     },
     {
       "dependsOn": [
@@ -18179,19 +18179,19 @@
         "pkg:cargo/iceberg-datafusion@0.10.0",
         "pkg:cargo/iceberg-storage-opendal@0.10.0",
         "pkg:cargo/iceberg@0.10.0",
-        "pkg:cargo/parqdb-meta@0.2.0-rc.1",
+        "pkg:cargo/parqdb-meta@0.2.0-rc.2",
         "pkg:cargo/thiserror@2.0.19",
         "pkg:cargo/uuid@1.24.0"
       ],
-      "ref": "pkg:cargo/parqdb-iceberg@0.2.0-rc.1"
+      "ref": "pkg:cargo/parqdb-iceberg@0.2.0-rc.2"
     },
     {
       "dependsOn": [
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/parqdb-catalog@0.2.0-rc.1",
-        "pkg:cargo/parqdb-core@0.2.0-rc.1",
-        "pkg:cargo/parqdb-meta@0.2.0-rc.1",
-        "pkg:cargo/parqdb-storage@0.2.0-rc.1",
+        "pkg:cargo/parqdb-catalog@0.2.0-rc.2",
+        "pkg:cargo/parqdb-core@0.2.0-rc.2",
+        "pkg:cargo/parqdb-meta@0.2.0-rc.2",
+        "pkg:cargo/parqdb-storage@0.2.0-rc.2",
         "pkg:cargo/serde_json@1.0.151",
         "pkg:cargo/tempfile@3.27.0",
         "pkg:cargo/thiserror@2.0.19",
@@ -18199,23 +18199,23 @@
         "pkg:cargo/url@2.5.8",
         "pkg:cargo/uuid@1.24.0"
       ],
-      "ref": "pkg:cargo/parqdb-index@0.2.0-rc.1"
+      "ref": "pkg:cargo/parqdb-index@0.2.0-rc.2"
     },
     {
       "dependsOn": [
         "pkg:cargo/matrixmultiply@0.3.11",
         "pkg:cargo/thiserror@2.0.19"
       ],
-      "ref": "pkg:cargo/parqdb-kernels@0.2.0-rc.1"
+      "ref": "pkg:cargo/parqdb-kernels@0.2.0-rc.2"
     },
     {
       "dependsOn": [
         "pkg:cargo/num-traits@0.2.19",
-        "pkg:cargo/parallite@0.2.0-rc.1",
-        "pkg:cargo/parqdb-kernels@0.2.0-rc.1",
+        "pkg:cargo/parallite@0.2.0-rc.2",
+        "pkg:cargo/parqdb-kernels@0.2.0-rc.2",
         "pkg:cargo/thiserror@2.0.19"
       ],
-      "ref": "pkg:cargo/parqdb-kmeans@0.2.0-rc.1"
+      "ref": "pkg:cargo/parqdb-kmeans@0.2.0-rc.2"
     },
     {
       "dependsOn": [
@@ -18232,15 +18232,15 @@
         "pkg:cargo/humantime@2.4.0",
         "pkg:cargo/libc@0.2.189",
         "pkg:cargo/object_store@0.13.2",
-        "pkg:cargo/parallite@0.2.0-rc.1",
-        "pkg:cargo/parqdb-catalog@0.2.0-rc.1",
-        "pkg:cargo/parqdb-core@0.2.0-rc.1",
-        "pkg:cargo/parqdb-iceberg@0.2.0-rc.1",
-        "pkg:cargo/parqdb-index@0.2.0-rc.1",
-        "pkg:cargo/parqdb-kernels@0.2.0-rc.1",
-        "pkg:cargo/parqdb-kmeans@0.2.0-rc.1",
-        "pkg:cargo/parqdb-meta@0.2.0-rc.1",
-        "pkg:cargo/parqdb-storage@0.2.0-rc.1",
+        "pkg:cargo/parallite@0.2.0-rc.2",
+        "pkg:cargo/parqdb-catalog@0.2.0-rc.2",
+        "pkg:cargo/parqdb-core@0.2.0-rc.2",
+        "pkg:cargo/parqdb-iceberg@0.2.0-rc.2",
+        "pkg:cargo/parqdb-index@0.2.0-rc.2",
+        "pkg:cargo/parqdb-kernels@0.2.0-rc.2",
+        "pkg:cargo/parqdb-kmeans@0.2.0-rc.2",
+        "pkg:cargo/parqdb-meta@0.2.0-rc.2",
+        "pkg:cargo/parqdb-storage@0.2.0-rc.2",
         "pkg:cargo/parquet@58.4.0",
         "pkg:cargo/rusqlite@0.40.1",
         "pkg:cargo/serde_json@1.0.151",
@@ -18252,7 +18252,7 @@
         "pkg:cargo/url@2.5.8",
         "pkg:cargo/uuid@1.24.0"
       ],
-      "ref": "pkg:cargo/parqdb-local@0.2.0-rc.1"
+      "ref": "pkg:cargo/parqdb-local@0.2.0-rc.2"
     },
     {
       "dependsOn": [
@@ -18261,7 +18261,7 @@
         "pkg:cargo/url@2.5.8",
         "pkg:cargo/uuid@1.24.0"
       ],
-      "ref": "pkg:cargo/parqdb-meta@0.2.0-rc.1"
+      "ref": "pkg:cargo/parqdb-meta@0.2.0-rc.2"
     },
     {
       "dependsOn": [
@@ -18269,16 +18269,16 @@
         "pkg:cargo/arrow@58.4.0",
         "pkg:cargo/datafusion-python@54.0.0",
         "pkg:cargo/futures@0.3.33",
-        "pkg:cargo/parqdb-catalog@0.2.0-rc.1",
-        "pkg:cargo/parqdb-local@0.2.0-rc.1",
-        "pkg:cargo/parqdb-meta@0.2.0-rc.1",
+        "pkg:cargo/parqdb-catalog@0.2.0-rc.2",
+        "pkg:cargo/parqdb-local@0.2.0-rc.2",
+        "pkg:cargo/parqdb-meta@0.2.0-rc.2",
         "pkg:cargo/pyo3-async-runtimes@0.28.0",
         "pkg:cargo/pyo3@0.28.3",
         "pkg:cargo/serde_json@1.0.151",
         "pkg:cargo/tokio-util@0.7.19",
         "pkg:cargo/tokio@1.53.1"
       ],
-      "ref": "pkg:cargo/parqdb-python@0.2.0-rc.1"
+      "ref": "pkg:cargo/parqdb-python@0.2.0-rc.2"
     },
     {
       "dependsOn": [
@@ -18291,7 +18291,7 @@
         "pkg:cargo/tokio@1.53.1",
         "pkg:cargo/url@2.5.8"
       ],
-      "ref": "pkg:cargo/parqdb-storage@0.2.0-rc.1"
+      "ref": "pkg:cargo/parqdb-storage@0.2.0-rc.2"
     },
     {
       "dependsOn": [
@@ -18630,7 +18630,7 @@
         "pkg:cargo/once_cell@1.21.4",
         "pkg:cargo/socket2@0.6.5",
         "pkg:cargo/tracing@0.1.44",
-        "pkg:cargo/windows-sys@0.60.2"
+        "pkg:cargo/windows-sys@0.52.0"
       ],
       "ref": "pkg:cargo/quinn-udp@0.5.15"
     },
@@ -18850,7 +18850,7 @@
         "pkg:cargo/bytes@1.12.1",
         "pkg:cargo/futures-core@0.3.33",
         "pkg:cargo/futures-util@0.3.33",
-        "pkg:cargo/h2@0.4.15",
+        "pkg:cargo/h2@0.4.16",
         "pkg:cargo/http-body-util@0.1.4",
         "pkg:cargo/http-body@1.1.0",
         "pkg:cargo/http@1.4.2",
@@ -18984,7 +18984,7 @@
         "pkg:cargo/errno@0.3.14",
         "pkg:cargo/libc@0.2.189",
         "pkg:cargo/linux-raw-sys@0.12.1",
-        "pkg:cargo/windows-sys@0.60.2"
+        "pkg:cargo/windows-sys@0.52.0"
       ],
       "ref": "pkg:cargo/rustix@1.1.4"
     },
@@ -19022,7 +19022,7 @@
         "pkg:cargo/security-framework-sys@2.17.0",
         "pkg:cargo/security-framework@3.7.0",
         "pkg:cargo/webpki-root-certs@1.0.9",
-        "pkg:cargo/windows-sys@0.60.2"
+        "pkg:cargo/windows-sys@0.52.0"
       ],
       "ref": "pkg:cargo/rustls-platform-verifier@0.7.0"
     },
@@ -19312,7 +19312,7 @@
     {
       "dependsOn": [
         "pkg:cargo/libc@0.2.189",
-        "pkg:cargo/windows-sys@0.60.2"
+        "pkg:cargo/windows-sys@0.61.2"
       ],
       "ref": "pkg:cargo/socket2@0.6.5"
     },
@@ -19376,7 +19376,7 @@
         "pkg:cargo/cfg-if@1.0.4",
         "pkg:cargo/libc@0.2.189",
         "pkg:cargo/psm@0.1.31",
-        "pkg:cargo/windows-sys@0.60.2"
+        "pkg:cargo/windows-sys@0.61.2"
       ],
       "ref": "pkg:cargo/stacker@0.1.24"
     },
@@ -19480,7 +19480,7 @@
         "pkg:cargo/getrandom@0.4.3",
         "pkg:cargo/once_cell@1.21.4",
         "pkg:cargo/rustix@1.1.4",
-        "pkg:cargo/windows-sys@0.60.2"
+        "pkg:cargo/windows-sys@0.52.0"
       ],
       "ref": "pkg:cargo/tempfile@3.27.0"
     },
@@ -19940,7 +19940,7 @@
     },
     {
       "dependsOn": [
-        "pkg:cargo/windows-sys@0.60.2"
+        "pkg:cargo/windows-sys@0.52.0"
       ],
       "ref": "pkg:cargo/winapi-util@0.1.11"
     },
@@ -20220,21 +20220,21 @@
   ],
   "metadata": {
     "component": {
-      "bom-ref": "pkg:pypi/parqdb@0.2.0rc1",
+      "bom-ref": "pkg:pypi/parqdb@0.2.0rc2",
       "licenses": [
         {
           "expression": "MIT AND Apache-2.0"
         }
       ],
       "name": "parqdb",
-      "purl": "pkg:pypi/parqdb@0.2.0rc1",
+      "purl": "pkg:pypi/parqdb@0.2.0rc2",
       "type": "library",
-      "version": "0.2.0rc1"
+      "version": "0.2.0rc2"
     },
     "properties": [
       {
         "name": "parqdb:cargo-lock-sha256",
-        "value": "ec11f0d8c31589c25fe8ea14fda5d31c76bdd5fd32080c9b2948b5bfe54b9047"
+        "value": "bf4eb25ea5d14a4594babbad7d09fee830e833f9a6e39e58f2ef18f08d14fb7e"
       }
     ]
   },

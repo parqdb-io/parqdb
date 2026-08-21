@@ -31,6 +31,7 @@ _MINILM_FILES = (
 _MINILM_DIMENSION = 384
 _MINILM_MAX_LENGTH = 256
 _PARITY_TEXT = "ParqDB reads immutable Parquet indexes with HTTP Range requests."
+_BUILD_STATE_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -94,7 +95,13 @@ def publish(
     if public_url is not None:
         manifest_url = f"{public_url.rstrip('/')}/index/manifest.json"
         if verify_http:
-            verify_publication(public_url, objects, cors_origin=cors_origin)
+            try:
+                verify_publication(public_url, objects, cors_origin=cors_origin)
+            except Exception as error:
+                raise RuntimeError(
+                    "publication was committed, but public HTTP verification failed; "
+                    f"do not retry the immutable destination ({destination}): {error}"
+                ) from error
     return PublicationResult(
         destination=destination,
         manifest_url=manifest_url,
@@ -121,9 +128,41 @@ def build_index(
         raise ValueError("choose exactly one of --vector-column or --text-column")
     if not 1 <= threads <= 16:
         raise ValueError("threads must be in [1, 16]")
+    if nlist <= 0:
+        raise ValueError("nlist must be positive")
+    if encoding not in {"lvq4", "lvq8"}:
+        raise ValueError("encoding must be lvq4 or lvq8")
+    if metric not in {"cosine", "l2_squared"}:
+        raise ValueError("metric must be cosine or l2_squared")
+    if embedding_batch_size <= 0:
+        raise ValueError("embedding batch size must be positive")
     source = source.resolve()
+    if not source.is_file():
+        raise ValueError(f"source Parquet file does not exist: {source}")
+    rows = pq.ParquetFile(source).metadata.num_rows
+    if nlist > rows:
+        raise ValueError(f"nlist cannot exceed the {rows} source rows")
     work = work.resolve()
-    work.mkdir(parents=True, exist_ok=True)
+    _prepare_build_work(
+        work,
+        {
+            "format-version": _BUILD_STATE_VERSION,
+            "source": {"size": source.stat().st_size, "sha256": _sha256(source)},
+            "source-key": source_key,
+            "vector-column": vector_column,
+            "text-columns": list(text_columns),
+            "nlist": nlist,
+            "encoding": encoding,
+            "metric": metric,
+            "threads": threads,
+            "embedding-batch-size": embedding_batch_size,
+            "embedding-model": (
+                {"repository": _MINILM_REPOSITORY, "revision": _MINILM_REVISION}
+                if text_columns
+                else None
+            ),
+        },
+    )
     model_assets: tuple[tuple[str, Path], ...] = ()
     index_source = source
     column = vector_column
@@ -222,7 +261,10 @@ def _source_manifest(
     if not source.is_file():
         raise ValueError(f"source Parquet file does not exist: {source}")
     parquet = pq.ParquetFile(source)
-    field = parquet.schema_arrow.field(source_key)
+    try:
+        field = parquet.schema_arrow.field(source_key)
+    except KeyError as error:
+        raise ValueError(f"source key column does not exist: {source_key}") from error
     if not pa.types.is_int64(field.type):
         raise ValueError("source key must be a non-null int64 column")
     if field.nullable:
@@ -296,7 +338,7 @@ def _embed_minilm(
     try:
         import numpy as np
         import onnxruntime as ort  # type: ignore[import]
-        from transformers import AutoTokenizer  # type: ignore[import]
+        from tokenizers import Tokenizer  # type: ignore[import]
     except ImportError as error:
         raise RuntimeError(
             "text embedding requires the optional dependencies: "
@@ -304,9 +346,15 @@ def _embed_minilm(
         ) from error
     parquet = pq.ParquetFile(source)
     for column in text_columns:
-        if not pa.types.is_string(parquet.schema_arrow.field(column).type):
+        try:
+            field = parquet.schema_arrow.field(column)
+        except KeyError as error:
+            raise ValueError(f"text column does not exist: {column}") from error
+        if not pa.types.is_string(field.type):
             raise ValueError(f"text column must be a string: {column}")
-    tokenizer = AutoTokenizer.from_pretrained(model_root, local_files_only=True)
+    tokenizer = Tokenizer.from_file(str(model_root / "tokenizer.json"))
+    tokenizer.enable_truncation(max_length=_MINILM_MAX_LENGTH)
+    tokenizer.enable_padding()
     options = ort.SessionOptions()
     options.intra_op_num_threads = threads
     options.inter_op_num_threads = 1
@@ -318,21 +366,20 @@ def _embed_minilm(
     )
 
     def encode(texts: list[str]) -> Any:
-        encoded = tokenizer(
-            texts,
-            padding=True,
-            truncation=True,
-            max_length=_MINILM_MAX_LENGTH,
-            return_tensors="np",
-        )
+        encoded = tokenizer.encode_batch(texts)
+        values = {
+            "input_ids": [item.ids for item in encoded],
+            "attention_mask": [item.attention_mask for item in encoded],
+            "token_type_ids": [item.type_ids for item in encoded],
+        }
         input_names = {item.name for item in session.get_inputs()}
         feeds = {
-            name: np.asarray(encoded[name], dtype=np.int64)
+            name: np.asarray(values[name], dtype=np.int64)
             for name in input_names
-            if name in encoded
+            if name in values
         }
         hidden = np.asarray(session.run(None, feeds)[0], dtype=np.float32)
-        mask = np.asarray(encoded["attention_mask"], dtype=np.float32)[..., None]
+        mask = np.asarray(values["attention_mask"], dtype=np.float32)[..., None]
         vectors = (hidden * mask).sum(axis=1) / np.maximum(mask.sum(axis=1), 1.0)
         vectors /= np.maximum(np.linalg.norm(vectors, axis=1, keepdims=True), 1e-12)
         return vectors
@@ -350,8 +397,10 @@ def _embed_minilm(
         ]
     )
     if not output.exists():
+        temporary = output.with_suffix(f"{output.suffix}.part")
+        temporary.unlink(missing_ok=True)
         writer = pq.ParquetWriter(
-            output, schema, compression="zstd", compression_level=3
+            temporary, schema, compression="zstd", compression_level=3
         )
         try:
             columns = [source_key, *text_columns]
@@ -360,7 +409,10 @@ def _embed_minilm(
             ):
                 rows = source_batch.to_pylist()
                 texts = [
-                    "\n\n".join(str(row[column]) for column in text_columns)
+                    "\n\n".join(
+                        "" if row[column] is None else str(row[column])
+                        for column in text_columns
+                    )
                     for row in rows
                 ]
                 vectors = encode(texts)
@@ -381,6 +433,7 @@ def _embed_minilm(
                 )
         finally:
             writer.close()
+        temporary.replace(output)
     probe = encode([_PARITY_TEXT])[0]
     return {
         "repository": _MINILM_REPOSITORY,
@@ -459,6 +512,31 @@ def _find_static_package(root: Path) -> Path | None:
         if value.get("format-version") == 1 and "package-uuid" in value:
             return path.parent
     return None
+
+
+def _prepare_build_work(work: Path, request: dict[str, object]) -> None:
+    """Create a resumable work directory tied to one immutable build request."""
+    state = work / "build-state.json"
+    if state.is_file():
+        try:
+            existing = json.loads(state.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            raise ValueError(f"invalid build state: {state}") from error
+        if existing != request:
+            raise ValueError(
+                f"work directory belongs to a different build: {work}; "
+                "choose another --work path or remove it"
+            )
+        return
+    if work.exists() and any(work.iterdir()):
+        raise ValueError(
+            f"work directory is not empty and has no build state: {work}; "
+            "choose another --work path or remove it"
+        )
+    work.mkdir(parents=True, exist_ok=True)
+    temporary = state.with_suffix(".json.part")
+    temporary.write_bytes(_json_bytes(request))
+    temporary.replace(state)
 
 
 def _publication_objects(
@@ -588,6 +666,7 @@ class _S3Writer(_Writer):
     def __init__(self, filesystem: fs.S3FileSystem, prefix: str) -> None:
         self.filesystem = filesystem
         self.prefix = prefix.rstrip("/")
+        self.written: list[str] = []
 
     def _path(self, relative: str) -> str:
         return f"{self.prefix}/{relative}"
@@ -601,12 +680,28 @@ class _S3Writer(_Writer):
                 raise FileExistsError(f"destination object already exists: {relative}")
 
     def write(self, item: _Object) -> None:
-        with self.filesystem.open_output_stream(self._path(item.path)) as output:
-            if item.source is None:
-                output.write(item.content or b"")
-            else:
-                with item.source.open("rb") as source:
-                    _copy_stream(source, output)
+        path = self._path(item.path)
+        try:
+            with self.filesystem.open_output_stream(path) as output:
+                if item.source is None:
+                    output.write(item.content or b"")
+                else:
+                    with item.source.open("rb") as source:
+                        _copy_stream(source, output)
+        except Exception:
+            try:
+                self.filesystem.delete_file(path)
+            except Exception:
+                pass
+            raise
+        self.written.append(path)
+
+    def cleanup_after_failure(self) -> None:
+        for path in reversed(self.written):
+            try:
+                self.filesystem.delete_file(path)
+            except Exception:
+                pass
 
 
 def _writer(

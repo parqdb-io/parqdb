@@ -2184,7 +2184,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2508,9 +2508,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.4.15"
+version = "0.4.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6cb093c84e8bd9b188d4c4a8cb6579fc016968d14c99882163cd3ff402a4f155"
+checksum = "a9f37a958b41b3b19ee2707c06439c0e9e547e847223eb791ecb0cb821c65e27"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -3771,7 +3771,7 @@ dependencies = [
 
 [[package]]
 name = "parallite"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "rayon",
 ]
@@ -3807,14 +3807,14 @@ dependencies = [
 
 [[package]]
 name = "parqdb-browser-kernels"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "parqdb-kernels",
 ]
 
 [[package]]
 name = "parqdb-catalog"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "parqdb-meta",
  "rusqlite",
@@ -3827,7 +3827,7 @@ dependencies = [
 
 [[package]]
 name = "parqdb-core"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "parqdb-catalog",
  "parqdb-meta",
@@ -3835,7 +3835,7 @@ dependencies = [
 
 [[package]]
 name = "parqdb-iceberg"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "datafusion",
  "iceberg",
@@ -3848,7 +3848,7 @@ dependencies = [
 
 [[package]]
 name = "parqdb-index"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "bytes",
  "parqdb-catalog",
@@ -3865,7 +3865,7 @@ dependencies = [
 
 [[package]]
 name = "parqdb-kernels"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "matrixmultiply",
  "thiserror",
@@ -3873,7 +3873,7 @@ dependencies = [
 
 [[package]]
 name = "parqdb-kmeans"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "num-traits",
  "parallite",
@@ -3883,7 +3883,7 @@ dependencies = [
 
 [[package]]
 name = "parqdb-local"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "arrow",
  "arrow-data",
@@ -3921,7 +3921,7 @@ dependencies = [
 
 [[package]]
 name = "parqdb-meta"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -3931,7 +3931,7 @@ dependencies = [
 
 [[package]]
 name = "parqdb-python"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "arrow",
  "arrow-ipc",
@@ -3949,7 +3949,7 @@ dependencies = [
 
 [[package]]
 name = "parqdb-storage"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "bytes",
  "futures",
@@ -4435,7 +4435,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4879,7 +4879,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4937,7 +4937,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5328,7 +5328,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5415,7 +5415,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "psm",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5554,7 +5554,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6198,7 +6198,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

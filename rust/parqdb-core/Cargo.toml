@@ -16,5 +16,5 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-parqdb-catalog = { version = "0.2.0-rc.1", path = "../parqdb-catalog", default-features = false }
-parqdb-meta = { version = "0.2.0-rc.1", path = "../parqdb-meta" }
+parqdb-catalog = { version = "0.2.0-rc.2", path = "../parqdb-catalog", default-features = false }
+parqdb-meta = { version = "0.2.0-rc.2", path = "../parqdb-meta" }

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from importlib import import_module
 from importlib.metadata import version
 from importlib.util import find_spec
+from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import parqdb
 import pyarrow
+import pyarrow.parquet as pq
 
 
 def main() -> None:
@@ -16,8 +20,13 @@ def main() -> None:
             "wheel smoke must not rely on an external datafusion package"
         )
 
-    for module in ("pyiceberg",):
+    for module in ("numpy", "onnxruntime", "pyiceberg", "tokenizers"):
         import_module(module)
+
+    executable = Path(sys.executable).with_name(
+        "parqdb.exe" if os.name == "nt" else "parqdb"
+    )
+    subprocess.run([str(executable), "publish", "--help"], check=True)
 
     with TemporaryDirectory(prefix="parqdb-wheel-smoke-") as directory:
         session = parqdb.connect(os.path.join(directory, "parqdb-data"))
@@ -47,6 +56,46 @@ def main() -> None:
             row["_distance"] < 0 for row in hits
         ):
             raise RuntimeError(f"unexpected installed-wheel search result: {hits}")
+        publication_source = Path(directory) / "publication.parquet"
+        schema = pyarrow.schema(
+            [
+                pyarrow.field("chunk_id", pyarrow.int64(), nullable=False),
+                pyarrow.field(
+                    "embedding", pyarrow.list_(pyarrow.float32(), 2), nullable=False
+                ),
+            ]
+        )
+        pq.write_table(
+            pyarrow.Table.from_arrays(
+                [
+                    pyarrow.array([0, 1]),
+                    pyarrow.array([[1.0, 0.0], [0.0, 1.0]], type=schema.field(1).type),
+                ],
+                schema=schema,
+            ),
+            publication_source,
+        )
+        from parqdb.publish import build_index, publish
+
+        built = build_index(
+            source=publication_source,
+            source_key="chunk_id",
+            work=Path(directory) / "publication-work",
+            nlist=1,
+            encoding="lvq8",
+            metric="cosine",
+            threads=1,
+            vector_column="embedding",
+        )
+        published = Path(directory) / "published"
+        publish(
+            index_manifest=built.manifest,
+            source=publication_source,
+            source_key="chunk_id",
+            destination=str(published),
+        )
+        if not (published / "index" / "manifest.json").is_file():
+            raise RuntimeError("installed-wheel static publication smoke failed")
     print(f"installed parqdb {version('parqdb')} wheel build/search smoke passed")
 
 

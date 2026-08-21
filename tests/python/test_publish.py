@@ -8,7 +8,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from parqdb.cli import main
-from parqdb.publish import publish
+from parqdb.publish import build_index, publish
 
 FIXTURE = Path("spec/fixtures/v1/valid/lvq8")
 
@@ -82,6 +82,70 @@ def test_publish_rejects_source_key_that_is_not_dense_and_ordered(
             source=source,
             source_key="chunk_id",
             destination=str(tmp_path / "output"),
+        )
+
+
+def test_publish_reports_a_missing_source_key_cleanly(tmp_path: Path) -> None:
+    manifest, source = _inputs(tmp_path)
+
+    with pytest.raises(ValueError, match="source key column does not exist: missing"):
+        publish(
+            index_manifest=manifest,
+            source=source,
+            source_key="missing",
+            destination=str(tmp_path / "output"),
+        )
+
+
+def test_build_work_cannot_silently_reuse_a_different_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "vectors.parquet"
+    schema = pa.schema(
+        [
+            pa.field("chunk_id", pa.int64(), nullable=False),
+            pa.field("embedding", pa.list_(pa.float32(), 2), nullable=False),
+        ]
+    )
+
+    def write(values: list[list[float]]) -> None:
+        pq.write_table(
+            pa.Table.from_arrays(
+                [pa.array([0, 1]), pa.array(values, type=schema.field(1).type)],
+                schema=schema,
+            ),
+            source,
+        )
+
+    package = tmp_path / "package"
+    shutil.copytree(FIXTURE, package)
+    monkeypatch.setattr(
+        "parqdb.publish._build_parqdb_index", lambda *args, **kwargs: package
+    )
+    work = tmp_path / "work"
+    write([[1.0, 0.0], [0.0, 1.0]])
+    build_index(
+        source=source,
+        source_key="chunk_id",
+        work=work,
+        nlist=2,
+        encoding="lvq8",
+        metric="cosine",
+        threads=1,
+        vector_column="embedding",
+    )
+    write([[0.0, 1.0], [1.0, 0.0]])
+
+    with pytest.raises(ValueError, match="work directory belongs to a different build"):
+        build_index(
+            source=source,
+            source_key="chunk_id",
+            work=work,
+            nlist=2,
+            encoding="lvq8",
+            metric="cosine",
+            threads=1,
+            vector_column="embedding",
         )
 
 

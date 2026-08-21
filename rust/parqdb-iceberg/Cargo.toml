@@ -20,6 +20,6 @@ datafusion.workspace = true
 iceberg.workspace = true
 iceberg-datafusion.workspace = true
 iceberg-storage-opendal.workspace = true
-parqdb-meta = { version = "0.2.0-rc.1", path = "../parqdb-meta" }
+parqdb-meta = { version = "0.2.0-rc.2", path = "../parqdb-meta" }
 thiserror.workspace = true
 uuid.workspace = true

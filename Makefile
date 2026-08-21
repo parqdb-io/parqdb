@@ -3,6 +3,7 @@ UV_RUN = UV_CACHE_DIR=$(UV_CACHE_DIR) uv run --no-sync
 PACKAGE_TARGET_DIR := $(CURDIR)/target/package
 PYTHON_SOURCES := python tests benchmarks examples/python tools spec/fixtures/*/generate.py
 SEARCH_BENCHMARK_RESULT := benchmarks/results/macos-arm64-2026-07-29/1m.json
+AUDIT_REQUIREMENTS := target/audit-requirements.txt
 
 .PHONY: sync develop develop-debug format lint lint-python lint-rust check-docs test test-python test-rust check-python check-rust test-interop test-capabilities test-s3 test-hdfs test-remote-storage audit verify-datafusion-vendor fixtures datasets benchmark-smoke benchmark-chart sbom package verify-package check
 
@@ -74,7 +75,10 @@ check-python: lint-python test-python
 check-rust: lint-rust test-rust
 
 audit:
-	$(UV_RUN) pip-audit
+	mkdir -p "$(dir $(AUDIT_REQUIREMENTS))"
+	uv export --locked --all-extras --no-default-groups --no-emit-project \
+		--no-header --quiet --output-file "$(AUDIT_REQUIREMENTS)"
+	$(UV_RUN) pip-audit --requirement "$(AUDIT_REQUIREMENTS)" --no-deps --disable-pip
 	cargo deny check --hide-inclusion-graph
 
 verify-datafusion-vendor:
