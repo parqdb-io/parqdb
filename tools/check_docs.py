@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 from collections import Counter
 from dataclasses import dataclass
@@ -41,11 +42,15 @@ class _HTMLTargets(HTMLParser):
 
 
 def markdown_files(root: Path) -> tuple[Path, ...]:
-    return tuple(
-        path
-        for path in sorted(root.rglob("*.md"))
-        if not EXCLUDED_DIRECTORIES.intersection(path.relative_to(root).parts)
-    )
+    documents: list[Path] = []
+    for directory, directories, files in os.walk(root):
+        directories[:] = sorted(
+            name for name in directories if name not in EXCLUDED_DIRECTORIES
+        )
+        documents.extend(
+            Path(directory) / name for name in sorted(files) if name.endswith(".md")
+        )
+    return tuple(documents)
 
 
 def github_anchors(parser: MarkdownIt, document: Path) -> set[str]:

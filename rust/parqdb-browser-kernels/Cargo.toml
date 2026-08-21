@@ -15,4 +15,4 @@ crate-type = ["cdylib", "rlib"]
 workspace = true
 
 [dependencies]
-parqdb-kernels = { path = "../parqdb-kernels" }
+parqdb-kernels = { version = "0.2.0-rc.2", path = "../parqdb-kernels" }

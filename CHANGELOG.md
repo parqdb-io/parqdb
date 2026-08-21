@@ -7,6 +7,8 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0rc2] - 2026-08-21
+
 ### Added
 
 - LVQ4/LVQ8 builds now emit a strict, immutable top-level `manifest.json` and
@@ -16,6 +18,9 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   explicit postings row-group selection through HTTP Range requests, and
   LVQ distance/top-k execution in WebAssembly, returning source keys plus
   `_distance` without listing objects or joining the source table.
+- A new `parqdb publish` command builds or reuses a static IVF-LVQ4/LVQ8
+  index, publishes its source table and model assets to an immutable local or
+  S3-compatible prefix, and verifies public HTTP Range and CORS behavior.
 
 ### Changed
 
@@ -29,6 +34,22 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Python index discovery and removal now stay behind the table-centered API;
   internal catalog and native repository bridges are no longer exposed through
   session facade attributes.
+- Browser queries coalesce and parallelize HTTP Range reads while keeping
+  metadata prefetch and the in-browser byte cache bounded.
+- The optional publication stack uses the smaller `tokenizers` runtime instead
+  of the full Python Transformers package while preserving pinned MiniLM token
+  and embedding parity.
+
+### Fixed
+
+- Publication build work is now bound to the exact source and configuration,
+  so a changed input cannot silently reuse a stale index. Interrupted embedding
+  output is committed atomically and cannot be mistaken for a complete source.
+- Static publication cleans partial local and S3 writes on failure and reports
+  post-commit public HTTP verification failures without suggesting an unsafe
+  retry against the same immutable destination.
+- Dependency auditing now covers every locked optional extra in CI and release
+  jobs; the vulnerable `h2` and Transformers dependency versions are removed.
 
 ### Removed
 

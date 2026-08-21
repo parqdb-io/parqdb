@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "parqdb"
-version = "0.2.0rc1"
+version = "0.2.0rc2"
 description = "Lightweight vector index extension for the open lakehouse stack"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
@@ -44,7 +44,7 @@ iceberg = [
 publish = [
     "numpy>=1.26,<3",
     "onnxruntime>=1.20,<2",
-    "transformers>=4.45,<5",
+    "tokenizers>=0.20,<1",
 ]
 [project.scripts]
 parqdb = "parqdb.cli:main"

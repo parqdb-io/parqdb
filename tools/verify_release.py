@@ -80,7 +80,7 @@ def main() -> None:
                 python = environment / (
                     "Scripts/python.exe" if os.name == "nt" else "bin/python"
                 )
-                requirement = "parqdb[iceberg] @ " + wheel.as_uri()
+                requirement = "parqdb[iceberg,publish] @ " + wheel.as_uri()
                 subprocess.run(
                     [
                         "uv",

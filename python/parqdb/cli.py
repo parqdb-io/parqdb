@@ -8,6 +8,8 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+import httpx
+
 from .publish import build_index, parse_asset, publish
 from .server import create_app
 from .server.config import (
@@ -29,7 +31,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _config_init(arguments.path)
         if arguments.command == "publish":
             return _publish(arguments)
-    except (FileExistsError, RuntimeError, ValueError) as error:
+    except (OSError, httpx.HTTPError, RuntimeError, ValueError) as error:
         parser.error(str(error))
     raise AssertionError("argparse accepted an unsupported command")
 
@@ -62,17 +64,34 @@ def _parser() -> argparse.ArgumentParser:
     publish_command = commands.add_parser(
         "publish",
         help="build and publish a browser-queryable source table and static index",
+        description=(
+            "Build or reuse an immutable IVF-LVQ index, then publish it with its "
+            "source Parquet file. Choose --index-manifest, --vector-column, or one "
+            "or more --text-column options."
+        ),
     )
     publish_command.add_argument(
         "--source", type=Path, required=True, metavar="PARQUET"
     )
-    publish_command.add_argument("--key", required=True, metavar="COLUMN")
+    publish_command.add_argument(
+        "--key",
+        required=True,
+        metavar="COLUMN",
+        help="dense, ordered, non-null int64 key starting at zero",
+    )
     publish_command.add_argument(
         "--destination", required=True, metavar="PATH_OR_S3_URI"
     )
     publish_command.add_argument("--public-url", metavar="HTTPS_URL")
-    publish_command.add_argument("--index-manifest", type=Path, metavar="PATH")
-    publish_command.add_argument("--vector-column", metavar="COLUMN")
+    publish_command.add_argument(
+        "--index-manifest",
+        type=Path,
+        metavar="PATH",
+        help="reuse an existing static index",
+    )
+    publish_command.add_argument(
+        "--vector-column", metavar="COLUMN", help="build from an existing vector column"
+    )
     publish_command.add_argument(
         "--text-column",
         action="append",
@@ -80,15 +99,39 @@ def _parser() -> argparse.ArgumentParser:
         metavar="COLUMN",
         help="embed this string column with pinned MiniLM; may be repeated",
     )
-    publish_command.add_argument("--nlist", type=int)
-    publish_command.add_argument("--encoding", choices=("lvq4", "lvq8"), default="lvq8")
     publish_command.add_argument(
-        "--metric", choices=("cosine", "l2_squared"), default="cosine"
+        "--nlist", type=int, help="leaf-cluster count; required when building an index"
     )
-    publish_command.add_argument("--threads", type=int, default=8)
-    publish_command.add_argument("--embedding-batch-size", type=int, default=128)
     publish_command.add_argument(
-        "--work", type=Path, default=Path(".parqdb-publish"), metavar="PATH"
+        "--encoding",
+        choices=("lvq4", "lvq8"),
+        default="lvq8",
+        help="posting encoding (default: lvq8)",
+    )
+    publish_command.add_argument(
+        "--metric",
+        choices=("cosine", "l2_squared"),
+        default="cosine",
+        help="distance metric (default: cosine)",
+    )
+    publish_command.add_argument(
+        "--threads",
+        type=int,
+        default=8,
+        help="build threads, from 1 to 16 (default: 8)",
+    )
+    publish_command.add_argument(
+        "--embedding-batch-size",
+        type=int,
+        default=128,
+        help="text embedding batch size (default: 128)",
+    )
+    publish_command.add_argument(
+        "--work",
+        type=Path,
+        default=Path(".parqdb-publish"),
+        metavar="PATH",
+        help="resumable build directory (default: .parqdb-publish)",
     )
     publish_command.add_argument(
         "--asset",
@@ -99,7 +142,10 @@ def _parser() -> argparse.ArgumentParser:
     publish_command.add_argument("--s3-endpoint", metavar="HTTPS_URL")
     publish_command.add_argument("--s3-region", metavar="REGION")
     publish_command.add_argument(
-        "--cors-origin", default="https://example.invalid", metavar="ORIGIN"
+        "--cors-origin",
+        default="https://example.invalid",
+        metavar="ORIGIN",
+        help="Origin header used for public CORS verification",
     )
     publish_command.add_argument("--no-verify-http", action="store_true")
     return parser
@@ -111,6 +157,7 @@ def _publish(arguments: argparse.Namespace) -> int:
     if index_manifest is None:
         if arguments.nlist is None or arguments.nlist <= 0:
             raise ValueError("--nlist must be positive when building an index")
+        print("Building immutable index…", file=sys.stderr, flush=True)
         built = build_index(
             source=arguments.source,
             source_key=arguments.key,
@@ -129,6 +176,7 @@ def _publish(arguments: argparse.Namespace) -> int:
         raise ValueError(
             "--index-manifest cannot be combined with --vector-column or --text-column"
         )
+    print("Publishing source, index, and assets…", file=sys.stderr, flush=True)
     result = publish(
         index_manifest=index_manifest,
         source=arguments.source,

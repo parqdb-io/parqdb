@@ -17,6 +17,6 @@ workspace = true
 
 [dependencies]
 num-traits.workspace = true
-parallite = { version = "0.2.0-rc.1", path = "../parallite" }
-parqdb-kernels = { version = "0.2.0-rc.1", path = "../parqdb-kernels" }
+parallite = { version = "0.2.0-rc.2", path = "../parallite" }
+parqdb-kernels = { version = "0.2.0-rc.2", path = "../parqdb-kernels" }
 thiserror.workspace = true

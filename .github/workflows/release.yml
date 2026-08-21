@@ -13,6 +13,37 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  security:
+    name: Audit locked dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+          python-version: "3.12"
+
+      - name: Install Rust and cargo-deny
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.96.0"
+
+      - name: Install audit dependencies
+        run: |
+          make sync
+          cargo install cargo-deny --version 0.20.2 --locked
+
+      - name: Audit locked dependencies
+        run: make audit
+
   wheel:
     name: Build wheel (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
@@ -88,7 +119,7 @@ jobs:
 
   publish:
     name: Publish wheels to PyPI
-    needs: wheel
+    needs: [security, wheel]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment:

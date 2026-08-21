@@ -46,7 +46,7 @@ jobs:
           while IFS= read -r -d '' path; do
             case "$path" in
               *.md|assets/*|.github/workflows/ci.yml) ;;
-              browser/*|crates/parqdb-browser-kernels/*)
+              browser/*|rust/parqdb-browser-kernels/*|rust/parqdb-kernels/*)
                 docs_only=false
                 browser_changed=true
                 ;;
@@ -157,6 +157,37 @@ jobs:
       - name: Run Rust checks
         run: make check-rust
 
+  security:
+    name: Dependency audit
+    needs: scope
+    if: needs.scope.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+          python-version: "3.12"
+
+      - name: Install Rust and cargo-deny
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.96.0"
+
+      - name: Install audit dependencies
+        run: |
+          make sync
+          cargo install cargo-deny --version 0.20.2 --locked
+
+      - name: Audit locked dependencies
+        run: make audit
+
   browser:
     name: Browser checks
     needs: scope
@@ -184,6 +215,10 @@ jobs:
       - name: Install browser dependencies
         working-directory: browser
         run: npm ci
+
+      - name: Audit browser dependencies
+        working-directory: browser
+        run: npm audit --audit-level=high
 
       - name: Build WebAssembly kernel
         run: cargo build --locked --release --target wasm32-unknown-unknown -p parqdb-browser-kernels
