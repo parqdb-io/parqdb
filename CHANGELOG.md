@@ -7,6 +7,19 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0rc3] - 2026-08-21
+
+### Fixed
+
+- The vendored Arrow Parquet runtime now uses Apache Thrift 0.23, removing the
+  vulnerable unbounded compact-protocol varint decoder from release wheels.
+- Installed-wheel tests now resolve repository fixtures independently of the
+  process working directory, preserving source-tree isolation during release
+  verification.
+- Pull requests now build and exercise an installed wheel on Python 3.11,
+  including the embedded DataFusion namespace-coexistence check, before a
+  release tag can be created.
+
 ## [0.2.0rc2] - 2026-08-21
 
 ### Added

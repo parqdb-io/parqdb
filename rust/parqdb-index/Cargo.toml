@@ -17,17 +17,17 @@ workspace = true
 
 [dependencies]
 bytes.workspace = true
-parqdb-catalog = { version = "0.2.0-rc.2", path = "../parqdb-catalog", default-features = false }
-parqdb-core = { version = "0.2.0-rc.2", path = "../parqdb-core" }
-parqdb-meta = { version = "0.2.0-rc.2", path = "../parqdb-meta" }
-parqdb-storage = { version = "0.2.0-rc.2", path = "../parqdb-storage" }
+parqdb-catalog = { version = "0.2.0-rc.3", path = "../parqdb-catalog", default-features = false }
+parqdb-core = { version = "0.2.0-rc.3", path = "../parqdb-core" }
+parqdb-meta = { version = "0.2.0-rc.3", path = "../parqdb-meta" }
+parqdb-storage = { version = "0.2.0-rc.3", path = "../parqdb-storage" }
 serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 url.workspace = true
 
 [dev-dependencies]
-parqdb-catalog = { version = "0.2.0-rc.2", path = "../parqdb-catalog" }
+parqdb-catalog = { version = "0.2.0-rc.3", path = "../parqdb-catalog" }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros"] }
 url.workspace = true

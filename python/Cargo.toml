@@ -20,9 +20,9 @@ datafusion-python.workspace = true
 futures.workspace = true
 pyo3 = { workspace = true, features = ["abi3-py310", "extension-module"] }
 pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
-parqdb-catalog = { version = "0.2.0-rc.2", path = "../rust/parqdb-catalog" }
-parqdb-local = { version = "0.2.0-rc.2", path = "../rust/parqdb-local" }
-parqdb-meta = { version = "0.2.0-rc.2", path = "../rust/parqdb-meta" }
+parqdb-catalog = { version = "0.2.0-rc.3", path = "../rust/parqdb-catalog" }
+parqdb-local = { version = "0.2.0-rc.3", path = "../rust/parqdb-local" }
+parqdb-meta = { version = "0.2.0-rc.3", path = "../rust/parqdb-meta" }
 serde_json.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "parqdb"
-version = "0.2.0rc2"
+version = "0.2.0rc3"
 description = "Lightweight vector index extension for the open lakehouse stack"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
