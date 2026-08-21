@@ -123,6 +123,34 @@ print(summary.to_pydict())
 上述示例无需额外下载数据。持久化表、已有索引、执行计划检查和源表 Schema
 要求参见[入门指南](https://github.com/parqdb-io/parqdb/blob/main/docs/getting-started.md)。
 
+一条命令即可发布源表和不可变浏览器索引。对于原始文本，ParqDB 使用固定
+revision 的 MiniLM ONNX 模型生成离线 embedding 和浏览器一致性元数据，随后
+构建分层 IVF-LVQ8，并在公开 `index/manifest.json` 前上传全部对象：
+
+```bash
+python -m pip install "parqdb[publish]"
+
+parqdb publish \
+  --source documents.parquet \
+  --key chunk_id \
+  --text-column title \
+  --text-column section \
+  --text-column text \
+  --nlist 4096 \
+  --destination s3://my-bucket/kb/v1 \
+  --s3-endpoint https://ACCOUNT_ID.r2.cloudflarestorage.com \
+  --s3-region auto \
+  --public-url https://data.example.com/kb/v1
+```
+
+凭证从标准的 `AWS_ACCESS_KEY_ID` 和 `AWS_SECRET_ACCESS_KEY` 环境变量读取。如果
+`documents.parquet` 已包含 embedding，把三个 `--text-column` 参数替换为
+`--vector-column embedding`。发布命令拒绝覆盖已有前缀，并在成功前验证公开
+HTTP Range 和 CORS 行为。
+
+如果需要从文档切片到 GitHub Pages 搜索界面的完整知识库，请使用
+[`parqdb-knowledgebase`](https://github.com/parqdb-io/parqdb-knowledgebase)。
+
 ## 当前状态
 
 | 运行时 | 存储 | 当前能力 | 状态 |

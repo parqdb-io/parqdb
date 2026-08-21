@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from .publish import build_index, parse_asset, publish
 from .server import create_app
 from .server.config import (
     DEFAULT_CONFIG_FILENAME,
@@ -25,6 +27,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _serve(arguments.config)
         if arguments.command == "config" and arguments.config_command == "init":
             return _config_init(arguments.path)
+        if arguments.command == "publish":
+            return _publish(arguments)
     except (FileExistsError, RuntimeError, ValueError) as error:
         parser.error(str(error))
     raise AssertionError("argparse accepted an unsupported command")
@@ -54,7 +58,102 @@ def _parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help=f"configuration destination (default: ./{DEFAULT_CONFIG_FILENAME})",
     )
+
+    publish_command = commands.add_parser(
+        "publish",
+        help="build and publish a browser-queryable source table and static index",
+    )
+    publish_command.add_argument(
+        "--source", type=Path, required=True, metavar="PARQUET"
+    )
+    publish_command.add_argument("--key", required=True, metavar="COLUMN")
+    publish_command.add_argument(
+        "--destination", required=True, metavar="PATH_OR_S3_URI"
+    )
+    publish_command.add_argument("--public-url", metavar="HTTPS_URL")
+    publish_command.add_argument("--index-manifest", type=Path, metavar="PATH")
+    publish_command.add_argument("--vector-column", metavar="COLUMN")
+    publish_command.add_argument(
+        "--text-column",
+        action="append",
+        default=[],
+        metavar="COLUMN",
+        help="embed this string column with pinned MiniLM; may be repeated",
+    )
+    publish_command.add_argument("--nlist", type=int)
+    publish_command.add_argument("--encoding", choices=("lvq4", "lvq8"), default="lvq8")
+    publish_command.add_argument(
+        "--metric", choices=("cosine", "l2_squared"), default="cosine"
+    )
+    publish_command.add_argument("--threads", type=int, default=8)
+    publish_command.add_argument("--embedding-batch-size", type=int, default=128)
+    publish_command.add_argument(
+        "--work", type=Path, default=Path(".parqdb-publish"), metavar="PATH"
+    )
+    publish_command.add_argument(
+        "--asset",
+        action="append",
+        default=[],
+        metavar="REMOTE_PATH=LOCAL_PATH",
+    )
+    publish_command.add_argument("--s3-endpoint", metavar="HTTPS_URL")
+    publish_command.add_argument("--s3-region", metavar="REGION")
+    publish_command.add_argument(
+        "--cors-origin", default="https://example.invalid", metavar="ORIGIN"
+    )
+    publish_command.add_argument("--no-verify-http", action="store_true")
     return parser
+
+
+def _publish(arguments: argparse.Namespace) -> int:
+    assets = tuple(parse_asset(value) for value in arguments.asset)
+    index_manifest = arguments.index_manifest
+    if index_manifest is None:
+        if arguments.nlist is None or arguments.nlist <= 0:
+            raise ValueError("--nlist must be positive when building an index")
+        built = build_index(
+            source=arguments.source,
+            source_key=arguments.key,
+            work=arguments.work,
+            nlist=arguments.nlist,
+            encoding=arguments.encoding,
+            metric=arguments.metric,
+            threads=arguments.threads,
+            vector_column=arguments.vector_column,
+            text_columns=tuple(arguments.text_column),
+            embedding_batch_size=arguments.embedding_batch_size,
+        )
+        index_manifest = built.manifest
+        assets = (*assets, *built.model_assets)
+    elif arguments.vector_column is not None or arguments.text_column:
+        raise ValueError(
+            "--index-manifest cannot be combined with --vector-column or --text-column"
+        )
+    result = publish(
+        index_manifest=index_manifest,
+        source=arguments.source,
+        source_key=arguments.key,
+        destination=arguments.destination,
+        public_url=arguments.public_url,
+        assets=assets,
+        s3_endpoint=arguments.s3_endpoint,
+        s3_region=arguments.s3_region,
+        verify_http=not arguments.no_verify_http,
+        cors_origin=arguments.cors_origin,
+    )
+    print(
+        json.dumps(
+            {
+                "destination": result.destination,
+                "manifest_url": result.manifest_url,
+                "files": result.files,
+                "bytes": result.bytes,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
 
 
 def _config_init(path: Path) -> int:
