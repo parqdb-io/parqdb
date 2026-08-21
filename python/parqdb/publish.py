@@ -295,8 +295,8 @@ def _embed_minilm(
 ) -> dict[str, object]:
     try:
         import numpy as np
-        import onnxruntime as ort
-        from transformers import AutoTokenizer
+        import onnxruntime as ort  # type: ignore[import]
+        from transformers import AutoTokenizer  # type: ignore[import]
     except ImportError as error:
         raise RuntimeError(
             "text embedding requires the optional dependencies: "
