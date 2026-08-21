@@ -63,9 +63,13 @@ def _parser() -> argparse.ArgumentParser:
         "publish",
         help="build and publish a browser-queryable source table and static index",
     )
-    publish_command.add_argument("--source", type=Path, required=True, metavar="PARQUET")
+    publish_command.add_argument(
+        "--source", type=Path, required=True, metavar="PARQUET"
+    )
     publish_command.add_argument("--key", required=True, metavar="COLUMN")
-    publish_command.add_argument("--destination", required=True, metavar="PATH_OR_S3_URI")
+    publish_command.add_argument(
+        "--destination", required=True, metavar="PATH_OR_S3_URI"
+    )
     publish_command.add_argument("--public-url", metavar="HTTPS_URL")
     publish_command.add_argument("--index-manifest", type=Path, metavar="PATH")
     publish_command.add_argument("--vector-column", metavar="COLUMN")
@@ -77,9 +81,7 @@ def _parser() -> argparse.ArgumentParser:
         help="embed this string column with pinned MiniLM; may be repeated",
     )
     publish_command.add_argument("--nlist", type=int)
-    publish_command.add_argument(
-        "--encoding", choices=("lvq4", "lvq8"), default="lvq8"
-    )
+    publish_command.add_argument("--encoding", choices=("lvq4", "lvq8"), default="lvq8")
     publish_command.add_argument(
         "--metric", choices=("cosine", "l2_squared"), default="cosine"
     )

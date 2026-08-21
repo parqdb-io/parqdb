@@ -50,7 +50,9 @@ def test_publish_local_source_and_index(tmp_path: Path) -> None:
 
     assert result.destination == str(destination)
     assert result.manifest_url is None
-    assert (destination / "index" / "manifest.json").read_bytes() == manifest.read_bytes()
+    assert (
+        destination / "index" / "manifest.json"
+    ).read_bytes() == manifest.read_bytes()
     source_manifest = json.loads(
         (destination / "source-manifest.json").read_text(encoding="utf-8")
     )

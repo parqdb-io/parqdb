@@ -49,7 +49,11 @@ class _Object:
 
     @property
     def size(self) -> int:
-        return self.source.stat().st_size if self.source is not None else len(self.content or b"")
+        return (
+            self.source.stat().st_size
+            if self.source is not None
+            else len(self.content or b"")
+        )
 
 
 @dataclass(frozen=True)
@@ -140,7 +144,10 @@ def build_index(
         metadata_path.write_bytes(_json_bytes(model_metadata))
         model_assets = (
             ("model.json", metadata_path),
-            *((f"models/all-MiniLM-L6-v2/{path}", model_root / path) for path in _MINILM_FILES),
+            *(
+                (f"models/all-MiniLM-L6-v2/{path}", model_root / path)
+                for path in _MINILM_FILES
+            ),
         )
         column = "embedding"
     assert column is not None
@@ -176,7 +183,9 @@ def verify_publication(
         response = client.get(f"{root}index/manifest.json")
         response.raise_for_status()
         if response.content != paths["index/manifest.json"].content:
-            raise RuntimeError("public index manifest bytes differ from the publication")
+            raise RuntimeError(
+                "public index manifest bytes differ from the publication"
+            )
         ranged = client.get(
             f"{root}{candidate.path}",
             headers={"Range": "bytes=0-0", "Origin": cors_origin},
@@ -230,7 +239,9 @@ def _source_manifest(
     row_group_rows = parquet.metadata.row_group(0).num_rows
     for index in range(max(0, parquet.metadata.num_row_groups - 1)):
         if parquet.metadata.row_group(index).num_rows != row_group_rows:
-            raise ValueError("all source row groups except the final group must be uniform")
+            raise ValueError(
+                "all source row groups except the final group must be uniform"
+            )
     return {
         "format-version": 1,
         "rows": rows,
@@ -331,27 +342,41 @@ def _embed_minilm(
             pa.field(source_key, pa.int64(), nullable=False),
             pa.field(
                 "embedding",
-                pa.list_(pa.field("element", pa.float32(), nullable=False), _MINILM_DIMENSION),
+                pa.list_(
+                    pa.field("element", pa.float32(), nullable=False), _MINILM_DIMENSION
+                ),
                 nullable=False,
             ),
         ]
     )
     if not output.exists():
-        writer = pq.ParquetWriter(output, schema, compression="zstd", compression_level=3)
+        writer = pq.ParquetWriter(
+            output, schema, compression="zstd", compression_level=3
+        )
         try:
             columns = [source_key, *text_columns]
-            for source_batch in parquet.iter_batches(batch_size=batch_size, columns=columns):
+            for source_batch in parquet.iter_batches(
+                batch_size=batch_size, columns=columns
+            ):
                 rows = source_batch.to_pylist()
-                texts = ["\n\n".join(str(row[column]) for column in text_columns) for row in rows]
+                texts = [
+                    "\n\n".join(str(row[column]) for column in text_columns)
+                    for row in rows
+                ]
                 vectors = encode(texts)
-                if vectors.shape[1] != _MINILM_DIMENSION or not np.isfinite(vectors).all():
+                if (
+                    vectors.shape[1] != _MINILM_DIMENSION
+                    or not np.isfinite(vectors).all()
+                ):
                     raise RuntimeError("embedding model returned an invalid matrix")
                 flat = pa.array(vectors.reshape(-1), type=pa.float32())
                 embeddings = pa.FixedSizeListArray.from_arrays(
                     flat, type=schema.field("embedding").type
                 )
                 writer.write_batch(
-                    pa.RecordBatch.from_arrays([source_batch.column(0), embeddings], schema=schema),
+                    pa.RecordBatch.from_arrays(
+                        [source_batch.column(0), embeddings], schema=schema
+                    ),
                     row_group_size=8_192,
                 )
         finally:
@@ -392,8 +417,10 @@ def _build_parqdb_index(
     existing = _find_static_package(warehouse)
     if existing is not None:
         return existing
-    config = SessionConfig().with_target_partitions(threads).set(
-        "parqdb.build.dop", str(threads)
+    config = (
+        SessionConfig()
+        .with_target_partitions(threads)
+        .set("parqdb.build.dop", str(threads))
     )
     session = connect(warehouse, config=config)
     try:
@@ -447,7 +474,9 @@ def _publication_objects(
     objects = [_Object(f"index/{path}", source=root / path) for path in referenced]
     native_manifest = root / "ivf_postings" / "manifest.json"
     if native_manifest.is_file():
-        objects.append(_Object("index/ivf_postings/manifest.json", source=native_manifest))
+        objects.append(
+            _Object("index/ivf_postings/manifest.json", source=native_manifest)
+        )
     objects.append(_Object(source.name, source=source))
     for relative, asset in assets:
         relative = _safe_relative_path(relative)
@@ -458,7 +487,9 @@ def _publication_objects(
     source_bytes = _json_bytes(source_manifest)
     objects.append(_Object("source-manifest.json", content=source_bytes))
     # The entry-point index manifest is the commit marker and is always written last.
-    objects.append(_Object("index/manifest.json", content=index_manifest_path.read_bytes()))
+    objects.append(
+        _Object("index/manifest.json", content=index_manifest_path.read_bytes())
+    )
     for item in objects:
         if item.source is not None and not item.source.is_file():
             raise ValueError(f"index object does not exist: {item.source}")
@@ -498,7 +529,9 @@ def _validate_index_objects(manifest: dict[str, object], root: Path) -> None:
         if descriptor.get("size") != path.stat().st_size:
             raise ValueError(f"index object size does not match manifest: {relative}")
         if descriptor.get("sha256") != _sha256(path):
-            raise ValueError(f"index object SHA-256 does not match manifest: {relative}")
+            raise ValueError(
+                f"index object SHA-256 does not match manifest: {relative}"
+            )
 
 
 def _safe_relative_path(value: str) -> str:
@@ -561,7 +594,10 @@ class _S3Writer(_Writer):
 
     def ensure_empty(self, paths: tuple[str, ...]) -> None:
         for relative in paths:
-            if self.filesystem.get_file_info(self._path(relative)).type != fs.FileType.NotFound:
+            if (
+                self.filesystem.get_file_info(self._path(relative)).type
+                != fs.FileType.NotFound
+            ):
                 raise FileExistsError(f"destination object already exists: {relative}")
 
     def write(self, item: _Object) -> None:
@@ -579,9 +615,13 @@ def _writer(
     parsed = urlparse(destination)
     if parsed.scheme == "s3":
         if not parsed.netloc or not parsed.path.strip("/"):
-            raise ValueError("S3 destination must include a bucket and immutable prefix")
+            raise ValueError(
+                "S3 destination must include a bucket and immutable prefix"
+            )
         endpoint = urlparse(s3_endpoint) if s3_endpoint is not None else None
-        if endpoint is not None and (endpoint.scheme not in {"http", "https"} or not endpoint.netloc):
+        if endpoint is not None and (
+            endpoint.scheme not in {"http", "https"} or not endpoint.netloc
+        ):
             raise ValueError("--s3-endpoint must be an HTTP(S) URL")
         filesystem = fs.S3FileSystem(
             region=s3_region,
