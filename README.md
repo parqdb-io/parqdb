@@ -266,6 +266,10 @@ Made with [contrib.rocks](https://contrib.rocks).
 ## Star History
 
 <!-- star-history:start -->
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/parqdb-io/parqdb/star-history-data/assets/star-history/star-history-dark.svg">
+  <img alt="ParqDB Star History" src="https://raw.githubusercontent.com/parqdb-io/parqdb/star-history-data/assets/star-history/star-history-light.svg">
+</picture>
 <!-- star-history:end -->
 
 ## License

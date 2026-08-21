@@ -20,6 +20,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.0.0
+        with:
+          ref: star-history-data
 
       - name: Update star history chart
         uses: narayann7/star-history-action@a68d8f9d67ca20d55b682a264e69152dcf326e9c # v1.0.4
@@ -28,7 +30,5 @@ jobs:
           output-dir: assets/star-history
           type: Date
           themes: light,dark
-          update-readme: true
-          readme: README.md
-          readme-format: picture
+          update-readme: false
           commit-message: "chore: update star history [skip ci]"
