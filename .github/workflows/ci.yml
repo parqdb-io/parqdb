@@ -206,7 +206,7 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: "22"
           cache: npm
@@ -218,7 +218,7 @@ jobs:
 
       - name: Audit browser dependencies
         working-directory: browser
-        run: npm audit --audit-level=high
+        run: npm audit --registry=https://registry.npmjs.org --audit-level=high
 
       - name: Build WebAssembly kernel
         run: cargo build --locked --release --target wasm32-unknown-unknown -p parqdb-browser-kernels
