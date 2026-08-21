@@ -11,6 +11,8 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The vendored Arrow Parquet runtime now uses Apache Thrift 0.23, removing the
+  vulnerable unbounded compact-protocol varint decoder from release wheels.
 - Installed-wheel tests now resolve repository fixtures independently of the
   process working directory, preserving source-tree isolation during release
   verification.

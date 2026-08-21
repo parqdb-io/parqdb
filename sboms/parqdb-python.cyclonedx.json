@@ -8162,7 +8162,7 @@
       "version": "0.2.1"
     },
     {
-      "bom-ref": "pkg:cargo/ordered-float@2.10.1",
+      "bom-ref": "pkg:cargo/ordered-float@3.9.2",
       "description": "Wrappers for total ordering on floats",
       "externalReferences": [
         {
@@ -8173,7 +8173,7 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "68f19d67e5a2795c94e73e0bb1cc1a7edeb2e28efd39e2e1c9b7a40c1108b11c"
+          "content": "f1e1c390732d15f1d48471625cd92d154e66db2c56645e29a9cd26f4699f72dc"
         }
       ],
       "licenses": [
@@ -8182,10 +8182,10 @@
         }
       ],
       "name": "ordered-float",
-      "purl": "pkg:cargo/ordered-float@2.10.1",
+      "purl": "pkg:cargo/ordered-float@3.9.2",
       "scope": "required",
       "type": "library",
-      "version": "2.10.1"
+      "version": "3.9.2"
     },
     {
       "bom-ref": "pkg:cargo/ordered-float@4.6.0",
@@ -12413,7 +12413,7 @@
       "version": "2.0.19"
     },
     {
-      "bom-ref": "pkg:cargo/thrift@0.17.0",
+      "bom-ref": "pkg:cargo/thrift@0.23.0",
       "description": "Rust bindings for the Apache Thrift RPC system",
       "externalReferences": [
         {
@@ -12424,7 +12424,7 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "7e54bc85fc7faa8bc175c4bab5b92ba8d9a3ce893d0e9f42cc455c8ab16a9e09"
+          "content": "1f650151e44bb59950b3adf32de0064813d1148f34f4884b7f5b539f29596859"
         }
       ],
       "licenses": [
@@ -12433,10 +12433,10 @@
         }
       ],
       "name": "thrift",
-      "purl": "pkg:cargo/thrift@0.17.0",
+      "purl": "pkg:cargo/thrift@0.23.0",
       "scope": "required",
       "type": "library",
-      "version": "0.17.0"
+      "version": "0.23.0"
     },
     {
       "bom-ref": "pkg:cargo/time@0.3.54",
@@ -18106,7 +18106,7 @@
       "dependsOn": [
         "pkg:cargo/num-traits@0.2.19"
       ],
-      "ref": "pkg:cargo/ordered-float@2.10.1"
+      "ref": "pkg:cargo/ordered-float@3.9.2"
     },
     {
       "dependsOn": [
@@ -18320,7 +18320,7 @@
         "pkg:cargo/seq-macro@0.3.6",
         "pkg:cargo/simdutf8@0.1.5",
         "pkg:cargo/snap@1.1.2",
-        "pkg:cargo/thrift@0.17.0",
+        "pkg:cargo/thrift@0.23.0",
         "pkg:cargo/tokio@1.53.1",
         "pkg:cargo/twox-hash@2.1.3",
         "pkg:cargo/zstd@0.13.3"
@@ -19502,9 +19502,10 @@
       "dependsOn": [
         "pkg:cargo/byteorder@1.5.0",
         "pkg:cargo/integer-encoding@3.0.4",
-        "pkg:cargo/ordered-float@2.10.1"
+        "pkg:cargo/ordered-float@3.9.2",
+        "pkg:cargo/uuid@1.24.0"
       ],
-      "ref": "pkg:cargo/thrift@0.17.0"
+      "ref": "pkg:cargo/thrift@0.23.0"
     },
     {
       "dependsOn": [],
@@ -20234,7 +20235,7 @@
     "properties": [
       {
         "name": "parqdb:cargo-lock-sha256",
-        "value": "4c42c4f89398113a5adc27fa411fb00dfaf40658416668f56aedf2e3c123d364"
+        "value": "b3cdccd98600abdc8c7f38fbab53774648d662229f80e4fec63bbd2d893ffd0a"
       }
     ]
   },
