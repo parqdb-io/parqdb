@@ -254,8 +254,8 @@ make check
 <p align="center">
   <a href="https://github.com/parqdb-io/parqdb/stargazers">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/parqdb-io/parqdb/main/assets/star-history/star-history-dark.svg">
-      <img alt="ParqDB Star 历史" src="https://raw.githubusercontent.com/parqdb-io/parqdb/main/assets/star-history/star-history-light.svg">
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/parqdb-io/parqdb/star-history-data/assets/star-history/star-history-dark.svg">
+      <img alt="ParqDB Star 历史" src="https://raw.githubusercontent.com/parqdb-io/parqdb/star-history-data/assets/star-history/star-history-light.svg">
     </picture>
   </a>
 </p>
