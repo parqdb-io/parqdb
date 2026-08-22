@@ -46,6 +46,7 @@ pub(super) struct ManifestedCidParquetProvider {
     store: Arc<dyn ObjectStore>,
     format: Arc<dyn FileFormat>,
     manifest: Arc<IvfPostingsManifest>,
+    artifact: Option<Arc<IndexArtifactManifest>>,
     files: Arc<[ManifestedFile]>,
     cid_selection: Option<Arc<BTreeSet<i32>>>,
 }
@@ -71,17 +72,17 @@ impl ManifestedCidParquetProvider {
         state: &dyn Session,
         index_io: IndexIoMode,
     ) -> Result<Self> {
-        let (relation_root, manifest) = load_postings_manifest(registry, location).await?;
-        let resolved = registry.resolve(&relation_root)?;
+        let (table_root, manifest, artifact) = load_postings_manifest(registry, location).await?;
+        let resolved = registry.resolve(&table_root)?;
         let store = resolved.store();
         state
             .runtime_env()
             .register_object_store(resolved.base_url(), Arc::clone(&store));
-        let table_path = ListingTableUrl::parse(&relation_root)?;
+        let table_path = ListingTableUrl::parse(&table_root)?;
         let manifest = Arc::new(manifest);
         let mut files = Vec::with_capacity(manifest.files.len());
         for entry in &manifest.files {
-            let file_location = child_location(&relation_root, &entry.path, false)?;
+            let file_location = child_location(&table_root, &entry.path, false)?;
             let resolved_file = registry.resolve(&file_location)?;
             if resolved_file.base_url() != resolved.base_url() {
                 return Err(Error::InvalidSchema(
@@ -132,6 +133,7 @@ impl ManifestedCidParquetProvider {
             store,
             format,
             manifest,
+            artifact: artifact.map(Arc::new),
             files: files.into(),
             cid_selection: None,
         })
@@ -191,6 +193,10 @@ impl ManifestedCidParquetProvider {
             ));
         }
         Ok(())
+    }
+
+    pub(super) fn artifact_manifest(&self) -> Option<Arc<IndexArtifactManifest>> {
+        self.artifact.as_ref().map(Arc::clone)
     }
 
     fn selected_cids(&self, filters: &[Expr]) -> Option<BTreeSet<i32>> {
@@ -309,7 +315,7 @@ impl ManifestedCidParquetProvider {
 async fn load_postings_manifest(
     registry: &StorageRegistry,
     location: &str,
-) -> Result<(String, IvfPostingsManifest)> {
+) -> Result<(String, IvfPostingsManifest, Option<IndexArtifactManifest>)> {
     let artifact_location = location.ends_with("/manifest.json").then_some(location);
     let manifest_location = match artifact_location {
         Some(location) => location.to_owned(),
@@ -327,19 +333,19 @@ async fn load_postings_manifest(
     if artifact_location.is_none() {
         let manifest = IvfPostingsManifest::from_json_slice(&bytes)
             .map_err(|error| Error::InvalidSchema(error.to_string()))?;
-        return Ok((location.to_owned(), manifest));
+        return Ok((location.to_owned(), manifest, None));
     }
 
     let artifact = IndexArtifactManifest::from_json_slice(&bytes)
         .map_err(|error| Error::InvalidSchema(error.to_string()))?;
-    let relation_root = url::Url::parse(&manifest_location)
+    let table_root = url::Url::parse(&manifest_location)
         .and_then(|url| url.join("ivf_postings/"))
         .map_err(|error| Error::InvalidSchema(error.to_string()))?
         .to_string();
     let files = artifact
         .postings
         .files
-        .into_iter()
+        .iter()
         .map(|file| {
             let path = file
                 .path
@@ -353,7 +359,7 @@ async fn load_postings_manifest(
                 max_cid: file.max_cid,
                 rows: file.rows,
                 size: file.size,
-                sha256: file.sha256,
+                sha256: file.sha256.clone(),
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -361,13 +367,13 @@ async fn load_postings_manifest(
         format_version: 1,
         nlist: artifact.index.nlist,
         ntotal: artifact.index.ntotal,
-        cid_offsets: artifact.hierarchy.cid_offsets,
+        cid_offsets: artifact.hierarchy.cid_offsets.clone(),
         files,
     };
     manifest
         .validate()
         .map_err(|error| Error::InvalidSchema(error.to_string()))?;
-    Ok((relation_root, manifest))
+    Ok((table_root, manifest, Some(artifact)))
 }
 
 #[async_trait]

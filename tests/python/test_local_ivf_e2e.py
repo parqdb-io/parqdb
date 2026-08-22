@@ -13,11 +13,11 @@ import pytest
 from _support import (
     WAIT,
     artifact_manifest_location,
+    index_table_files,
+    index_table_path,
     load_metadata_file,
     load_table_index,
     register_source,
-    relation_files,
-    relation_path,
     thaw_json,
     vector_type,
 )
@@ -137,12 +137,12 @@ def test_local_build_publish_and_search(tmp_path: Path) -> None:
     assert snapshot["parameters"]["ivf_centroids_fingerprint"]
     assert snapshot["parameters"]["ivf_centroids_uuid"]
     assert snapshot["parameters"]["ivf_centroids_metadata_location"]
-    assert set(snapshot["index-relations"]) == {
+    assert set(snapshot["index-tables"]) == {
         "ivf_centroids",
         "ivf_postings",
     }
     assert pq.read_schema(
-        relation_path(snapshot["index-relations"]["ivf_centroids"], session.warehouse)
+        index_table_path(snapshot["index-tables"]["ivf_centroids"], session.warehouse)
     ) == pa.schema(
         [
             pa.field("cid", pa.int32(), nullable=False),
@@ -153,15 +153,15 @@ def test_local_build_publish_and_search(tmp_path: Path) -> None:
         ]
     )
     assert pq.read_schema(
-        relation_path(snapshot["index-relations"]["ivf_postings"], session.warehouse)
+        index_table_path(snapshot["index-tables"]["ivf_postings"], session.warehouse)
     ) == pa.schema(
         [
             pa.field("cid", pa.int32(), nullable=False),
             pa.field("key_1", pa.string(), nullable=False),
         ]
     )
-    posting_files = relation_files(
-        snapshot["index-relations"]["ivf_postings"], session.warehouse
+    posting_files = index_table_files(
+        snapshot["index-tables"]["ivf_postings"], session.warehouse
     )
     assert posting_files
     for file in posting_files:
@@ -346,12 +346,12 @@ def test_ivf_centroids_float64_and_cosine_end_to_end(tmp_path: Path) -> None:
         assert all(
             field not in snapshot["parameters"] for snapshot in artifact_snapshots
         )
-    assert set(source_snapshot["index-relations"]) == {
+    assert set(source_snapshot["index-tables"]) == {
         "ivf_centroids",
         "ivf_postings",
     }
     assert all(
-        set(snapshot["index-relations"]) == {"artifact_manifest"}
+        set(snapshot["index-tables"]) == {"ivf_centroids", "ivf_postings"}
         for snapshot in artifact_snapshots
     )
     assert len(
@@ -525,9 +525,9 @@ def test_composite_keys_are_stored_directly_in_postings(tmp_path: Path) -> None:
     snapshot = load_table_index(session, documents, "composite_index").metadata[
         "snapshots"
     ][0]
-    assert set(snapshot["index-relations"]) == {"ivf_centroids", "ivf_postings"}
+    assert set(snapshot["index-tables"]) == {"ivf_centroids", "ivf_postings"}
     assert pq.read_schema(
-        relation_path(snapshot["index-relations"]["ivf_postings"], session.warehouse)
+        index_table_path(snapshot["index-tables"]["ivf_postings"], session.warehouse)
     ) == pa.schema(
         [
             pa.field("cid", pa.int32(), nullable=False),
@@ -555,7 +555,7 @@ def test_vectors_can_be_omitted_from_postings(tmp_path: Path) -> None:
     ][0]
     assert snapshot["parameters"]["posting_encoding"] == "source"
     assert pq.read_schema(
-        relation_path(snapshot["index-relations"]["ivf_postings"], session.warehouse)
+        index_table_path(snapshot["index-tables"]["ivf_postings"], session.warehouse)
     ) == pa.schema(
         [
             pa.field("cid", pa.int32(), nullable=False),

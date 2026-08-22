@@ -7,11 +7,11 @@ use serde::{Deserialize, Serialize};
 use crate::error::invalid;
 use crate::{Result, validate_relative_location};
 
-/// One Parquet object in a manifested IVF postings relation.
+/// One Parquet object in a manifested IVF postings table.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct IvfPostingsFile {
-    /// Path relative to the postings relation root.
+    /// Path relative to the postings table root.
     pub path: String,
     /// Hierarchical root ID owning this file.
     pub cid_bucket: i32,
@@ -27,7 +27,7 @@ pub struct IvfPostingsFile {
     pub sha256: String,
 }
 
-/// Version 1 manifest for one immutable IVF postings relation.
+/// Version 1 manifest for one immutable IVF postings table.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct IvfPostingsManifest {

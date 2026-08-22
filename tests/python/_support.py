@@ -129,9 +129,11 @@ def register_table_index(
 
 def artifact_manifest_location(entry: CatalogEntry, warehouse: str) -> str:
     snapshot = entry.metadata["snapshots"][0]
-    reference = snapshot["index-relations"]["artifact_manifest"]
-    assert isinstance(reference, str)
-    return urljoin(warehouse.rstrip("/") + "/", reference)
+    reference = snapshot["index-tables"]["ivf_postings"]
+    assert isinstance(reference, Mapping)
+    location = reference["properties"]["location"]
+    assert isinstance(location, str)
+    return urljoin(warehouse.rstrip("/") + "/", location)
 
 
 def drop_table_index_entry(
@@ -162,19 +164,22 @@ def drop_table_index_entry(
         )
 
 
-def relation_root(reference: str, warehouse: str) -> Path:
-    assert isinstance(reference, str)
-    parsed = urlparse(urljoin(warehouse.rstrip("/") + "/", reference))
+def index_table_root(definition: Mapping[str, object], warehouse: str) -> Path:
+    properties = definition["properties"]
+    assert isinstance(properties, Mapping)
+    location = properties["location"]
+    assert isinstance(location, str)
+    parsed = urlparse(urljoin(warehouse.rstrip("/") + "/", location))
     assert parsed.scheme == "file"
     return Path(unquote(parsed.path))
 
 
-def relation_files(reference: str, warehouse: str) -> list[Path]:
-    return sorted(relation_root(reference, warehouse).rglob("*.parquet"))
+def index_table_files(definition: Mapping[str, object], warehouse: str) -> list[Path]:
+    return sorted(index_table_root(definition, warehouse).rglob("*.parquet"))
 
 
-def relation_path(reference: str, warehouse: str) -> Path:
-    files = relation_files(reference, warehouse)
+def index_table_path(definition: Mapping[str, object], warehouse: str) -> Path:
+    files = index_table_files(definition, warehouse)
     assert files
     return files[0]
 

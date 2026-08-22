@@ -3,7 +3,7 @@
 The embedded runtime runs in the Python process and is the stable ParqDB 0.1
 path. It uses DataFusion for relational execution, native Rust code for index
 construction and distance kernels, SQLite for catalog state, and Parquet for
-the index relations.
+the index tables.
 
 Use it for local development, single-node analytical workloads, batch jobs, or
 applications that already expose Parquet data to an embedded query engine.
@@ -31,7 +31,7 @@ The directory contains the SQLite catalog, immutable metadata documents, and
 Parquet index snapshots. Reopening the same path restores persistent source
 registrations and index mappings.
 
-Store index relations on shared storage while keeping the local session state
+Store index tables on shared storage while keeping the local session state
 under one directory:
 
 ```python
@@ -141,7 +141,7 @@ result = session.sql(f"""
 
 The vector search and aggregation remain in one DataFusion plan. The generated
 SQL is executable in the originating session because it refers to registered
-source and index relations.
+source and index tables.
 
 ## Page Cache
 

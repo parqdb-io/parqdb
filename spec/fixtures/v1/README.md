@@ -24,7 +24,7 @@ the postings fields, not the schema-version history. Full source vectors are
 absent from every postings fixture.
 
 The metadata URIs are stable logical fixture URIs. Test harnesses may map them
-to local files but must preserve the referenced relation state and IVF-centroids
+to local files but must preserve the referenced table state and IVF-centroids
 descriptor.
 
 `catalog.json` is an ordered catalog operation trace covering registration,

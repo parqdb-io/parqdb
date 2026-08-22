@@ -10,7 +10,3 @@ region = "us-east-1"
 
 [hdfs]
 uri = "hdfs://127.0.0.1:9000/parqdb-test"
-
-[iceberg]
-name = "lakehouse"
-properties_json = "${PARQDB_ICEBERG_PROPERTIES}"

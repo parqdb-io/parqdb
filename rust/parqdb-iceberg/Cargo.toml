@@ -16,6 +16,7 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+async-trait.workspace = true
 datafusion.workspace = true
 iceberg.workspace = true
 iceberg-datafusion.workspace = true

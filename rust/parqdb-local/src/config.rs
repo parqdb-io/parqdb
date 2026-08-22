@@ -87,7 +87,7 @@ config_namespace! {
 }
 
 config_namespace! {
-    /// Options for immutable index-relation manifests.
+    /// Options for immutable index-table manifests.
     pub struct ManifestCacheOptions {
         /// Maximum number of cached manifests.
         pub max_entries: usize, default = DEFAULT_MANIFEST_CACHE_ENTRIES
@@ -98,7 +98,7 @@ config_namespace! {
 }
 
 config_namespace! {
-    /// Options for index-relation manifest planning.
+    /// Options for index-table manifest planning.
     pub struct ManifestOptions {
         /// Manifest cache options.
         pub cache: ManifestCacheOptions, default = ManifestCacheOptions::default()
@@ -127,7 +127,7 @@ config_namespace! {
 config_namespace! {
     /// Options for query planning and routing.
     pub struct QueryOptions {
-        /// Index-relation manifest options.
+        /// Index-table manifest options.
         pub manifest: ManifestOptions, default = ManifestOptions::default()
 
         /// Centroid routing options.
@@ -428,14 +428,14 @@ fn query_dop(config: &SessionConfig) -> Result<Option<usize>> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct IndexRelationCacheConfig {
+pub(crate) struct IndexTableCacheConfig {
     pub(crate) manifest_max_entries: usize,
     pub(crate) manifest_max_bytes: usize,
     pub(crate) centroid_max_entries: usize,
     pub(crate) centroid_max_bytes: usize,
 }
 
-impl Default for IndexRelationCacheConfig {
+impl Default for IndexTableCacheConfig {
     fn default() -> Self {
         Self {
             manifest_max_entries: DEFAULT_MANIFEST_CACHE_ENTRIES,
@@ -446,14 +446,14 @@ impl Default for IndexRelationCacheConfig {
     }
 }
 
-pub(crate) fn index_relation_cache_config(config: &SessionConfig) -> IndexRelationCacheConfig {
+pub(crate) fn index_table_cache_config(config: &SessionConfig) -> IndexTableCacheConfig {
     let query = &config
         .options()
         .extensions
         .get::<ParqDBConfig>()
         .expect("ParqDB config extension must be installed")
         .query;
-    IndexRelationCacheConfig {
+    IndexTableCacheConfig {
         manifest_max_entries: query.manifest.cache.max_entries,
         manifest_max_bytes: query.manifest.cache.max_bytes,
         centroid_max_entries: query.centroid.cache.max_entries,
@@ -502,8 +502,8 @@ mod tests {
         );
         assert_eq!(parquet_page_cache_capacity(&config), Some(8192));
         assert_eq!(
-            index_relation_cache_config(&config),
-            IndexRelationCacheConfig {
+            index_table_cache_config(&config),
+            IndexTableCacheConfig {
                 manifest_max_entries: 3,
                 manifest_max_bytes: 1024,
                 centroid_max_entries: 5,

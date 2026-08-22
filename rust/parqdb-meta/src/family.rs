@@ -13,7 +13,7 @@ pub const IVF_SCHEMA_VERSION: i32 = 1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PostingEncoding {
-    /// Store only source keys and read vectors from the source relation.
+    /// Store only source keys and read vectors from the source table.
     Source,
     /// Store vectors with four-bit locally adaptive scalar quantization.
     Lvq4,
@@ -141,7 +141,7 @@ fn validate_ivf(snapshot: &IndexSnapshot) -> Result<()> {
     if nlist > ntotal {
         return invalid("nlist must not exceed ntotal");
     }
-    let expected_relations: &[&str] = if artifact_layout {
+    let expected_tables: &[&str] = if artifact_layout {
         let artifact_uuid = snapshot
             .parameters
             .get("artifact_uuid")
@@ -151,18 +151,18 @@ fn validate_ivf(snapshot: &IndexSnapshot) -> Result<()> {
         if artifact_uuid.is_nil() {
             return invalid("artifact_uuid must not be nil");
         }
-        &["artifact_manifest"]
+        &["ivf_centroids", "ivf_postings"]
     } else {
         ivf_centroids_reference(snapshot)?;
         &["ivf_centroids", "ivf_postings"]
     };
-    if expected_relations
+    if expected_tables
         .iter()
-        .any(|role| !snapshot.index_relations.contains_key(*role))
+        .any(|role| !snapshot.index_tables.contains_key(*role))
         || snapshot
-            .index_relations
+            .index_tables
             .keys()
-            .any(|role| !expected_relations.contains(&role.as_str()))
+            .any(|role| !expected_tables.contains(&role.as_str()))
     {
         return invalid("invalid IVF index table roles");
     }

@@ -564,7 +564,6 @@ async def connect_async(
     *,
     warehouse: str | None = None,
     storage_options: Mapping[str, str] | None = None,
-    iceberg: object | None = None,
     config: DataFusionSessionConfig | None = None,
     runtime: RuntimeEnvBuilder | None = None,
     headers: Mapping[str, str] | None = None,
@@ -575,7 +574,6 @@ async def connect_async(
         _reject_remote_embedded_options(
             warehouse=warehouse,
             storage_options=storage_options,
-            iceberg=iceberg,
             config=config,
             runtime=runtime,
         )
@@ -595,7 +593,6 @@ async def connect_async(
             location,
             warehouse=warehouse,
             storage_options=storage_options,
-            iceberg=iceberg,
             config=config,
             runtime=runtime,
         )
@@ -607,7 +604,6 @@ def connect(
     *,
     warehouse: str | None = None,
     storage_options: Mapping[str, str] | None = None,
-    iceberg: object | None = None,
     config: DataFusionSessionConfig | None = None,
     runtime: RuntimeEnvBuilder | None = None,
     headers: Mapping[str, str] | None = None,
@@ -620,7 +616,6 @@ def connect(
                 root,
                 warehouse=warehouse,
                 storage_options=storage_options,
-                iceberg=iceberg,
                 config=config,
                 runtime=runtime,
                 headers=headers,

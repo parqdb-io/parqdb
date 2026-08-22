@@ -10,7 +10,7 @@ ParqDB originally attached construction to concrete query sessions. Local
 tables accepted only `Local`, Spark tables constructed only through their own
 Spark session, and StarRocks tables exposed no construction API. This made a
 query engine appear to own index construction even though builders produce
-portable index relations and query backends only consume them.
+portable index tables and query backends only consume them.
 
 The intended composition is broader: a table queried through StarRocks may be
 indexed by a caller-owned Spark session, and the resulting Iceberg index must

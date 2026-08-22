@@ -8,12 +8,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parallite::ParalliteContext;
 use parqdb_catalog::{IndexCatalog, IndexIdentifier, IvfCentroidsClaim, IvfCentroidsClaimResult};
+use parqdb_core::IndexArtifacts;
 use parqdb_index::{
     InitialIndex, RefreshedIndex, new_snapshot_id, publish_initial, publish_refresh,
 };
 use parqdb_meta::{
-    DistanceMetric, IVF_CLUSTERING_PROFILE_VERSION, IvfCentroidsDescriptor, IvfCentroidsMetadata,
-    IvfCentroidsReference, PostingEncoding, RelationReference,
+    DistanceMetric, IVF_CLUSTERING_PROFILE_VERSION, IndexTableDefinition, IvfCentroidsDescriptor,
+    IvfCentroidsMetadata, IvfCentroidsReference, PostingEncoding, TableDefinition,
 };
 use uuid::Uuid;
 
@@ -69,7 +70,7 @@ pub struct IndexBuildStatus {
 
 struct ResolvedIvfCentroids {
     reference: IvfCentroidsReference,
-    centroids: RelationReference,
+    centroids: IndexTableDefinition,
     trained: TrainedIvf,
 }
 
@@ -104,7 +105,7 @@ impl LocalSession {
     #[allow(clippy::too_many_arguments)]
     pub fn submit_create_index(
         &self,
-        source: &RelationReference,
+        source: &TableDefinition,
         index_namespace: &[String],
         index_name: String,
         vector_field: String,
@@ -121,8 +122,8 @@ impl LocalSession {
         if self.index_exists_identifier(&identifier)? {
             return Err(Error::AlreadyExists(index_name));
         }
-        let source_uri = parquet_source_uri(source)?.to_owned();
-        let key = build_key(source, &identifier);
+        let source = source.clone();
+        let key = build_key(&source, &identifier);
         let progress = LocalBuildProgress::default();
         let options = LocalBuildOptions {
             writer_options,
@@ -134,7 +135,7 @@ impl LocalSession {
         self.builds.submit(key, None, progress, async move {
             session
                 .create_index_with_identifier(
-                    &source_uri,
+                    &source,
                     identifier,
                     &vector_field,
                     &source_key_fields,
@@ -149,7 +150,7 @@ impl LocalSession {
     /// Accepts an IVF refresh for background execution by this session.
     pub async fn submit_refresh_index(
         &self,
-        source: &RelationReference,
+        source: &TableDefinition,
         index_namespace: Vec<String>,
         index_name: String,
         config: Option<IvfConfig>,
@@ -160,14 +161,14 @@ impl LocalSession {
         writer_options.validate()?;
         validate_partitions(partitions)?;
         let published = self
-            .list_relation_indexes_in(&index_namespace, source)
+            .list_table_indexes_in(&index_namespace, source)
             .await?
             .into_iter()
             .find(|index| index.name == index_name)
             .ok_or_else(|| Error::IndexNotFound(index_name.clone()))?;
-        let source_uri = parquet_source_uri(source)?.to_owned();
+        let source = source.clone();
         let identifier = namespaced_index_identifier(&index_namespace, &index_name)?;
-        let key = build_key(source, &identifier);
+        let key = build_key(&source, &identifier);
         let progress = LocalBuildProgress::default();
         let options = LocalBuildOptions {
             writer_options,
@@ -182,7 +183,7 @@ impl LocalSession {
             progress,
             async move {
                 session
-                    .refresh_index_with_identifier(&source_uri, identifier, config, &options)
+                    .refresh_index_with_identifier(&source, identifier, config, &options)
                     .await
                     .map(|_| ())
             },
@@ -192,7 +193,7 @@ impl LocalSession {
     /// Returns process-local build state combined with durable publication state.
     pub async fn index_build_status(
         &self,
-        source: &RelationReference,
+        source: &TableDefinition,
         index_namespace: &[String],
         index_name: &str,
     ) -> Result<IndexBuildStatus> {
@@ -201,7 +202,7 @@ impl LocalSession {
         let key = build_key(source, &identifier);
         let active = self.builds.snapshot(&key);
         let published = self
-            .list_relation_indexes_in(index_namespace, source)
+            .list_table_indexes_in(index_namespace, source)
             .await?
             .into_iter()
             .find(|index| index.name == index_name);
@@ -270,7 +271,7 @@ impl LocalSession {
     /// Waits for an accepted build or an existing publication.
     pub async fn wait_for_index_build(
         &self,
-        source: &RelationReference,
+        source: &TableDefinition,
         index_namespace: &[String],
         index_name: &str,
     ) -> Result<()> {
@@ -316,8 +317,9 @@ impl LocalSession {
         config: IvfConfig,
         options: &LocalBuildOptions,
     ) -> Result<PublishedIndex> {
+        let source = self.bind_source(source).await?.reference;
         self.create_index_with_identifier(
-            source,
+            &source,
             local_index_identifier(index_name)?,
             vector_field,
             source_key_fields,
@@ -329,7 +331,7 @@ impl LocalSession {
 
     async fn create_index_with_identifier(
         &self,
-        source: &str,
+        source: &TableDefinition,
         identifier: IndexIdentifier,
         vector_field: &str,
         source_key_fields: &[String],
@@ -346,7 +348,7 @@ impl LocalSession {
         }
         validate_build_request(vector_field, source_key_fields, config.nlist)?;
 
-        let source = self.bind_source(source).await?;
+        let source = self.bind_table(source).await?;
         let source_reference = source.reference.clone();
         let source_schema = source.schema;
         if source_schema.field_with_name("_distance").is_ok() {
@@ -401,6 +403,7 @@ impl LocalSession {
             },
         )
         .await?;
+        let build = self.prepare_parquet_index_artifacts(build)?;
         progress.begin(BuildPhase::Publishing, 1);
         let _guard = self.coordination.write()?;
         let result = publish_initial(
@@ -430,8 +433,9 @@ impl LocalSession {
         config: Option<IvfConfig>,
         options: &LocalBuildOptions,
     ) -> Result<PublishedIndex> {
+        let source = self.bind_source(source).await?.reference;
         self.refresh_index_with_identifier(
-            source,
+            &source,
             local_index_identifier(index_name)?,
             config,
             options,
@@ -441,7 +445,7 @@ impl LocalSession {
 
     async fn refresh_index_with_identifier(
         &self,
-        source: &str,
+        source: &TableDefinition,
         identifier: IndexIdentifier,
         config: Option<IvfConfig>,
         options: &LocalBuildOptions,
@@ -453,7 +457,7 @@ impl LocalSession {
         let mut build_lease = self.coordination.reserve_build(&identifier)?;
         let loaded = self.load_entry(&identifier).await?;
         let current = loaded.metadata.current_snapshot()?;
-        let source = self.bind_source(source).await?;
+        let source = self.bind_table(source).await?;
         let source_reference = source.reference.clone();
         if loaded.entry.source.identity_key() != source_reference.identity_key() {
             return Err(Error::IndexNotFound(identifier.name().to_owned()));
@@ -516,6 +520,7 @@ impl LocalSession {
             },
         )
         .await?;
+        let build = self.prepare_parquet_index_artifacts(build)?;
         progress.begin(BuildPhase::Publishing, 1);
         let _guard = self.coordination.write()?;
         let result = publish_refresh(
@@ -536,9 +541,27 @@ impl LocalSession {
         Ok(result)
     }
 
+    fn prepare_parquet_index_artifacts(&self, mut build: IndexArtifacts) -> Result<IndexArtifacts> {
+        if build.index_provider.provider != "parquet" {
+            return Err(Error::InvalidArgument(format!(
+                "local Parquet builder produced an unexpected index provider: {}",
+                build.index_provider.provider
+            )));
+        }
+        for table in build.index_tables.values_mut() {
+            let location = table
+                .properties
+                .get("location")
+                .ok_or_else(|| Error::InvalidMetadata("index table location is missing".into()))?;
+            let relative = self.indexes.metadata_store().relative_location(location)?;
+            table.properties.insert("location".into(), relative);
+        }
+        Ok(build)
+    }
+
     async fn resolve_ivf_centroids(
         &self,
-        source: &RelationReference,
+        source: &TableDefinition,
         vector_field: &str,
         config: IvfConfig,
         context: &mut IvfCentroidsBuildContext<'_>,
@@ -580,7 +603,7 @@ impl LocalSession {
 
     async fn load_ivf_centroids(
         &self,
-        source: &RelationReference,
+        source: &TableDefinition,
         fingerprint: &str,
         descriptor: &IvfCentroidsDescriptor,
         prepared: &PreparedIvf,
@@ -616,16 +639,14 @@ impl LocalSession {
         )?;
         Ok(ResolvedIvfCentroids {
             reference,
-            centroids: RelationReference::Parquet {
-                uri: centroids_location,
-            },
+            centroids: parquet_index_table(centroids_location),
             trained: reused_ivf(prepared, centroids, root_centroids, cid_offsets)?,
         })
     }
 
     async fn build_ivf_centroids(
         &self,
-        source: &RelationReference,
+        source: &TableDefinition,
         descriptor: IvfCentroidsDescriptor,
         claim: IvfCentroidsClaim,
         context: &mut IvfCentroidsBuildContext<'_>,
@@ -689,9 +710,7 @@ impl LocalSession {
             )?;
             Ok(ResolvedIvfCentroids {
                 reference,
-                centroids: RelationReference::Parquet {
-                    uri: centroids_location,
-                },
+                centroids: parquet_index_table(centroids_location),
                 trained,
             })
         }
@@ -728,17 +747,16 @@ impl LocalSession {
     }
 }
 
-fn build_key(source: &RelationReference, identifier: &IndexIdentifier) -> BuildKey {
-    BuildKey::new(source.identity_key(), identifier.clone())
+fn parquet_index_table(location: String) -> IndexTableDefinition {
+    IndexTableDefinition::new(
+        1,
+        std::collections::BTreeMap::from([("location".into(), location)]),
+    )
+    .expect("the built-in Parquet table definition is valid")
 }
 
-fn parquet_source_uri(source: &RelationReference) -> Result<&str> {
-    match source {
-        RelationReference::Parquet { uri } => Ok(uri),
-        RelationReference::Iceberg { .. } => Err(Error::InvalidArgument(
-            "the installed builder currently supports Parquet source tables".into(),
-        )),
-    }
+fn build_key(source: &TableDefinition, identifier: &IndexIdentifier) -> BuildKey {
+    BuildKey::new(source.identity_key(), identifier.clone())
 }
 
 fn active_status(

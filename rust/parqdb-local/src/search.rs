@@ -6,9 +6,9 @@ pub enum ClusterSelection {
     /// Cluster IDs selected by `ParqDB`'s native SIMD router.
     Native(Vec<i32>),
     /// Select clusters inside the backend query plan.
-    Relational {
-        /// Backend relation key for the IVF centroid relation.
-        centroids_relation_key: String,
+    DataFusion {
+        /// Backend table key for IVF centroids.
+        centroids_table_key: String,
         /// Number of clusters selected by the backend Top-K.
         nprobe: usize,
     },
@@ -19,8 +19,8 @@ use parqdb_meta::{DistanceMetric, PostingEncoding};
 /// Fully resolved inputs for one embedded `DataFusion` vector search.
 #[derive(Debug, Clone)]
 pub struct ResolvedSearch {
-    /// Backend relation key for the source table.
-    pub source_relation_key: String,
+    /// Backend table key for the source table.
+    pub source_table_key: String,
     /// Query vector after conversion to the canonical `float` type.
     pub query: Vec<f32>,
     /// Distance metric applied by this search.
@@ -31,8 +31,8 @@ pub struct ResolvedSearch {
     pub source_vector_is_f64: bool,
     /// Ordered source key fields used to resolve postings to source rows.
     pub source_key_fields: Vec<String>,
-    /// Backend relation key for IVF postings, absent for exact search.
-    pub postings_relation_key: Option<String>,
+    /// Backend table key for IVF postings, absent for exact search.
+    pub postings_table_key: Option<String>,
     /// Vector representation stored in IVF postings.
     pub posting_encoding: PostingEncoding,
     /// IVF cluster selection, absent for exact search.

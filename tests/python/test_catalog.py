@@ -46,7 +46,7 @@ def test_catalog_lifecycle_survives_session_reopen(tmp_path: Path) -> None:
     entry = load_table_index(session, vectors, "vectors_embedding")
     assert entry.identifier == "vectors_embedding"
     assert isinstance(entry.metadata["snapshots"], tuple)
-    assert set(entry.metadata["snapshots"][0]["index-relations"]) == {
+    assert set(entry.metadata["snapshots"][0]["index-tables"]) == {
         "ivf_centroids",
         "ivf_postings",
     }

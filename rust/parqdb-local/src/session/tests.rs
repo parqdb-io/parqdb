@@ -1,6 +1,6 @@
 //! Embedded session integration tests.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -10,18 +10,25 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
+use async_trait::async_trait;
 use bytes::Bytes;
+use datafusion::catalog::{Session, TableProvider, TableProviderFactory};
+use datafusion::datasource::MemTable;
 use datafusion::execution::memory_pool::{GreedyMemoryPool, MemoryLimit, MemoryPool};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+use datafusion::logical_expr::CreateExternalTable;
 use datafusion::prelude::ParquetReadOptions;
 use futures::StreamExt;
-use parqdb_catalog::{IvfCentroidsCatalogEntry, IvfCentroidsClaim, IvfCentroidsClaimResult};
+use parqdb_catalog::{
+    IvfCentroidsCatalogEntry, IvfCentroidsClaim, IvfCentroidsClaimResult, TableCatalog,
+    TableIdentifier,
+};
 use parqdb_index::resolve_artifact_object;
 use parqdb_kernels::{LvqBits, encode_lvq_rows};
 use parqdb_meta::{
     DistanceMetric, IVF_CLUSTERING_PROFILE_VERSION, IndexArtifactManifest, IndexMetadata,
-    IvfCentroidsDescriptor, IvfCentroidsMetadata, IvfCentroidsReference, PostingEncoding,
-    SnapshotLogEntry,
+    IndexProviderDefinition, IndexTableDefinition, IvfCentroidsDescriptor, IvfCentroidsMetadata,
+    IvfCentroidsReference, PostingEncoding, SnapshotLogEntry,
 };
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
@@ -32,11 +39,153 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 use super::*;
-use crate::local_uri::directory_to_file_uri;
+use crate::local_uri::{directory_to_file_uri, path_to_file_uri};
 use crate::{
     IvfConfig, MaintenanceKind, ParquetWriterOptions, PublishedIndex, parqdb_session_config,
 };
 use crate::{ParqDBRuntime, QueryAdmissionOptions, QueryAdmissionStats};
+
+fn parquet_table(location: impl Into<String>) -> TableDefinition {
+    super::source::parquet_table_definition(location.into()).unwrap()
+}
+
+fn index_table(location: impl Into<String>) -> IndexTableDefinition {
+    IndexTableDefinition::new(1, BTreeMap::from([("location".into(), location.into())])).unwrap()
+}
+
+#[derive(Debug)]
+struct TestTableFactory;
+
+#[async_trait]
+impl TableProviderFactory for TestTableFactory {
+    async fn create(
+        &self,
+        _state: &dyn Session,
+        _command: &CreateExternalTable,
+    ) -> datafusion::common::Result<Arc<dyn TableProvider>> {
+        let batch = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(Int32Array::from(vec![42])) as Arc<dyn arrow::array::Array>,
+        )])?;
+        Ok(Arc::new(MemTable::try_new(
+            batch.schema(),
+            vec![vec![batch]],
+        )?))
+    }
+}
+
+#[tokio::test]
+async fn restores_a_second_table_provider_through_datafusion_factory() {
+    let temporary = TempDir::new().unwrap();
+    let session = LocalSession::open(temporary.path()).unwrap();
+    session
+        .register_table_provider_factory("test", Arc::new(TestTableFactory))
+        .unwrap();
+    session
+        .create_table_definition(
+            "factory_table",
+            "test",
+            BTreeMap::from([
+                ("definition-version".into(), "1".into()),
+                ("location".into(), "memory://factory-table".into()),
+            ]),
+        )
+        .unwrap();
+    session.restore_table_definitions().await.unwrap();
+
+    let batches = session
+        .context()
+        .sql("SELECT value FROM factory_table")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(
+        batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap()
+            .values(),
+        &[42]
+    );
+}
+
+#[tokio::test]
+async fn native_iceberg_factory_pins_and_restores_an_exact_snapshot() {
+    let temporary = TempDir::new().unwrap();
+    let metadata_path = temporary.path().join("00001.metadata.json");
+    let snapshot_id = 3_055_729_675_574_597_004_i64;
+    let metadata = serde_json::json!({
+        "format-version": 2,
+        "table-uuid": "9c12d441-03fe-4693-9a96-a0705ddf69c1",
+        "location": temporary.path().to_string_lossy(),
+        "last-sequence-number": 1,
+        "last-updated-ms": 1_555_100_955_770_i64,
+        "last-column-id": 1,
+        "current-schema-id": 0,
+        "schemas": [{
+            "type": "struct",
+            "schema-id": 0,
+            "fields": [{"id": 1, "name": "x", "required": true, "type": "long"}]
+        }],
+        "default-spec-id": 0,
+        "partition-specs": [{"spec-id": 0, "fields": []}],
+        "last-partition-id": 999,
+        "default-sort-order-id": 0,
+        "sort-orders": [{"order-id": 0, "fields": []}],
+        "properties": {},
+        "current-snapshot-id": snapshot_id,
+        "snapshots": [{
+            "snapshot-id": snapshot_id,
+            "timestamp-ms": 1_555_100_955_770_i64,
+            "sequence-number": 1,
+            "summary": {"operation": "append"},
+            "manifest-list": "file:///does-not-exist.avro",
+            "schema-id": 0
+        }],
+        "snapshot-log": [{
+            "snapshot-id": snapshot_id,
+            "timestamp-ms": 1_555_100_955_770_i64
+        }],
+        "metadata-log": []
+    });
+    std::fs::write(&metadata_path, serde_json::to_vec(&metadata).unwrap()).unwrap();
+
+    let state_root = temporary.path().join("state");
+    let session = LocalSession::open(&state_root).unwrap();
+    let identifier = TableIdentifier::new("datafusion", vec!["public".into()], "events").unwrap();
+    let definition = parqdb_iceberg::table_definition(
+        identifier,
+        &path_to_file_uri(&metadata_path).unwrap(),
+        None,
+        HashMap::new(),
+    )
+    .await
+    .unwrap();
+    session
+        .create_table_definition("events", "iceberg", definition.properties)
+        .unwrap();
+    session.restore_table_definitions().await.unwrap();
+    let events = session.context().table("events").await.unwrap();
+    let schema = events.schema();
+    assert_eq!(schema.field(0).name(), "x");
+    let definition = session
+        .persistent_table_definition("events")
+        .unwrap()
+        .unwrap();
+    assert_eq!(definition.provider, "iceberg");
+    assert_eq!(
+        definition.properties.get("option.snapshot-id"),
+        Some(&snapshot_id.to_string())
+    );
+
+    drop(session);
+    let reopened = LocalSession::open(&state_root).unwrap();
+    reopened.restore_table_definitions().await.unwrap();
+    assert!(reopened.context().table_exist("events").unwrap());
+}
 
 struct MemoryEntry {
     entry: CatalogEntry,
@@ -312,6 +461,7 @@ async fn managed_query_stream_holds_and_releases_admission() {
 #[derive(Default)]
 struct MemoryCatalog {
     entries: Mutex<BTreeMap<IndexIdentifier, MemoryEntry>>,
+    tables: Mutex<BTreeMap<TableIdentifier, TableDefinition>>,
     ivf_centroids: Mutex<BTreeMap<(String, String), IvfCentroidsCatalogEntry>>,
 }
 
@@ -328,7 +478,7 @@ impl IndexCatalog for MemoryCatalog {
     fn register(
         &self,
         identifier: &IndexIdentifier,
-        source: &RelationReference,
+        source: &TableDefinition,
         metadata_location: &str,
         metadata: &IndexMetadata,
     ) -> parqdb_catalog::Result<()> {
@@ -368,7 +518,7 @@ impl IndexCatalog for MemoryCatalog {
     fn find_by_source(
         &self,
         namespace: &[String],
-        source: &RelationReference,
+        source: &TableDefinition,
     ) -> parqdb_catalog::Result<Vec<CatalogEntry>> {
         let source_identity = source.exact_state_key();
         Ok(self
@@ -384,7 +534,7 @@ impl IndexCatalog for MemoryCatalog {
 
     fn load_ivf_centroids(
         &self,
-        source: &RelationReference,
+        source: &TableDefinition,
         fingerprint: &str,
     ) -> parqdb_catalog::Result<IvfCentroidsCatalogEntry> {
         self.ivf_centroids
@@ -397,7 +547,7 @@ impl IndexCatalog for MemoryCatalog {
 
     fn claim_ivf_centroids(
         &self,
-        source: &RelationReference,
+        source: &TableDefinition,
         descriptor: &IvfCentroidsDescriptor,
         owner: Uuid,
         _lease_duration_ms: i64,
@@ -479,6 +629,52 @@ impl IndexCatalog for MemoryCatalog {
     }
 }
 
+impl TableCatalog for MemoryCatalog {
+    fn create_table(&self, definition: &TableDefinition) -> parqdb_catalog::Result<()> {
+        let mut tables = self.tables.lock().unwrap();
+        if tables.contains_key(&definition.identifier) {
+            return Err(CatalogError::TableAlreadyExists(
+                definition.identifier.clone(),
+            ));
+        }
+        tables.insert(definition.identifier.clone(), definition.clone());
+        Ok(())
+    }
+
+    fn load_table(&self, identifier: &TableIdentifier) -> parqdb_catalog::Result<TableDefinition> {
+        self.tables
+            .lock()
+            .unwrap()
+            .get(identifier)
+            .cloned()
+            .ok_or_else(|| CatalogError::TableNotFound(identifier.clone()))
+    }
+
+    fn list_tables(
+        &self,
+        catalog: &str,
+        namespace: &[String],
+    ) -> parqdb_catalog::Result<Vec<TableIdentifier>> {
+        Ok(self
+            .tables
+            .lock()
+            .unwrap()
+            .keys()
+            .filter(|identifier| {
+                identifier.catalog() == catalog && identifier.namespace() == namespace
+            })
+            .cloned()
+            .collect())
+    }
+
+    fn drop_table(&self, identifier: &TableIdentifier) -> parqdb_catalog::Result<()> {
+        if self.tables.lock().unwrap().remove(identifier).is_none() {
+            return Err(CatalogError::TableNotFound(identifier.clone()));
+        }
+        Ok(())
+    }
+}
+
 #[test]
 fn index_name_is_deliberately_narrow() {
     assert!(validate_index_name("documents_embedding").is_ok());
@@ -555,10 +751,7 @@ async fn write_direct_pid_source(store: &ParquetStore, path: &Path) {
     store.write(&location, &source).await.unwrap();
 }
 
-async fn write_direct_pid_relations(
-    store: &ParquetStore,
-    root: &Path,
-) -> (PathBuf, PathBuf, PathBuf) {
+async fn write_direct_pid_tables(store: &ParquetStore, root: &Path) -> (PathBuf, PathBuf, PathBuf) {
     let centroids_path = root.join("centroids");
     let roots_path = root.join("roots");
     let postings_path = root.join("postings");
@@ -646,10 +839,10 @@ async fn write_direct_pid_relations(
 }
 
 #[tokio::test]
-async fn relational_centroid_routing_materializes_a_typed_cid_selection() {
+async fn datafusion_centroid_routing_materializes_a_typed_cid_selection() {
     let temporary = TempDir::new().unwrap();
     let session = LocalSession::open(temporary.path().join("parqdb")).unwrap();
-    let (centroids, _, _) = write_direct_pid_relations(&session.parquet, temporary.path()).await;
+    let (centroids, _, _) = write_direct_pid_tables(&session.parquet, temporary.path()).await;
     let selected = session
         .route_centroids_with_datafusion(
             &directory_to_file_uri(&centroids).unwrap(),
@@ -664,7 +857,7 @@ async fn relational_centroid_routing_materializes_a_typed_cid_selection() {
 
 fn direct_pid_metadata(
     session: &LocalSession,
-    _source_path: &Path,
+    source_path: &Path,
     centroids_path: &Path,
     postings_path: &Path,
     centroids: &IvfCentroidsReference,
@@ -677,6 +870,7 @@ fn direct_pid_metadata(
         sequence_number: 1,
         timestamp_ms,
         summary: BTreeMap::new(),
+        source_table: parquet_table(directory_to_file_uri(source_path).unwrap()),
         vector_field: "embedding".into(),
         source_key_fields: vec!["source_pid".into()],
         indexed_rows: 3,
@@ -701,22 +895,27 @@ fn direct_pid_metadata(
                 centroids.metadata_location.clone(),
             ),
         ]),
-        index_relations: BTreeMap::from([
+        index_provider: IndexProviderDefinition::new("parquet", BTreeMap::new()).unwrap(),
+        index_tables: BTreeMap::from([
             (
                 "ivf_centroids".into(),
-                session
-                    .indexes
-                    .metadata_store()
-                    .relative_location(&directory_to_file_uri(centroids_path).unwrap())
-                    .unwrap(),
+                index_table(
+                    session
+                        .indexes
+                        .metadata_store()
+                        .relative_location(&directory_to_file_uri(centroids_path).unwrap())
+                        .unwrap(),
+                ),
             ),
             (
                 "ivf_postings".into(),
-                session
-                    .indexes
-                    .metadata_store()
-                    .relative_location(&directory_to_file_uri(postings_path).unwrap())
-                    .unwrap(),
+                index_table(
+                    session
+                        .indexes
+                        .metadata_store()
+                        .relative_location(&directory_to_file_uri(postings_path).unwrap())
+                        .unwrap(),
+                ),
             ),
         ]),
     };
@@ -742,10 +941,9 @@ async fn direct_pid_fixture() -> (TempDir, LocalSession, PathBuf) {
     write_direct_pid_source(&session.parquet, &source_path).await;
     let artifact_path = file_uri_to_path(session.warehouse_root()).unwrap();
     let (centroids_path, roots_path, postings_path) =
-        write_direct_pid_relations(&session.parquet, &artifact_path).await;
-    let source = RelationReference::Parquet {
-        uri: directory_to_file_uri(&source_path.canonicalize().unwrap()).unwrap(),
-    };
+        write_direct_pid_tables(&session.parquet, &artifact_path).await;
+    let source =
+        parquet_table(directory_to_file_uri(&source_path.canonicalize().unwrap()).unwrap());
     let descriptor = IvfCentroidsDescriptor {
         vector_field: "embedding".into(),
         dimension: 2,
@@ -821,7 +1019,10 @@ async fn source_bindings_are_session_scoped_and_reused_by_queries() {
     assert_eq!(second, first);
     assert_eq!(session.source_binding_count().unwrap(), 1);
 
-    let binding = session.source_binding(&first.uri).unwrap().unwrap();
+    let binding = session
+        .source_binding(&super::source::table_key(&parquet_table(first.uri.clone())))
+        .unwrap()
+        .unwrap();
     assert!(
         session
             .context()
@@ -830,9 +1031,7 @@ async fn source_bindings_are_session_scoped_and_reused_by_queries() {
     );
     let request = SearchRequest {
         index_namespace: vec![],
-        source: RelationReference::Parquet {
-            uri: first.uri.clone(),
-        },
+        source: parquet_table(first.uri.clone()),
         index: Some("direct_index".into()),
         column: None,
         query: vec![0.0, 0.0],
@@ -869,7 +1068,12 @@ async fn registered_source_binding_reuses_the_datafusion_table_provider() {
         .bind_registered_source("documents", &source_uri)
         .await
         .unwrap();
-    let binding = session.source_binding(&description.uri).unwrap().unwrap();
+    let binding = session
+        .source_binding(&super::source::table_key(&parquet_table(
+            description.uri.clone(),
+        )))
+        .unwrap()
+        .unwrap();
 
     assert_eq!(binding.table_name, "documents");
     assert!(Arc::ptr_eq(&binding.provider, &provider));
@@ -900,6 +1104,55 @@ async fn accepts_a_caller_supplied_index_catalog() {
     assert_eq!(catalog.load(&identifier).unwrap().identifier, identifier);
     assert_eq!(session.list_indexes().unwrap(), ["documents_embedding"]);
     assert!(!root.join("catalog.sqlite").exists());
+}
+
+#[tokio::test]
+async fn accepts_independent_table_and_index_catalogs() {
+    let temporary = TempDir::new().unwrap();
+    let root = temporary.path().join("parqdb");
+    let source_path = temporary.path().join("source");
+    let index_catalog = Arc::new(MemoryCatalog::default());
+    let table_catalog = Arc::new(MemoryCatalog::default());
+    let session = LocalSession::with_catalogs(
+        &root,
+        Arc::clone(&index_catalog) as Arc<dyn IndexCatalog>,
+        Arc::clone(&table_catalog) as Arc<dyn TableCatalog>,
+    )
+    .unwrap();
+    write_direct_pid_source(&session.parquet, &source_path).await;
+
+    let definition = session
+        .create_table_definition(
+            "documents",
+            "parquet",
+            parquet_table(source_path.to_string_lossy()).properties,
+        )
+        .unwrap();
+    session
+        .create_index(
+            source_path.to_str().unwrap(),
+            "documents_embedding",
+            "embedding",
+            &["source_pid".into()],
+            2,
+        )
+        .await
+        .unwrap();
+
+    let index = IndexIdentifier::root("documents_embedding").unwrap();
+    assert!(index_catalog.load(&index).is_ok());
+    assert!(matches!(
+        table_catalog.load(&index),
+        Err(CatalogError::IndexNotFound(_))
+    ));
+    assert_eq!(
+        table_catalog.load_table(&definition.identifier).unwrap(),
+        definition
+    );
+    assert!(matches!(
+        index_catalog.load_table(&definition.identifier),
+        Err(CatalogError::TableNotFound(_))
+    ));
 }
 
 #[tokio::test]
@@ -962,9 +1215,7 @@ async fn searches_an_index_by_its_persisted_source_key() {
     let (batches, schema) = session
         .search(&SearchRequest {
             index_namespace: vec![],
-            source: RelationReference::Parquet {
-                uri: directory_to_file_uri(&source_path).unwrap(),
-            },
+            source: parquet_table(directory_to_file_uri(&source_path).unwrap()),
             index: Some("direct_index".into()),
             column: None,
             query: vec![0.0, 0.0],
@@ -1039,9 +1290,7 @@ async fn large_nprobe_uses_bucket_files_and_keeps_a_correctness_filter() {
         .unwrap();
     let request = SearchRequest {
         index_namespace: vec![],
-        source: RelationReference::Parquet {
-            uri: directory_to_file_uri(&source_path).unwrap(),
-        },
+        source: parquet_table(directory_to_file_uri(&source_path).unwrap()),
         index: Some("large_index".into()),
         column: None,
         query: vec![0.0, 0.0],
@@ -1115,8 +1364,8 @@ async fn lvq_indexes_build_and_query_through_parquet() {
     let lvq4 = published[0].metadata.current_snapshot().unwrap();
     let lvq8 = published[1].metadata.current_snapshot().unwrap();
     assert_ne!(
-        lvq4.index_relations["artifact_manifest"],
-        lvq8.index_relations["artifact_manifest"]
+        lvq4.index_tables["ivf_postings"],
+        lvq8.index_tables["ivf_postings"]
     );
     assert_ne!(
         lvq4.parameters["artifact_uuid"],
@@ -1126,7 +1375,12 @@ async fn lvq_indexes_build_and_query_through_parquet() {
     let lvq4_manifest_location = session
         .indexes
         .metadata_store()
-        .resolve_location(&lvq4.index_relations["artifact_manifest"], false)
+        .resolve_location(
+            lvq4.index_tables["ivf_postings"]
+                .required_property("location")
+                .unwrap(),
+            false,
+        )
         .unwrap();
     session
         .drop_source_index(source_path.to_str().unwrap(), "lvq4_index")
@@ -1147,9 +1401,7 @@ async fn lvq_indexes_build_and_query_through_parquet() {
     let (registered_result, _) = session
         .search(&SearchRequest {
             index_namespace: vec![],
-            source: RelationReference::Parquet {
-                uri: directory_to_file_uri(&source_path).unwrap(),
-            },
+            source: parquet_table(directory_to_file_uri(&source_path).unwrap()),
             index: Some("lvq4_registered".into()),
             column: None,
             query: vec![10.0, 0.0],
@@ -1177,7 +1429,12 @@ async fn assert_lvq_index(
     let manifest_location = session
         .indexes
         .metadata_store()
-        .resolve_location(&snapshot.index_relations["artifact_manifest"], false)
+        .resolve_location(
+            snapshot.index_tables["ivf_postings"]
+                .required_property("location")
+                .unwrap(),
+            false,
+        )
         .unwrap();
     let artifact_root = manifest_location.strip_suffix("manifest.json").unwrap();
     let artifact_path = file_uri_to_path(artifact_root).unwrap();
@@ -1220,9 +1477,7 @@ async fn assert_lvq_index(
 
     let request = SearchRequest {
         index_namespace: vec![],
-        source: RelationReference::Parquet {
-            uri: directory_to_file_uri(source_path).unwrap(),
-        },
+        source: parquet_table(directory_to_file_uri(source_path).unwrap()),
         index: Some(name.into()),
         column: None,
         query: vec![10.0, 0.0],
@@ -1281,9 +1536,7 @@ async fn filters_source_rows_before_top_k() {
     let (batches, _) = session
         .search(&SearchRequest {
             index_namespace: vec![],
-            source: RelationReference::Parquet {
-                uri: directory_to_file_uri(&source_path).unwrap(),
-            },
+            source: parquet_table(directory_to_file_uri(&source_path).unwrap()),
             index: Some("direct_index".into()),
             column: None,
             query: vec![0.0, 0.0],
@@ -1313,9 +1566,7 @@ async fn exact_search_does_not_require_a_published_index() {
     let (batches, _) = session
         .search(&SearchRequest {
             index_namespace: vec![],
-            source: RelationReference::Parquet {
-                uri: directory_to_file_uri(&source_path).unwrap(),
-            },
+            source: parquet_table(directory_to_file_uri(&source_path).unwrap()),
             index: None,
             column: None,
             query: vec![10.0, 0.0],
@@ -1568,13 +1819,13 @@ async fn published_builds_use_final_immutable_snapshot_paths() {
         .metadata
         .current_snapshot()
         .unwrap()
-        .index_relations
+        .index_tables
         .values()
     {
         let uri = session
             .indexes
             .metadata_store()
-            .resolve_location(reference, true)
+            .resolve_location(reference.required_property("location").unwrap(), true)
             .unwrap();
         assert!(!uri.contains(".tmp-"));
         assert!(file_uri_to_path(&uri).unwrap().is_dir());

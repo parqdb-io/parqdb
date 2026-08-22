@@ -72,11 +72,9 @@ class _NativeSession:
         schema: Any | None,
         file_sort_order: list[list[str]],
     ) -> tuple[str, list[tuple[str, str, bool]]]: ...
-    def persistent_table(
-        self, table_name: str
-    ) -> tuple[str, list[str], str, str] | None: ...
+    def persistent_table_definition(self, table_name: str) -> str | None: ...
     def list_table_definitions(self) -> list[tuple[str, list[str], str]]: ...
-    def persistent_table_source_by_identifier(
+    def persistent_table_definition_by_identifier(
         self,
         catalog: str,
         namespace: Sequence[str],
@@ -97,12 +95,6 @@ class _NativeSession:
         index: str | None,
         column: str | None,
     ) -> str: ...
-    def register_iceberg_relation(
-        self,
-        reference: str,
-        metadata_location: str,
-        file_io_properties: dict[str, str],
-    ) -> Any: ...
     def parquet_page_cache_stats(
         self,
     ) -> tuple[int, int, int, int, int, int, int, int, int, int]: ...

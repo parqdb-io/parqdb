@@ -1,4 +1,4 @@
-//! Local Arrow IVF relation tests.
+//! Local Arrow IVF table tests.
 
 use std::sync::Arc;
 

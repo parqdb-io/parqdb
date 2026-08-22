@@ -27,7 +27,7 @@ port = 8000
 # Keep this list empty until the server should expose a source location.
 allowed_source_prefixes = []
 
-# To store index relations in a separate warehouse, set:
+# To store index tables in a separate warehouse, set:
 # warehouse = "s3://bucket/parqdb/"
 
 # Process-wide object storage options. Keep credentials outside this file.

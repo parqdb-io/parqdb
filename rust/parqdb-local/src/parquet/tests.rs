@@ -1,6 +1,6 @@
 #![allow(clippy::cast_precision_loss)]
 
-// Managed Parquet relation tests.
+// Managed Parquet table tests.
 
 use std::io::Cursor;
 use std::sync::Arc;
@@ -60,7 +60,7 @@ fn postings() -> RecordBatch {
     .unwrap()
 }
 
-fn relation(temporary: &TempDir, name: &str) -> (ParquetStore, String) {
+fn table(temporary: &TempDir, name: &str) -> (ParquetStore, String) {
     let registry = StorageRegistry::default();
     let root = Url::from_directory_path(temporary.path()).unwrap();
     (
@@ -69,8 +69,8 @@ fn relation(temporary: &TempDir, name: &str) -> (ParquetStore, String) {
     )
 }
 
-async fn put_part(store: &ParquetStore, relation: &str, name: &str, batch: &RecordBatch) {
-    let location = child_location(relation, name, false).unwrap();
+async fn put_part(store: &ParquetStore, table: &str, name: &str, batch: &RecordBatch) {
+    let location = child_location(table, name, false).unwrap();
     put_parquet_file(store, &location, batch).await;
 }
 
@@ -122,7 +122,7 @@ fn writer_options_are_explicit_and_validated() {
 #[tokio::test]
 async fn round_trip_preserves_schema_and_values() {
     let temporary = TempDir::new().unwrap();
-    let (store, location) = relation(&temporary, "relation");
+    let (store, location) = table(&temporary, "table");
     let expected = batch(&[1, 2, 3]);
 
     store.write(&location, &expected).await.unwrap();
@@ -145,7 +145,7 @@ async fn round_trip_preserves_schema_and_values() {
 #[tokio::test]
 async fn projection_preserves_requested_order() {
     let temporary = TempDir::new().unwrap();
-    let (store, location) = relation(&temporary, "relation");
+    let (store, location) = table(&temporary, "table");
     store.write(&location, &batch(&[1, 2])).await.unwrap();
 
     let projected = store.read(&location, Some(&["score", "id"])).await.unwrap();
@@ -164,7 +164,7 @@ async fn projection_preserves_requested_order() {
 #[tokio::test]
 async fn manifested_writer_allows_postings_without_vectors() {
     let temporary = TempDir::new().unwrap();
-    let (store, location) = relation(&temporary, "postings");
+    let (store, location) = table(&temporary, "postings");
     let expected = postings();
     let input = RecordBatch::try_new(
         Arc::new(Schema::new(vec![
@@ -216,7 +216,7 @@ async fn manifested_writer_allows_postings_without_vectors() {
 #[tokio::test]
 async fn uniform_provider_ignores_non_parquet_sidecars() {
     let temporary = TempDir::new().unwrap();
-    let (store, location) = relation(&temporary, "uniform");
+    let (store, location) = table(&temporary, "uniform");
     let expected = batch(&[1, 2]);
     put_part(&store, &location, "a.parquet", &expected).await;
 
@@ -260,7 +260,7 @@ async fn uniform_provider_accepts_a_single_file_location() {
 #[tokio::test]
 async fn uniform_provider_rejects_a_directory_without_parquet_data() {
     let temporary = TempDir::new().unwrap();
-    let (store, location) = relation(&temporary, "empty");
+    let (store, location) = table(&temporary, "empty");
     for (name, bytes) in [
         ("README.txt", Bytes::from_static(b"not parquet")),
         ("empty.parquet", Bytes::new()),
@@ -290,7 +290,7 @@ async fn uniform_provider_rejects_a_directory_without_parquet_data() {
 #[tokio::test]
 async fn cluster_filter_prunes_unrelated_row_groups() {
     let temporary = TempDir::new().unwrap();
-    let (store, location) = relation(&temporary, "postings");
+    let (store, location) = table(&temporary, "postings");
     let options = ParquetWriterOptions {
         max_row_group_rows: Some(2),
         ..ParquetWriterOptions::default()
@@ -331,9 +331,9 @@ async fn cluster_filter_prunes_unrelated_row_groups() {
 }
 
 #[tokio::test]
-async fn reads_a_multi_file_relation() {
+async fn reads_a_multi_file_table() {
     let temporary = TempDir::new().unwrap();
-    let (store, location) = relation(&temporary, "relation");
+    let (store, location) = table(&temporary, "table");
     put_part(&store, &location, "part-00000.parquet", &batch(&[1, 2])).await;
     put_part(&store, &location, "part-00001.parquet", &batch(&[3, 4])).await;
 
@@ -350,9 +350,9 @@ async fn reads_a_multi_file_relation() {
 }
 
 #[tokio::test]
-async fn preserves_an_empty_relation_schema() {
+async fn preserves_an_empty_table_schema() {
     let temporary = TempDir::new().unwrap();
-    let (store, location) = relation(&temporary, "relation");
+    let (store, location) = table(&temporary, "table");
     let expected = batch(&[]);
     store.write(&location, &expected).await.unwrap();
 
@@ -362,9 +362,9 @@ async fn preserves_an_empty_relation_schema() {
 }
 
 #[tokio::test]
-async fn rejects_empty_and_corrupt_relation_roots() {
+async fn rejects_empty_and_corrupt_table_roots() {
     let temporary = TempDir::new().unwrap();
-    let (store, empty) = relation(&temporary, "empty");
+    let (store, empty) = table(&temporary, "empty");
     assert!(store.read(&empty, None).await.is_err());
 
     let corrupt = child_location(
@@ -390,9 +390,9 @@ async fn rejects_empty_and_corrupt_relation_roots() {
 }
 
 #[tokio::test]
-async fn relation_writes_are_immutable() {
+async fn table_writes_are_immutable() {
     let temporary = TempDir::new().unwrap();
-    let (store, location) = relation(&temporary, "relation");
+    let (store, location) = table(&temporary, "table");
     store.write(&location, &batch(&[1, 2])).await.unwrap();
     let before = store.read(&location, None).await.unwrap();
 

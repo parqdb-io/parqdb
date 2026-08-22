@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 
 use parqdb_catalog::IndexIdentifier;
 use parqdb_meta::{
-    DistanceMetric, IVF_SCHEMA_VERSION, IndexMetadata, PostingEncoding, RelationReference,
+    DistanceMetric, IVF_SCHEMA_VERSION, IndexMetadata, IndexProviderDefinition,
+    IndexTableDefinition, PostingEncoding, TableDefinition,
 };
 
 /// Portable identity of one index representation.
@@ -69,7 +70,7 @@ impl IvfConfig {
 #[derive(Debug, Clone)]
 pub struct SearchRequest {
     /// Exact portable reference for the source table.
-    pub source: RelationReference,
+    pub source: TableDefinition,
     /// Catalog namespace containing indexes for this table binding.
     pub index_namespace: Vec<String>,
     /// Explicit index name, or `None` for source-based discovery.
@@ -90,15 +91,17 @@ pub struct SearchRequest {
     pub bypass_index: bool,
 }
 
-/// Immutable index relations and family parameters produced by a backend builder.
+/// Immutable index tables and family parameters produced by a backend builder.
 #[derive(Debug, Clone)]
 pub struct IndexArtifacts {
     /// Portable family, schema version, and metric produced by the builder.
     pub format: IndexFormat,
     /// Family-defined canonical parameter values.
     pub parameters: BTreeMap<String, String>,
-    /// Relation roles and their exact portable references.
-    pub index_relations: BTreeMap<String, RelationReference>,
+    /// Provider that owns every physical index table in this build.
+    pub index_provider: IndexProviderDefinition,
+    /// Table roles and their exact portable references.
+    pub index_tables: BTreeMap<String, IndexTableDefinition>,
 }
 
 /// Result of publishing one immutable index metadata document.

@@ -156,14 +156,15 @@ def localize_fixture(
     metadata_path = local / "metadata.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     for snapshot in metadata["snapshots"]:
-        snapshot["index-relations"] = {
-            role: f"{prefix}{location}"
-            for role, location in snapshot["index-relations"].items()
-        }
+        for definition in snapshot["index-tables"].values():
+            definition["properties"]["location"] = (
+                f"{prefix}{definition['properties']['location']}"
+            )
         parameter = "ivf_centroids_metadata_location"
-        snapshot["parameters"][parameter] = (
-            f"{prefix}{snapshot['parameters'][parameter]}"
-        )
+        if parameter in snapshot["parameters"]:
+            snapshot["parameters"][parameter] = (
+                f"{prefix}{snapshot['parameters'][parameter]}"
+            )
     metadata_path.write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

@@ -3,7 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use parqdb_catalog::{IndexCatalog, IndexIdentifier};
 use parqdb_core::{IndexArtifacts, PublishedIndex};
-use parqdb_meta::{IndexMetadata, IndexSnapshot, RelationReference, SnapshotLogEntry};
+use parqdb_meta::{IndexMetadata, IndexSnapshot, SnapshotLogEntry, TableDefinition};
 use uuid::Uuid;
 
 use crate::{Error, MetadataStore, Result};
@@ -17,14 +17,14 @@ pub struct InitialIndex<'a> {
     /// Unique ID of the first immutable snapshot.
     pub snapshot_id: i64,
     /// Portable reference to the indexed source table.
-    pub source: RelationReference,
+    pub source: TableDefinition,
     /// Vector field in the source table.
     pub vector_field: &'a str,
     /// Source fields that identify one row.
     pub source_key_fields: &'a [String],
     /// Backend identity recorded in the snapshot summary.
     pub builder: &'a str,
-    /// Immutable relations and parameters produced by construction.
+    /// Immutable tables and parameters produced by construction.
     pub build: IndexArtifacts,
 }
 
@@ -39,10 +39,10 @@ pub struct RefreshedIndex<'a> {
     /// Unique ID of the new immutable snapshot.
     pub snapshot_id: i64,
     /// Portable reference to the indexed source table.
-    pub source: RelationReference,
+    pub source: TableDefinition,
     /// Backend identity recorded in the snapshot summary.
     pub builder: &'a str,
-    /// Immutable relations and parameters produced by construction.
+    /// Immutable tables and parameters produced by construction.
     pub build: IndexArtifacts,
 }
 
@@ -56,15 +56,16 @@ pub async fn publish_initial(
     let IndexArtifacts {
         format,
         parameters,
-        index_relations,
+        index_provider,
+        index_tables,
     } = request.build;
     let indexed_rows = indexed_rows(&parameters)?;
-    let index_relations = portable_relations(metadata_store, index_relations)?;
     let snapshot = IndexSnapshot {
         snapshot_id: request.snapshot_id,
         sequence_number: 1,
         timestamp_ms,
         summary: summary("create", request.builder),
+        source_table: request.source.clone(),
         vector_field: request.vector_field.to_owned(),
         source_key_fields: request.source_key_fields.to_vec(),
         indexed_rows,
@@ -72,7 +73,8 @@ pub async fn publish_initial(
         index_schema_version: format.schema_version,
         metric: format.metric,
         parameters,
-        index_relations,
+        index_provider,
+        index_tables,
     };
     let metadata = IndexMetadata {
         format_version: 1,
@@ -111,10 +113,10 @@ pub async fn publish_refresh(
     let IndexArtifacts {
         format,
         parameters,
-        index_relations,
+        index_provider,
+        index_tables,
     } = request.build;
     let indexed_rows = indexed_rows(&parameters)?;
-    let index_relations = portable_relations(metadata_store, index_relations)?;
     let timestamp_ms = now_ms()?.max(request.base_metadata.last_updated_ms);
     let sequence_number = request
         .base_metadata
@@ -126,6 +128,7 @@ pub async fn publish_refresh(
         sequence_number,
         timestamp_ms,
         summary: summary("refresh", request.builder),
+        source_table: request.source.clone(),
         vector_field: base_snapshot.vector_field.clone(),
         source_key_fields: base_snapshot.source_key_fields.clone(),
         indexed_rows,
@@ -133,7 +136,8 @@ pub async fn publish_refresh(
         index_schema_version: format.schema_version,
         metric: format.metric,
         parameters,
-        index_relations,
+        index_provider,
+        index_tables,
     };
     let mut metadata = request.base_metadata.clone();
     metadata.last_updated_ms = timestamp_ms;
@@ -168,23 +172,6 @@ fn indexed_rows(parameters: &BTreeMap<String, String>) -> Result<i64> {
         .and_then(|value| value.parse::<i64>().ok())
         .filter(|value| *value > 0)
         .ok_or_else(|| Error::InvalidMetadata("ntotal must be a positive indexed row count".into()))
-}
-
-fn portable_relations(
-    metadata_store: &MetadataStore,
-    relations: BTreeMap<String, RelationReference>,
-) -> Result<BTreeMap<String, String>> {
-    relations
-        .into_iter()
-        .map(|(role, relation)| match relation {
-            RelationReference::Parquet { uri } => {
-                Ok((role, metadata_store.relative_location(&uri)?))
-            }
-            RelationReference::Iceberg { .. } => Err(Error::InvalidMetadata(
-                "index artifacts must use warehouse-relative Parquet paths".into(),
-            )),
-        })
-        .collect()
 }
 
 /// Allocates a positive, process-independent snapshot identifier.

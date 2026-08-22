@@ -16929,7 +16929,7 @@
     {
       "dependsOn": [
         "pkg:cargo/libc@0.2.189",
-        "pkg:cargo/windows-sys@0.52.0"
+        "pkg:cargo/windows-sys@0.60.2"
       ],
       "ref": "pkg:cargo/errno@0.3.14"
     },
@@ -18175,6 +18175,7 @@
     },
     {
       "dependsOn": [
+        "pkg:cargo/async-trait@0.1.91",
         "pkg:cargo/datafusion@54.0.0",
         "pkg:cargo/iceberg-datafusion@0.10.0",
         "pkg:cargo/iceberg-storage-opendal@0.10.0",
@@ -18187,7 +18188,9 @@
     },
     {
       "dependsOn": [
+        "pkg:cargo/async-trait@0.1.91",
         "pkg:cargo/bytes@1.12.1",
+        "pkg:cargo/datafusion@54.0.0",
         "pkg:cargo/parqdb-catalog@0.2.0-rc.3",
         "pkg:cargo/parqdb-core@0.2.0-rc.3",
         "pkg:cargo/parqdb-meta@0.2.0-rc.3",
@@ -18467,7 +18470,7 @@
     {
       "dependsOn": [
         "pkg:cargo/heck@0.5.0",
-        "pkg:cargo/itertools@0.13.0",
+        "pkg:cargo/itertools@0.14.0",
         "pkg:cargo/log@0.4.33",
         "pkg:cargo/multimap@0.10.1",
         "pkg:cargo/petgraph@0.8.3",
@@ -18483,7 +18486,7 @@
     {
       "dependsOn": [
         "pkg:cargo/anyhow@1.0.104",
-        "pkg:cargo/itertools@0.13.0",
+        "pkg:cargo/itertools@0.14.0",
         "pkg:cargo/proc-macro2@1.0.107",
         "pkg:cargo/quote@1.0.47",
         "pkg:cargo/syn@2.0.119"
@@ -18630,7 +18633,7 @@
         "pkg:cargo/once_cell@1.21.4",
         "pkg:cargo/socket2@0.6.5",
         "pkg:cargo/tracing@0.1.44",
-        "pkg:cargo/windows-sys@0.52.0"
+        "pkg:cargo/windows-sys@0.60.2"
       ],
       "ref": "pkg:cargo/quinn-udp@0.5.15"
     },
@@ -18984,7 +18987,7 @@
         "pkg:cargo/errno@0.3.14",
         "pkg:cargo/libc@0.2.189",
         "pkg:cargo/linux-raw-sys@0.12.1",
-        "pkg:cargo/windows-sys@0.52.0"
+        "pkg:cargo/windows-sys@0.60.2"
       ],
       "ref": "pkg:cargo/rustix@1.1.4"
     },
@@ -19022,7 +19025,7 @@
         "pkg:cargo/security-framework-sys@2.17.0",
         "pkg:cargo/security-framework@3.7.0",
         "pkg:cargo/webpki-root-certs@1.0.9",
-        "pkg:cargo/windows-sys@0.52.0"
+        "pkg:cargo/windows-sys@0.60.2"
       ],
       "ref": "pkg:cargo/rustls-platform-verifier@0.7.0"
     },
@@ -19312,7 +19315,7 @@
     {
       "dependsOn": [
         "pkg:cargo/libc@0.2.189",
-        "pkg:cargo/windows-sys@0.61.2"
+        "pkg:cargo/windows-sys@0.60.2"
       ],
       "ref": "pkg:cargo/socket2@0.6.5"
     },
@@ -19376,7 +19379,7 @@
         "pkg:cargo/cfg-if@1.0.4",
         "pkg:cargo/libc@0.2.189",
         "pkg:cargo/psm@0.1.31",
-        "pkg:cargo/windows-sys@0.61.2"
+        "pkg:cargo/windows-sys@0.60.2"
       ],
       "ref": "pkg:cargo/stacker@0.1.24"
     },
@@ -19480,7 +19483,7 @@
         "pkg:cargo/getrandom@0.4.3",
         "pkg:cargo/once_cell@1.21.4",
         "pkg:cargo/rustix@1.1.4",
-        "pkg:cargo/windows-sys@0.52.0"
+        "pkg:cargo/windows-sys@0.60.2"
       ],
       "ref": "pkg:cargo/tempfile@3.27.0"
     },
@@ -19941,7 +19944,7 @@
     },
     {
       "dependsOn": [
-        "pkg:cargo/windows-sys@0.52.0"
+        "pkg:cargo/windows-sys@0.60.2"
       ],
       "ref": "pkg:cargo/winapi-util@0.1.11"
     },
@@ -20235,7 +20238,7 @@
     "properties": [
       {
         "name": "parqdb:cargo-lock-sha256",
-        "value": "b3cdccd98600abdc8c7f38fbab53774648d662229f80e4fec63bbd2d893ffd0a"
+        "value": "806e883c51d1f6cd6d4b51ba828eac05212c483220d018ba4299b509d73f5af2"
       }
     ]
   },

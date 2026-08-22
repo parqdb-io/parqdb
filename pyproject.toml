@@ -16,7 +16,7 @@ license-files = [
     "vendor/datafusion/datasource-parquet/LICENSE.txt",
     "vendor/datafusion-python/LICENSE.txt",
 ]
-keywords = ["vector-search", "lakehouse", "iceberg", "parquet"]
+keywords = ["vector-search", "lakehouse", "parquet", "arrow"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Programming Language :: Python :: 3",
@@ -38,9 +38,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-iceberg = [
-    "pyiceberg>=0.10,<1",
-]
 publish = [
     "numpy>=1.26,<3",
     "onnxruntime>=1.20,<2",
@@ -50,7 +47,7 @@ publish = [
 parqdb = "parqdb.cli:main"
 
 [project.urls]
-Documentation = "https://github.com/parqdb-io/parqdb/blob/main/docs/README.md"
+Documentation = "https://parqdb.io/docs"
 Repository = "https://github.com/parqdb-io/parqdb"
 Issues = "https://github.com/parqdb-io/parqdb/issues"
 
@@ -65,8 +62,8 @@ benchmark-faiss = [
 ]
 wheel-test = [
     "duckdb>=1.5,<1.6",
+    "markdown-it-py>=4,<5",
     "numpy>=1.26,<3",
-    "pyiceberg[sql-sqlite]>=0.10,<1",
     "pytest>=8.3",
 ]
 dev = [

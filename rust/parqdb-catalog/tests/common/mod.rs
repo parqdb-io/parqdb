@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use parqdb_catalog::{Error, IndexCatalog, IndexIdentifier};
-use parqdb_meta::{IndexMetadata, IndexSnapshot, RelationReference, SnapshotLogEntry};
+use parqdb_meta::{
+    IndexMetadata, IndexProviderDefinition, IndexSnapshot, IndexTableDefinition, SnapshotLogEntry,
+    TableDefinition, TableIdentifier,
+};
 use url::Url;
 use uuid::Uuid;
 
@@ -10,13 +13,25 @@ pub(crate) fn file_uri(path: &Path) -> String {
     Url::from_file_path(path).unwrap().into()
 }
 
-pub(crate) fn source(root: &Path) -> RelationReference {
-    RelationReference::Parquet {
-        uri: file_uri(&root.join("source.parquet")),
-    }
+pub(crate) fn source(root: &Path) -> TableDefinition {
+    let location = file_uri(&root.join("source.parquet"));
+    TableDefinition::new(
+        TableIdentifier::new("datafusion", vec!["public".into()], "source").unwrap(),
+        "parquet",
+        BTreeMap::from([
+            ("definition-version".into(), "1".into()),
+            ("location".into(), location.clone()),
+            ("table-identity".into(), location),
+        ]),
+    )
+    .unwrap()
 }
 
-pub(crate) fn metadata(_root: &Path) -> IndexMetadata {
+fn index_table(location: &str) -> IndexTableDefinition {
+    IndexTableDefinition::new(1, BTreeMap::from([("location".into(), location.into())])).unwrap()
+}
+
+pub(crate) fn metadata(root: &Path) -> IndexMetadata {
     let index_uuid = Uuid::parse_str("2f1c7f5e-3c43-4a44-8f2a-cf560c4db8d1").unwrap();
     let timestamp_ms = 1_750_000_000_000;
     let snapshot = IndexSnapshot {
@@ -24,6 +39,7 @@ pub(crate) fn metadata(_root: &Path) -> IndexMetadata {
         sequence_number: 1,
         timestamp_ms,
         summary: BTreeMap::new(),
+        source_table: source(root),
         vector_field: "embedding".into(),
         source_key_fields: vec!["document_id".into()],
         indexed_rows: 4,
@@ -48,9 +64,10 @@ pub(crate) fn metadata(_root: &Path) -> IndexMetadata {
                 "centroid-artifacts/metadata.json".into(),
             ),
         ]),
-        index_relations: BTreeMap::from([
-            ("ivf_centroids".into(), "centroids/".into()),
-            ("ivf_postings".into(), "postings/".into()),
+        index_provider: IndexProviderDefinition::new("parquet", BTreeMap::new()).unwrap(),
+        index_tables: BTreeMap::from([
+            ("ivf_centroids".into(), index_table("centroids/")),
+            ("ivf_postings".into(), index_table("postings/")),
         ]),
     };
     IndexMetadata {

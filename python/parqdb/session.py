@@ -21,7 +21,6 @@ from .datafusion import (
     SessionConfig as DataFusionSessionConfig,
 )
 from .datafusion.expr import SortKey
-from .iceberg import load_table_state, table_provider_inputs
 from .identifier import TableIdentifier
 from .maintenance import Maintenance
 from .query import VectorQuery
@@ -51,7 +50,6 @@ class _EmbeddedSession(SessionContext):
         warehouse: str | None = None,
         storage_options: Mapping[str, str] | None = None,
         catalog_path: str | os.PathLike[str] | None = None,
-        iceberg: object | None = None,
         config: DataFusionSessionConfig | None = None,
         runtime: RuntimeEnvBuilder | None = None,
     ) -> None:
@@ -83,11 +81,6 @@ class _EmbeddedSession(SessionContext):
         self.ctx = self._native.context()
         self._query_names = count()
         self._maintenance = Maintenance(self)
-        self._iceberg_catalog = iceberg
-        self._iceberg_catalog_name = (
-            _iceberg_catalog_name(iceberg) if iceberg is not None else None
-        )
-        self._iceberg_provider_inputs: dict[str, tuple[str, dict[str, str]]] = {}
 
     @property
     def root(self) -> Path:
@@ -143,29 +136,26 @@ class _EmbeddedSession(SessionContext):
 
     def table(self, name: str) -> DataFrame:
         """Return a registered table using DataFusion's table semantics."""
-        iceberg_identifier = self._iceberg_identifier(name)
-        if iceberg_identifier is not None:
-            state = load_table_state(self._iceberg_catalog, iceberg_identifier)
-            reference = state.relation_json()
-            dataframe = self._register_iceberg_relation(reference)
-            return _EmbeddedSourceTable(
-                dataframe,
-                self,
-                iceberg_identifier,
-                reference,
-                build_source=None,
-            )
         dataframe = super().table(name)
-        binding = self._native.persistent_table(name)
-        if binding is None:
+        definition_json = self._native.persistent_table_definition(name)
+        if definition_json is None:
             return dataframe
-        catalog, namespace, table_name, reference = binding
+        definition = json.loads(definition_json)
+        raw_identifier = definition["identifier"]
+        identifier = TableIdentifier(
+            str(raw_identifier["catalog"]),
+            tuple(str(segment) for segment in raw_identifier["namespace"]),
+            str(raw_identifier["name"]),
+        )
+        build_source = None
+        if definition["provider"] == "parquet":
+            build_source = str(definition["properties"]["location"])
         return _EmbeddedSourceTable(
             dataframe,
             self,
-            TableIdentifier(catalog, tuple(namespace), table_name),
-            _parquet_relation_json(reference),
-            build_source=reference,
+            identifier,
+            definition_json,
+            build_source=build_source,
         )
 
     def deregister_table(self, name: str) -> None:
@@ -184,7 +174,7 @@ class _EmbeddedSession(SessionContext):
     def to_dataframe(self, query: VectorQuery) -> DataFrame:
         """Compile a vector query into this session's lazy DataFrame."""
         source = self._resolve_query_source(query)
-        self._prepare_index_relations(query, source)
+        self._prepare_index_tables(query, source)
         internal = self._native.plan_search(
             source,
             _index_namespace(query.source),
@@ -210,7 +200,7 @@ class _EmbeddedSession(SessionContext):
     def to_sql(self, query: VectorQuery) -> str:
         """Compile a vector query to executable SQL in this session."""
         source = self._resolve_query_source(query)
-        self._prepare_index_relations(query, source)
+        self._prepare_index_tables(query, source)
         return self._native.search_sql(
             source,
             _index_namespace(query.source),
@@ -255,27 +245,19 @@ class _EmbeddedSession(SessionContext):
     def _resolve_query_source(self, query: VectorQuery) -> str:
         if not isinstance(query, VectorQuery):
             raise TypeError("query must be a parqdb.VectorQuery")
-        return self._relation_reference(query.source)
+        return self._table_definition(query.source)
 
-    def _relation_reference(self, identifier: TableIdentifier) -> str:
-        if (
-            self._iceberg_catalog_name is not None
-            and identifier.catalog == self._iceberg_catalog_name
-        ):
-            state = load_table_state(self._iceberg_catalog, identifier)
-            reference = state.relation_json()
-            self._register_iceberg_relation(reference)
-            return reference
-        source = self._native.persistent_table_source_by_identifier(
+    def _table_definition(self, identifier: TableIdentifier) -> str:
+        definition = self._native.persistent_table_definition_by_identifier(
             identifier.catalog,
             list(identifier.namespace),
             identifier.name,
         )
-        if source is None:
+        if definition is None:
             raise ValueError(f"query source is not registered: {identifier!r}")
-        return _parquet_relation_json(source)
+        return definition
 
-    def _prepare_index_relations(self, query: VectorQuery, source: str) -> None:
+    def _prepare_index_tables(self, query: VectorQuery, source: str) -> None:
         if query.bypass_index:
             return
         metadata = json.loads(
@@ -286,55 +268,23 @@ class _EmbeddedSession(SessionContext):
                 query.column,
             )
         )
-        self._prepare_metadata_relations(metadata)
+        self._prepare_metadata_tables(metadata)
 
-    def _prepare_metadata_relations(self, metadata: dict[str, Any]) -> None:
+    def _prepare_metadata_tables(self, metadata: dict[str, Any]) -> None:
         snapshot_id = int(metadata["current-snapshot-id"])
         snapshot = next(
             snapshot
             for snapshot in metadata["snapshots"]
             if int(snapshot["snapshot-id"]) == snapshot_id
         )
-        for relation in snapshot["index-relations"].values():
-            if not isinstance(relation, str):
-                raise ValueError("index relation locations must be strings")
-
-    def _register_iceberg_relation(self, reference: str) -> DataFrame:
-        if self._iceberg_catalog is None:
-            raise ValueError(
-                "index metadata references Iceberg, but this session has no Iceberg catalog"
-            )
-        relation = json.loads(reference)
-        if relation.get("catalog") != self._iceberg_catalog_name:
-            raise ValueError(
-                "index metadata references an Iceberg catalog not bound to this session"
-            )
-        inputs = self._iceberg_provider_inputs.get(reference)
-        if inputs is None:
-            inputs = table_provider_inputs(self._iceberg_catalog, relation)
-            self._iceberg_provider_inputs[reference] = inputs
-        metadata_location, properties = inputs
-        return DataFrame(
-            self._native.register_iceberg_relation(
-                reference,
-                metadata_location,
-                properties,
-            )
-        )
-
-    def _iceberg_identifier(self, name: str) -> TableIdentifier | None:
-        if self._iceberg_catalog_name is None:
-            return None
-        if not isinstance(name, str):
-            raise TypeError("table name must be a string")
-        parts = tuple(part for part in name.split(".") if part)
-        if not parts or parts[0] != self._iceberg_catalog_name:
-            return None
-        if len(parts) < 3:
-            raise ValueError(
-                "Iceberg table identifiers require catalog, namespace, and name"
-            )
-        return TableIdentifier(parts[0], parts[1:-1], parts[-1])
+        provider = snapshot["index-provider"]
+        if not isinstance(provider.get("provider"), str):
+            raise ValueError("index provider name must be a string")
+        for table in snapshot["index-tables"].values():
+            if not isinstance(table.get("definition-version"), int):
+                raise ValueError("index table definition version must be an integer")
+            if not isinstance(table.get("properties"), dict):
+                raise ValueError("index table properties must be an object")
 
 
 class _EmbeddedSourceTable(DataFrame):
@@ -349,7 +299,7 @@ class _EmbeddedSourceTable(DataFrame):
     ) -> None:
         if not reference.startswith("{"):
             build_source = reference if build_source is None else build_source
-            reference = _parquet_relation_json(reference)
+            reference = _parquet_table_json(identifier, reference)
         super().__init__(dataframe.df)
         self._session = session
         self._identifier = identifier
@@ -365,7 +315,6 @@ def _connect_embedded(
     *,
     warehouse: str | None = None,
     storage_options: Mapping[str, str] | None = None,
-    iceberg: object | None = None,
     config: DataFusionSessionConfig | None = None,
     runtime: RuntimeEnvBuilder | None = None,
 ) -> _EmbeddedSession:
@@ -373,7 +322,6 @@ def _connect_embedded(
         root,
         warehouse=warehouse,
         storage_options=storage_options,
-        iceberg=iceberg,
         config=config,
         runtime=runtime,
     )
@@ -431,16 +379,24 @@ def _persistent_sort_order(
     return [list(order) for order in file_sort_order]  # type: ignore[arg-type]
 
 
-def _parquet_relation_json(uri: str) -> str:
-    return json.dumps({"profile": "parquet", "uri": uri}, separators=(",", ":"))
+def _parquet_table_json(identifier: TableIdentifier, uri: str) -> str:
+    return json.dumps(
+        {
+            "identifier": {
+                "catalog": identifier.catalog,
+                "namespace": list(identifier.namespace),
+                "name": identifier.name,
+            },
+            "provider": "parquet",
+            "properties": {
+                "definition-version": "1",
+                "location": uri,
+                "table-identity": uri,
+            },
+        },
+        separators=(",", ":"),
+    )
 
 
 def _index_namespace(identifier: TableIdentifier) -> list[str]:
     return list(identifier.index_namespace)
-
-
-def _iceberg_catalog_name(catalog: object) -> str:
-    name = getattr(catalog, "name", None)
-    if not isinstance(name, str) or not name:
-        raise ValueError("the Iceberg catalog must expose a non-empty name")
-    return name

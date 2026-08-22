@@ -8,9 +8,7 @@ use parqdb_catalog::{
     IvfCentroidsClaim, IvfCentroidsClaimResult, SqliteCatalog, TableCatalog, TableDefinition,
     TableIdentifier,
 };
-use parqdb_meta::{
-    DistanceMetric, IndexMetadata, IvfCentroidsDescriptor, IvfCentroidsMetadata, RelationReference,
-};
+use parqdb_meta::{DistanceMetric, IndexMetadata, IvfCentroidsDescriptor, IvfCentroidsMetadata};
 use rusqlite::Connection;
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -19,10 +17,43 @@ mod common;
 
 use common::{assert_index_catalog_contract, file_uri, metadata, refreshed};
 
-fn test_source() -> RelationReference {
-    RelationReference::Parquet {
-        uri: "file:///parqdb-test-source.parquet".into(),
-    }
+fn test_source() -> TableDefinition {
+    let location = "file:///parqdb-test-source.parquet";
+    TableDefinition::new(
+        TableIdentifier::new("datafusion", vec!["public".into()], "source").unwrap(),
+        "parquet",
+        BTreeMap::from([
+            ("definition-version".into(), "1".into()),
+            ("location".into(), location.into()),
+            ("table-identity".into(), location.into()),
+        ]),
+    )
+    .unwrap()
+}
+
+fn iceberg_source(
+    catalog: &str,
+    namespace: &[&str],
+    name: &str,
+    table_uuid: Uuid,
+    snapshot_id: i64,
+) -> TableDefinition {
+    TableDefinition::new(
+        TableIdentifier::new(
+            catalog,
+            namespace.iter().map(|value| (*value).into()).collect(),
+            name,
+        )
+        .unwrap(),
+        "iceberg",
+        BTreeMap::from([
+            ("definition-version".into(), "1".into()),
+            ("snapshot-id".into(), snapshot_id.to_string()),
+            ("table-identity".into(), table_uuid.to_string()),
+            ("table-uuid".into(), table_uuid.to_string()),
+        ]),
+    )
+    .unwrap()
 }
 
 trait TestCatalogExt {
@@ -72,7 +103,7 @@ impl TestCatalogExt for SqliteCatalog {
         IndexCatalog::register(
             self,
             identifier,
-            &test_source(),
+            &metadata.current_snapshot()?.source_table,
             metadata_location,
             metadata,
         )
@@ -89,7 +120,7 @@ impl TestCatalogExt for SqliteCatalog {
         IndexCatalog::commit(
             self,
             identifier,
-            &test_source(),
+            &base_metadata.current_snapshot()?.source_table,
             base_metadata_location,
             new_metadata_location,
             base_metadata,
@@ -390,13 +421,7 @@ fn ivf_centroids_reuse_follows_iceberg_exact_state_across_renames() {
     let catalog = SqliteCatalog::open(temporary.path().join("catalog.sqlite")).unwrap();
     let table_uuid = Uuid::new_v4();
     let descriptor = ivf_centroids_descriptor(temporary.path());
-    let first_source = RelationReference::Iceberg {
-        catalog: "first".into(),
-        namespace: vec!["analytics".into()],
-        name: "documents".into(),
-        table_uuid,
-        snapshot_id: 101,
-    };
+    let first_source = iceberg_source("first", &["analytics"], "documents", table_uuid, 101);
     let claim = match IndexCatalog::claim_ivf_centroids(
         &catalog,
         &first_source,
@@ -415,13 +440,7 @@ fn ivf_centroids_reuse_follows_iceberg_exact_state_across_renames() {
         IndexCatalog::publish_ivf_centroids(&catalog, &claim, &metadata_location, &metadata)
             .unwrap();
 
-    let renamed_source = RelationReference::Iceberg {
-        catalog: "second".into(),
-        namespace: vec!["renamed".into()],
-        name: "vectors".into(),
-        table_uuid,
-        snapshot_id: 101,
-    };
+    let renamed_source = iceberg_source("second", &["renamed"], "vectors", table_uuid, 101);
     assert!(matches!(
         IndexCatalog::claim_ivf_centroids(
             &catalog,
@@ -434,13 +453,7 @@ fn ivf_centroids_reuse_follows_iceberg_exact_state_across_renames() {
         IvfCentroidsClaimResult::Ready(entry) if entry == published
     ));
 
-    let different_snapshot = RelationReference::Iceberg {
-        catalog: "second".into(),
-        namespace: vec!["renamed".into()],
-        name: "vectors".into(),
-        table_uuid,
-        snapshot_id: 102,
-    };
+    let different_snapshot = iceberg_source("second", &["renamed"], "vectors", table_uuid, 102);
     assert!(matches!(
         IndexCatalog::claim_ivf_centroids(
             &catalog,

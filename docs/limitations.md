@@ -25,13 +25,12 @@ describe behavior that is not yet exposed by a released runtime.
 
 ## Catalog and Storage
 
-- SQLite is the only catalog implementation.
-- Index construction writes Parquet. Iceberg writing is not implemented.
+- SQLite is the only bundled catalog implementation. Rust sessions can inject
+  independent table and index catalog implementations.
+- Parquet is the only table and index format exposed by the Python API.
 - Storage access supports canonical `file`, S3, and HDFS locations.
 - Parquet sources have no snapshot isolation. Replacing registered files in
   place is the application's responsibility.
-- Iceberg reads require PyIceberg and validate exact table identity and
-  snapshot.
 
 ## Runtime
 

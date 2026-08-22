@@ -4,9 +4,9 @@ use std::sync::{Arc, Mutex};
 use parqdb_catalog::{CatalogEntry, IndexIdentifier, IvfCentroidsClaimResult, SqliteCatalog};
 use parqdb_core::{IndexArtifacts, IndexFormat};
 use parqdb_meta::{
-    DistanceMetric, IVF_CLUSTERING_PROFILE_VERSION, IndexMetadata, IndexSnapshot,
-    IvfCentroidsDescriptor, IvfCentroidsMetadata, IvfCentroidsReference, RelationReference,
-    SnapshotLogEntry,
+    DistanceMetric, IVF_CLUSTERING_PROFILE_VERSION, IndexMetadata, IndexProviderDefinition,
+    IndexSnapshot, IndexTableDefinition, IvfCentroidsDescriptor, IvfCentroidsMetadata,
+    IvfCentroidsReference, SnapshotLogEntry, TableDefinition, TableIdentifier,
 };
 use parqdb_storage::{StorageRegistry, Warehouse};
 use tempfile::TempDir;
@@ -46,15 +46,30 @@ fn metadata_store_with_config(
     )
 }
 
-fn source(uri: &str) -> RelationReference {
-    RelationReference::Parquet {
-        uri: uri.to_owned(),
-    }
+fn source(uri: &str) -> TableDefinition {
+    TableDefinition::new(
+        TableIdentifier::new("datafusion", vec!["public".into()], "source").unwrap(),
+        "parquet",
+        BTreeMap::from([
+            ("definition-version".into(), "1".into()),
+            ("location".into(), uri.into()),
+            ("table-identity".into(), uri.into()),
+        ]),
+    )
+    .unwrap()
 }
 
-fn artifacts(store: &MetadataStore, relative_root: &str, nlist: usize) -> IndexArtifacts {
+fn artifact(location: String) -> IndexTableDefinition {
+    IndexTableDefinition::new(1, BTreeMap::from([("location".into(), location)])).unwrap()
+}
+
+fn published_table(location: String) -> IndexTableDefinition {
+    IndexTableDefinition::new(1, BTreeMap::from([("location".into(), location)])).unwrap()
+}
+
+fn artifacts(_store: &MetadataStore, relative_root: &str, nlist: usize) -> IndexArtifacts {
     let centroid_uuid = Uuid::new_v4();
-    let uri = store.resolve_location(relative_root, true).unwrap();
+    let root = relative_root.trim_end_matches('/');
     IndexArtifacts {
         format: IndexFormat::ivf(DistanceMetric::L2Squared),
         parameters: BTreeMap::from([
@@ -72,9 +87,13 @@ fn artifacts(store: &MetadataStore, relative_root: &str, nlist: usize) -> IndexA
                 format!("metadata/{centroid_uuid}/v1.metadata.json"),
             ),
         ]),
-        index_relations: BTreeMap::from([
-            ("ivf_centroids".into(), source(&format!("{uri}centroids"))),
-            ("ivf_postings".into(), source(&format!("{uri}postings"))),
+        index_provider: IndexProviderDefinition::new("parquet", BTreeMap::new()).unwrap(),
+        index_tables: BTreeMap::from([
+            (
+                "ivf_centroids".into(),
+                artifact(format!("{root}/centroids")),
+            ),
+            ("ivf_postings".into(), artifact(format!("{root}/postings"))),
         ]),
     }
 }
@@ -95,6 +114,7 @@ fn metadata_document(store: &MetadataStore) -> IndexMetadata {
             sequence_number: 1,
             timestamp_ms,
             summary: BTreeMap::new(),
+            source_table: source("file:///data/documents.parquet"),
             vector_field: "embedding".into(),
             source_key_fields: vec!["document_id".into()],
             indexed_rows: 3,
@@ -102,16 +122,8 @@ fn metadata_document(store: &MetadataStore) -> IndexMetadata {
             index_schema_version: 1,
             metric: "l2_squared".into(),
             parameters: build.parameters,
-            index_relations: build
-                .index_relations
-                .into_iter()
-                .map(|(role, reference)| match reference {
-                    RelationReference::Parquet { uri } => {
-                        (role, store.relative_location(&uri).unwrap())
-                    }
-                    RelationReference::Iceberg { .. } => unreachable!(),
-                })
-                .collect(),
+            index_provider: build.index_provider,
+            index_tables: build.index_tables,
         }],
         snapshot_log: vec![SnapshotLogEntry {
             timestamp_ms,
@@ -150,9 +162,10 @@ async fn repository_validates_the_centroid_artifact_against_the_logical_snapshot
     let centroid_location = store.write_ivf_centroids(&centroids).await.unwrap();
     let mut metadata = metadata_document(store);
     let snapshot = metadata.snapshots.first_mut().unwrap();
-    snapshot
-        .index_relations
-        .insert("ivf_centroids".into(), centroids.centroids.clone());
+    snapshot.index_tables.insert(
+        "ivf_centroids".into(),
+        published_table(centroids.centroids.clone()),
+    );
     snapshot.parameters.insert(
         "ivf_centroids_fingerprint".into(),
         centroids.fingerprint.clone(),
@@ -315,17 +328,24 @@ async fn repository_validates_ivf_centroids_catalog_and_reference_identity() {
 }
 
 #[tokio::test]
-async fn metadata_store_rejects_absolute_artifact_locations() {
+async fn metadata_store_leaves_index_table_locations_to_the_provider() {
     let temporary = TempDir::new().unwrap();
     let repository = repository(&temporary);
     let store = repository.metadata_store();
     let mut metadata = metadata_document(store);
-    metadata.snapshots[0]
-        .index_relations
-        .insert("ivf_postings".into(), "file:///tmp/other/postings/".into());
+    metadata.snapshots[0].index_tables.insert(
+        "ivf_postings".into(),
+        published_table("file:///tmp/other/postings/".into()),
+    );
 
-    assert!(store.write_initial(&metadata).await.is_err());
+    assert!(store.write_initial(&metadata).await.is_ok());
+}
 
+#[tokio::test]
+async fn metadata_store_rejects_absolute_centroid_locations() {
+    let temporary = TempDir::new().unwrap();
+    let repository = repository(&temporary);
+    let store = repository.metadata_store();
     let mut centroids = ivf_centroids_document(store);
     centroids.centroids = "file:///tmp/other/centroids/".into();
     assert!(matches!(

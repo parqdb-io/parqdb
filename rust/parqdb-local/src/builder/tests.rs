@@ -44,7 +44,7 @@ fn example_source() -> RecordBatch {
 }
 
 #[test]
-fn builds_ivf_relations_with_source_keys_in_postings() {
+fn builds_ivf_tables_with_source_keys_in_postings() {
     let artifacts = build_ivf_tables(
         &example_source(),
         "embedding",
@@ -238,7 +238,7 @@ fn signed_and_string_keys_use_the_same_postings_schema() {
 }
 
 #[tokio::test]
-async fn writes_only_the_two_ivf_relations() {
+async fn writes_only_the_two_ivf_tables() {
     let temporary = TempDir::new().unwrap();
     let build = build_ivf(
         &example_source(),
@@ -256,16 +256,18 @@ async fn writes_only_the_two_ivf_relations() {
     assert_eq!(build.parameters["posting_encoding"], "source");
     assert_eq!(
         build
-            .index_relations
+            .index_tables
             .keys()
             .map(String::as_str)
             .collect::<Vec<_>>(),
         ["ivf_centroids", "ivf_postings"]
     );
-    for reference in build.index_relations.values() {
-        let RelationReference::Parquet { uri } = reference else {
-            panic!("local builder must return Parquet references");
-        };
+    assert_eq!(build.index_provider.provider, "parquet");
+    for reference in build.index_tables.values() {
+        let uri = reference
+            .properties
+            .get("location")
+            .expect("Parquet index table must have a location");
         assert!(
             crate::local_uri::file_uri_to_path(uri)
                 .unwrap()

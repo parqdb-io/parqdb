@@ -1,11 +1,11 @@
 [
   {
-    "file": "absolute-index-relation.metadata.json",
-    "violates": "index relation locations must be relative to the warehouse"
+    "file": "nonpositive-index-table-version.metadata.json",
+    "violates": "index table definition versions must be positive"
   },
   {
     "file": "unknown-ivf-role.metadata.json",
-    "violates": "IVF schema version 1 defines exactly two index relation roles"
+    "violates": "IVF schema version 1 defines exactly two index table roles"
   },
   {
     "file": "unsupported-format-version.metadata.json",
@@ -40,8 +40,8 @@
     "violates": "IVF metric must be l2_squared or cosine"
   },
   {
-    "file": "escaping-index-relation.metadata.json",
-    "violates": "index relation locations must not escape the warehouse"
+    "file": "empty-index-table-property.metadata.json",
+    "violates": "index table property names must be non-empty"
   },
   {
     "file": "missing-required-field.metadata.json",

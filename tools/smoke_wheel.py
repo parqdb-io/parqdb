@@ -20,7 +20,7 @@ def main() -> None:
             "wheel smoke must not rely on an external datafusion package"
         )
 
-    for module in ("numpy", "onnxruntime", "pyiceberg", "tokenizers"):
+    for module in ("numpy", "onnxruntime", "tokenizers"):
         import_module(module)
 
     executable = Path(sys.executable).with_name(

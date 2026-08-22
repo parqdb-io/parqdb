@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 
 from support.config import TestEnvironment
 
-CAPABILITY_NAMES = ("file", "s3", "hdfs", "iceberg")
+CAPABILITY_NAMES = ("file", "s3", "hdfs")
 _DEPENDENCIES: dict[str, tuple[str, ...]] = {}
 
 
@@ -141,18 +141,8 @@ def _probe_hdfs(environment: TestEnvironment) -> None:
         pass
 
 
-def _probe_iceberg(environment: TestEnvironment) -> None:
-    from pyiceberg.catalog import load_catalog
-
-    config = environment.iceberg
-    assert config is not None
-    catalog = load_catalog(config.name, **config.properties)
-    catalog.list_namespaces()
-
-
 _PROBES: dict[str, Callable[[TestEnvironment], None]] = {
     "file": _probe_file,
     "s3": _probe_s3,
     "hdfs": _probe_hdfs,
-    "iceberg": _probe_iceberg,
 }

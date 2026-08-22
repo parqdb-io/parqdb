@@ -7,7 +7,6 @@ import pytest
 from support.capabilities import CapabilityProbeError, CapabilityRegistry
 from support.config import (
     HdfsConfig,
-    IcebergConfig,
     S3Config,
     TestEnvironment,
     load_test_environment,
@@ -55,9 +54,3 @@ def s3(test_env: TestEnvironment) -> S3Config:
 def hdfs(test_env: TestEnvironment) -> HdfsConfig:
     assert test_env.hdfs is not None
     return test_env.hdfs
-
-
-@pytest.fixture(scope="session")
-def iceberg(test_env: TestEnvironment) -> IcebergConfig:
-    assert test_env.iceberg is not None
-    return test_env.iceberg

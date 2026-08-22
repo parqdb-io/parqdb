@@ -388,7 +388,7 @@ pub(crate) fn compile_index_only_plan(
     scale_distance_projection(ranked, resolved)
 }
 
-/// Compiles one resolved search into `DataFusion` SQL over registered relations.
+/// Compiles one resolved search into `DataFusion` SQL over registered tables.
 pub fn compile_datafusion_sql(
     resolved: &ResolvedSearch,
     source_name: Option<&str>,
@@ -396,7 +396,7 @@ pub fn compile_datafusion_sql(
     centroids_name: Option<&str>,
     selected_clusters_name: Option<&str>,
 ) -> Result<String> {
-    let source_required = datafusion_source_relation_required(resolved)?;
+    let source_required = datafusion_source_table_required(resolved)?;
     let source_name = validated_datafusion_source_name(source_required, source_name)?;
     let cluster_filter = validated_datafusion_cluster_filter(
         resolved,
@@ -420,7 +420,7 @@ pub fn compile_datafusion_sql(
     }
 
     let mut selected_clusters_name = selected_clusters_name;
-    if matches!(cluster_filter, DataFusionClusterFilter::NativeRelation)
+    if matches!(cluster_filter, DataFusionClusterFilter::NativeTable)
         && selected_clusters_name.is_none()
     {
         ctes.push(datafusion_native_selected_clusters_cte(resolved)?);
@@ -428,9 +428,9 @@ pub fn compile_datafusion_sql(
     }
 
     if let Some(postings_name) = postings_name {
-        if let DataFusionClusterFilter::Relational = cluster_filter {
+        if let DataFusionClusterFilter::DataFusion = cluster_filter {
             let centroids_name = centroids_name.ok_or_else(|| {
-                Error::InvalidArgument("DataFusion centroid relation is not registered".to_owned())
+                Error::InvalidArgument("DataFusion centroid table is not registered".to_owned())
             })?;
             ctes.push(datafusion_selected_clusters_cte(
                 resolved,
@@ -482,8 +482,7 @@ pub fn compile_datafusion_sql(
 
 fn datafusion_distance_sql(resolved: &ResolvedSearch, query_literal: &str) -> String {
     let query = format!("make_array({query_literal})");
-    if resolved.postings_relation_key.is_none()
-        || resolved.posting_encoding == PostingEncoding::Source
+    if resolved.postings_table_key.is_none() || resolved.posting_encoding == PostingEncoding::Source
     {
         let vector = format!("s.{}", quote_identifier(&resolved.vector_field));
         let vector = match resolved.metric {
@@ -513,11 +512,11 @@ fn validated_datafusion_source_name(
     match (source_required, source_name) {
         (true, Some(name)) if !name.is_empty() => Ok(Some(name)),
         (true, _) => Err(Error::InvalidArgument(
-            "DataFusion source relation is required for this search".into(),
+            "DataFusion source table is required for this search".into(),
         )),
         (false, None) => Ok(None),
         (false, Some(_)) => Err(Error::InvalidArgument(
-            "DataFusion source relation must be omitted for an index-only search".into(),
+            "DataFusion source table must be omitted for an index-only search".into(),
         )),
     }
 }
@@ -536,7 +535,7 @@ fn datafusion_candidates_cte(
     source_required: bool,
     distance: &str,
 ) -> Result<String> {
-    if resolved.postings_relation_key.is_none() {
+    if resolved.postings_table_key.is_none() {
         return Ok(format!(
             "parqdb_candidates AS (\n        SELECT s.*, {distance} AS _distance\n        \
              FROM parqdb_source AS s\n    )"
@@ -581,7 +580,7 @@ fn datafusion_candidates_cte(
 }
 
 fn datafusion_index_only_columns(resolved: &ResolvedSearch) -> Result<Vec<(String, String)>> {
-    if datafusion_source_relation_required(resolved)? {
+    if datafusion_source_table_required(resolved)? {
         return Err(Error::InvalidArgument(
             "index-only search requires source data".into(),
         ));
@@ -610,20 +609,20 @@ fn validated_datafusion_cluster_filter(
     centroids_name: Option<&str>,
     selected_clusters_name: Option<&str>,
 ) -> Result<DataFusionClusterFilter> {
-    if resolved.postings_relation_key.is_some() != postings_name.is_some() {
+    if resolved.postings_table_key.is_some() != postings_name.is_some() {
         return Err(Error::InvalidArgument(
             "DataFusion postings registration does not match the resolved search".into(),
         ));
     }
     let cluster_filter = datafusion_cluster_filter(resolved)?;
-    if !matches!(cluster_filter, DataFusionClusterFilter::NativeRelation)
+    if !matches!(cluster_filter, DataFusionClusterFilter::NativeTable)
         && selected_clusters_name.is_some()
     {
         return Err(Error::InvalidArgument(
-            "DataFusion selected-cluster relation is not used by the resolved search".into(),
+            "DataFusion selected-cluster table is not used by the resolved search".into(),
         ));
     }
-    if matches!(cluster_filter, DataFusionClusterFilter::Relational) != centroids_name.is_some() {
+    if matches!(cluster_filter, DataFusionClusterFilter::DataFusion) != centroids_name.is_some() {
         return Err(Error::InvalidArgument(
             "DataFusion centroid registration does not match the resolved search".into(),
         ));
@@ -648,11 +647,9 @@ fn datafusion_postings_cte(
                 .join(", ");
             format!("SELECT * FROM {postings} AS p\n        WHERE p.\"cid\" IN ({clusters})")
         }
-        DataFusionClusterFilter::NativeRelation => {
+        DataFusionClusterFilter::NativeTable => {
             let name = selected_clusters_name.ok_or_else(|| {
-                Error::InvalidArgument(
-                    "DataFusion selected-cluster relation is not registered".into(),
-                )
+                Error::InvalidArgument("DataFusion selected-cluster table is not registered".into())
             })?;
             let selected_clusters = quote_identifier(name);
             format!(
@@ -660,13 +657,13 @@ fn datafusion_postings_cte(
                  {selected_clusters} AS selected ON p.\"cid\" = selected.\"cid\""
             )
         }
-        DataFusionClusterFilter::Relational => format!(
+        DataFusionClusterFilter::DataFusion => format!(
             "SELECT p.* FROM {postings} AS p\n        LEFT SEMI JOIN \
              parqdb_selected_clusters AS selected ON p.\"cid\" = selected.\"cid\""
         ),
         DataFusionClusterFilter::Exact => {
             return Err(Error::InvalidArgument(
-                "exact search cannot compile an IVF postings relation".into(),
+                "exact search cannot compile an IVF postings table".into(),
             ));
         }
     };
@@ -689,9 +686,9 @@ fn datafusion_selected_clusters_cte(
     centroids_name: &str,
     query_literal: &str,
 ) -> Result<String> {
-    let Some(ClusterSelection::Relational { nprobe, .. }) = &resolved.cluster_selection else {
+    let Some(ClusterSelection::DataFusion { nprobe, .. }) = &resolved.cluster_selection else {
         return Err(Error::InvalidArgument(
-            "relational cluster routing is not configured".into(),
+            "DataFusion cluster routing is not configured".into(),
         ));
     };
     let centroids = quote_identifier(centroids_name);
@@ -703,24 +700,24 @@ fn datafusion_selected_clusters_cte(
     ))
 }
 
-/// Returns whether a `DataFusion` search needs a registered relation of selected CIDs.
-pub fn datafusion_cluster_relation_required(resolved: &ResolvedSearch) -> Result<bool> {
+/// Returns whether a `DataFusion` search needs a registered table of selected CIDs.
+pub fn datafusion_cluster_table_required(resolved: &ResolvedSearch) -> Result<bool> {
     Ok(matches!(
         datafusion_cluster_filter(resolved)?,
-        DataFusionClusterFilter::NativeRelation
+        DataFusionClusterFilter::NativeTable
     ))
 }
 
-/// Returns whether a `DataFusion` search routes through the centroid relation.
-pub fn datafusion_centroid_relation_required(resolved: &ResolvedSearch) -> Result<bool> {
+/// Returns whether a `DataFusion` search routes through the centroid table.
+pub fn datafusion_centroid_table_required(resolved: &ResolvedSearch) -> Result<bool> {
     Ok(matches!(
         datafusion_cluster_filter(resolved)?,
-        DataFusionClusterFilter::Relational
+        DataFusionClusterFilter::DataFusion
     ))
 }
 
-/// Returns whether a `DataFusion` search must register and scan its source relation.
-pub fn datafusion_source_relation_required(resolved: &ResolvedSearch) -> Result<bool> {
+/// Returns whether a `DataFusion` search must register and scan its source table.
+pub fn datafusion_source_table_required(resolved: &ResolvedSearch) -> Result<bool> {
     if matches!(
         datafusion_cluster_filter(resolved)?,
         DataFusionClusterFilter::Exact
@@ -746,12 +743,12 @@ enum DataFusionClusterFilter {
     Exact,
     All,
     NativeInline,
-    NativeRelation,
-    Relational,
+    NativeTable,
+    DataFusion,
 }
 
 fn datafusion_cluster_filter(resolved: &ResolvedSearch) -> Result<DataFusionClusterFilter> {
-    if resolved.postings_relation_key.is_none() {
+    if resolved.postings_table_key.is_none() {
         if resolved.nlist.is_some() || resolved.cluster_selection.is_some() {
             return Err(Error::InvalidArgument(
                 "exact search cannot contain IVF cluster selection".into(),
@@ -787,25 +784,25 @@ fn datafusion_cluster_filter(resolved: &ResolvedSearch) -> Result<DataFusionClus
             if selected_clusters.len() <= INLINE_CLUSTER_FILTER_LIMIT {
                 Ok(DataFusionClusterFilter::NativeInline)
             } else {
-                Ok(DataFusionClusterFilter::NativeRelation)
+                Ok(DataFusionClusterFilter::NativeTable)
             }
         }
-        ClusterSelection::Relational {
-            centroids_relation_key,
+        ClusterSelection::DataFusion {
+            centroids_table_key,
             nprobe,
         } => {
-            if centroids_relation_key.is_empty() {
+            if centroids_table_key.is_empty() {
                 return Err(Error::InvalidArgument(
-                    "relational IVF routing requires a centroid relation".into(),
+                    "DataFusion IVF routing requires a centroid table".into(),
                 ));
             }
             if *nprobe == 0 || *nprobe >= nlist {
                 return Err(Error::InvalidArgument(format!(
-                    "relational IVF routing must probe between 1 and {} clusters",
+                    "DataFusion IVF routing must probe between 1 and {} clusters",
                     nlist.saturating_sub(1)
                 )));
             }
-            Ok(DataFusionClusterFilter::Relational)
+            Ok(DataFusionClusterFilter::DataFusion)
         }
     }
 }

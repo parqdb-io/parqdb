@@ -16,7 +16,7 @@ indexes across engines.
 - Keep source data in existing host-engine tables.
 - Store index structures in open table formats.
 - Allow different engines to discover and query the same logical index.
-- Reuse Iceberg catalogs and host-engine storage readers and query execution.
+- Reuse registered table providers and host-engine query execution.
 
 ## Overview
 
@@ -36,14 +36,14 @@ catalog identifier
 ```
 
 The runtime resolves the catalog-bound source through its host engine and
-index relations through the session warehouse. Query results preserve source
+index tables through the session warehouse. Query results preserve source
 columns and add index-family result fields.
 
 All indexes are published and loaded through a catalog. A catalog commit
-publishes metadata only; table consistency is defined by the applicable
-relation profile. Iceberg references bind exact table snapshots. Parquet
-references identify tables by URI and rely on publisher-managed
-consistency.
+publishes metadata only. The snapshot's `source-table` definition identifies
+the exact source state, while its `index-provider` and `index-tables`
+definitions identify the physical index state. Each registered provider
+validates its own properties and consistency guarantees.
 
 ## Specification
 
@@ -63,14 +63,14 @@ consistency.
   metadata file and source table.
 - **Warehouse** -- The single URI prefix used by a session for all index
   metadata and data.
-- **Iceberg catalog** -- An Iceberg catalog registered at runtime under the
-  logical name used by Iceberg relation references.
-- **Resolution context** -- Runtime configuration used by a relation profile to
-  resolve relation references.
-- **Relation reference** -- A profile-tagged, portable identifier for one
-  logical table and, when supported by the profile, its exact state.
-- **Relation profile** -- Rules for resolving a relation reference and
-  interpreting its identity, exact state, and storage guarantees.
+- **Table definition** -- A logical table identifier, registered provider name,
+  and versioned provider properties sufficient to reopen one exact table state.
+- **Index provider definition** -- The registered provider and versioned
+  properties used for a snapshot's physical index tables.
+- **Index table definition** -- A versioned, provider-defined description of
+  one immutable physical index table.
+- **Provider profile** -- Rules for validating provider properties and
+  interpreting table identity, exact state, layout, and storage guarantees.
 
 ### Type System
 
@@ -101,10 +101,10 @@ Iceberg also defines `struct<...>`, `list<T>`, and `map<K, V>`. Struct fields,
 list elements, and map values define nullability independently. Map keys are
 required.
 
-Relation profiles define physical mappings for non-Iceberg storage. Schema
-conformance is determined from the underlying table or file schema. A compute
-engine may expose a conservatively nullable query schema; that query schema
-does not change the nullability encoded by the storage format.
+Provider profiles define physical schema mappings. Schema conformance is
+determined from the underlying table or file schema. A compute engine may
+expose a conservatively nullable query schema; that query schema does not
+change the nullability encoded by the storage format.
 
 ### Table Schema Compatibility
 
@@ -139,7 +139,7 @@ Core:
 - [`publication-manifest.md`](publication-manifest.md): immutable HTTP-queryable IVF-LVQ
   snapshots.
 
-Relation profiles:
+Provider profiles:
 
 - [`storage/parquet.md`](storage/parquet.md)
 - [`storage/iceberg.md`](storage/iceberg.md)

@@ -18,7 +18,12 @@ class _ObjectPrefix:
 class SourceUriPolicy:
     """Authorize server-visible Parquet sources against canonical URI prefixes."""
 
-    def __init__(self, prefixes: Sequence[str | Path] = ()) -> None:
+    def __init__(
+        self,
+        prefixes: Sequence[str | Path] = (),
+        *,
+        resource_name: str = "Parquet source",
+    ) -> None:
         file_roots: list[Path] = []
         object_prefixes: list[_ObjectPrefix] = []
         for value in prefixes:
@@ -40,17 +45,18 @@ class SourceUriPolicy:
                 object_prefixes.append(prefix)
         self._file_roots = tuple(file_roots)
         self._object_prefixes = tuple(object_prefixes)
+        self._resource_name = resource_name
 
     def authorize(self, source: str | Path) -> str:
         reference = os.fspath(source)
         if not reference:
-            raise ValueError("Parquet source must not be empty")
+            raise ValueError(f"{self._resource_name} must not be empty")
         parsed = urlsplit(reference)
         if parsed.scheme in {"", "file"}:
             path = _local_path(parsed, reference).expanduser().resolve()
             if not any(_is_below(path, root) for root in self._file_roots):
                 raise PermissionError(
-                    "Parquet source is outside the allowed file roots"
+                    f"{self._resource_name} is outside the allowed file roots"
                 )
             return os.fspath(path)
 
@@ -59,7 +65,9 @@ class SourceUriPolicy:
             _matches_object_prefix(candidate, prefix)
             for prefix in self._object_prefixes
         ):
-            raise PermissionError("Parquet source is outside the allowed URI prefixes")
+            raise PermissionError(
+                f"{self._resource_name} is outside the allowed URI prefixes"
+            )
         return urlunsplit(
             SplitResult(
                 candidate.scheme,

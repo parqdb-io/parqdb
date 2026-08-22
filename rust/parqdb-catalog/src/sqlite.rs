@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use parqdb_meta::{IndexMetadata, IvfCentroidsDescriptor, IvfCentroidsMetadata, RelationReference};
+use parqdb_meta::{IndexMetadata, IvfCentroidsDescriptor, IvfCentroidsMetadata};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use uuid::Uuid;
 
@@ -117,12 +117,13 @@ impl IndexCatalog for SqliteCatalog {
     fn register(
         &self,
         identifier: &IndexIdentifier,
-        source: &RelationReference,
+        source: &TableDefinition,
         metadata_location: &str,
         metadata: &IndexMetadata,
     ) -> Result<()> {
         metadata.validate()?;
         source.validate()?;
+        validate_source_binding(source, metadata)?;
         parqdb_meta::validate_absolute_location(metadata_location)?;
         let namespace = identifier.namespace_key()?;
         let mut connection = self.connection()?;
@@ -164,7 +165,7 @@ impl IndexCatalog for SqliteCatalog {
     fn commit(
         &self,
         identifier: &IndexIdentifier,
-        source: &RelationReference,
+        source: &TableDefinition,
         base_metadata_location: &str,
         new_metadata_location: &str,
         base_metadata: &IndexMetadata,
@@ -199,6 +200,7 @@ impl IndexCatalog for SqliteCatalog {
         }
         new_metadata.validate_update_from(base_metadata)?;
         source.validate()?;
+        validate_source_binding(source, new_metadata)?;
         parqdb_meta::validate_absolute_location(new_metadata_location)?;
         let source_identity = source.exact_state_key();
         let updated = transaction.execute(
@@ -294,7 +296,7 @@ impl IndexCatalog for SqliteCatalog {
     fn find_by_source(
         &self,
         namespace: &[String],
-        source: &RelationReference,
+        source: &TableDefinition,
     ) -> Result<Vec<CatalogEntry>> {
         let namespace_key = self.require_namespace(namespace)?;
         let source_identity = source.exact_state_key();
@@ -379,7 +381,7 @@ impl IndexCatalog for SqliteCatalog {
 
     fn load_ivf_centroids(
         &self,
-        source: &RelationReference,
+        source: &TableDefinition,
         fingerprint: &str,
     ) -> Result<IvfCentroidsCatalogEntry> {
         source.validate()?;
@@ -400,7 +402,7 @@ impl IndexCatalog for SqliteCatalog {
 
     fn claim_ivf_centroids(
         &self,
-        source: &RelationReference,
+        source: &TableDefinition,
         descriptor: &IvfCentroidsDescriptor,
         owner: Uuid,
         lease_duration_ms: i64,
@@ -646,6 +648,15 @@ impl IndexCatalog for SqliteCatalog {
     }
 }
 
+fn validate_source_binding(source: &TableDefinition, metadata: &IndexMetadata) -> Result<()> {
+    if &metadata.current_snapshot()?.source_table != source {
+        return Err(Error::InvalidMetadata(
+            "catalog source does not match the current snapshot source-table".into(),
+        ));
+    }
+    Ok(())
+}
+
 impl TableCatalog for SqliteCatalog {
     fn create_table(&self, definition: &TableDefinition) -> Result<()> {
         let definition = TableDefinition::new(
@@ -653,7 +664,7 @@ impl TableCatalog for SqliteCatalog {
             definition.provider.clone(),
             definition.properties.clone(),
         )?;
-        let namespace = definition.identifier.namespace_key()?;
+        let namespace = namespace_key(definition.identifier.namespace())?;
         let properties = serde_json::to_string(&definition.properties)?;
         let result = self.connection()?.execute(
             "INSERT INTO datafusion_tables(
@@ -677,7 +688,7 @@ impl TableCatalog for SqliteCatalog {
     }
 
     fn load_table(&self, identifier: &TableIdentifier) -> Result<TableDefinition> {
-        let namespace = identifier.namespace_key()?;
+        let namespace = namespace_key(identifier.namespace())?;
         let definition = self
             .connection()?
             .query_row(
@@ -689,11 +700,11 @@ impl TableCatalog for SqliteCatalog {
             )
             .optional()?
             .ok_or_else(|| Error::TableNotFound(identifier.clone()))?;
-        TableDefinition::new(
+        Ok(TableDefinition::new(
             identifier.clone(),
             definition.0,
             serde_json::from_str(&definition.1)?,
-        )
+        )?)
     }
 
     fn list_tables(&self, catalog: &str, namespace: &[String]) -> Result<Vec<TableIdentifier>> {
@@ -715,12 +726,12 @@ impl TableCatalog for SqliteCatalog {
             .collect::<std::result::Result<Vec<_>, _>>()?;
         names
             .into_iter()
-            .map(|name| TableIdentifier::new(catalog, namespace.to_vec(), name))
+            .map(|name| TableIdentifier::new(catalog, namespace.to_vec(), name).map_err(Into::into))
             .collect()
     }
 
     fn drop_table(&self, identifier: &TableIdentifier) -> Result<()> {
-        let namespace = identifier.namespace_key()?;
+        let namespace = namespace_key(identifier.namespace())?;
         let removed = self.connection()?.execute(
             "DELETE FROM datafusion_tables
              WHERE catalog = ?1 AND namespace = ?2 AND name = ?3",

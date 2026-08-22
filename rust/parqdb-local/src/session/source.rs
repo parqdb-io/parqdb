@@ -1,6 +1,6 @@
 //! Persistent Parquet source registration and restoration.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -9,13 +9,14 @@ use arrow_ipc::convert::try_schema_from_ipc_buffer;
 use arrow_ipc::writer::{DictionaryTracker, IpcDataGenerator, IpcWriteOptions, write_message};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use datafusion::catalog::TableProvider;
-use datafusion::common::TableReference;
-use datafusion::logical_expr::SortExpr;
+use datafusion::catalog::{TableProvider, TableProviderFactory};
+use datafusion::common::{DFSchema, TableReference};
+use datafusion::logical_expr::expr::Sort;
+use datafusion::logical_expr::{CreateExternalTable, SortExpr};
 use datafusion::prelude::{ParquetReadOptions, col};
 use parqdb_catalog::Error as CatalogError;
 use parqdb_catalog::{TableDefinition, TableIdentifier};
-use parqdb_meta::{IndexSnapshot, RelationReference};
+use parqdb_meta::IndexSnapshot;
 use parqdb_storage::StorageRegistry;
 use url::Url;
 use uuid::Uuid;
@@ -57,13 +58,36 @@ impl Default for PersistentParquetOptions {
 #[derive(Clone)]
 pub(super) struct SourceBinding {
     pub(super) key: String,
-    pub(super) reference: RelationReference,
+    pub(super) reference: TableDefinition,
     pub(super) schema: SchemaRef,
     pub(super) table_name: String,
     pub(super) provider: Arc<dyn TableProvider>,
 }
 
 impl LocalSession {
+    /// Registers a `DataFusion` table-provider factory for persisted table definitions.
+    pub fn register_table_provider_factory(
+        &self,
+        name: impl Into<String>,
+        factory: Arc<dyn TableProviderFactory>,
+    ) -> Result<()> {
+        let name = name.into().trim().to_ascii_uppercase();
+        if name.is_empty() {
+            return Err(Error::InvalidArgument(
+                "table provider name must not be empty".into(),
+            ));
+        }
+        let state = self.context.state_ref();
+        let mut state = state.write();
+        if state.table_factories().contains_key(&name) {
+            return Err(Error::InvalidArgument(format!(
+                "table provider factory is already registered: {name}"
+            )));
+        }
+        state.table_factories_mut().insert(name, factory);
+        Ok(())
+    }
+
     /// Resolves one persistent source location into current execution inputs.
     pub async fn resolve_source_locations(&self, source: &str) -> Result<Vec<String>> {
         let registry = self.warehouse.registry();
@@ -117,31 +141,19 @@ impl LocalSession {
         Ok(self.table_catalog.drop_table(&identifier)?)
     }
 
-    /// Returns the resolved identifier and source URI for a registered table.
-    pub fn persistent_table(&self, table_name: &str) -> Result<Option<(TableIdentifier, String)>> {
+    /// Returns the exact definition of a registered table.
+    pub fn persistent_table_definition(&self, table_name: &str) -> Result<Option<TableDefinition>> {
         let identifier = self.resolve_table_identifier(table_name)?;
-        self.persistent_table_by_identifier(identifier)
+        self.persistent_table_definition_by_identifier(&identifier)
     }
 
-    /// Returns the source URI for an exact persistent table identifier.
-    pub fn persistent_table_source_by_identifier(
+    /// Returns the exact definition for a persistent table identifier.
+    pub fn persistent_table_definition_by_identifier(
         &self,
-        identifier: TableIdentifier,
-    ) -> Result<Option<String>> {
-        Ok(self
-            .persistent_table_by_identifier(identifier)?
-            .map(|(_, location)| location))
-    }
-
-    fn persistent_table_by_identifier(
-        &self,
-        identifier: TableIdentifier,
-    ) -> Result<Option<(TableIdentifier, String)>> {
-        match self.table_catalog.load_table(&identifier) {
-            Ok(definition) => Ok(Some((
-                identifier,
-                PersistentParquetDefinition::from_table_definition(definition)?.location,
-            ))),
+        identifier: &TableIdentifier,
+    ) -> Result<Option<TableDefinition>> {
+        match self.table_catalog.load_table(identifier) {
+            Ok(definition) => Ok(Some(definition)),
             Err(CatalogError::TableNotFound(_)) => Ok(None),
             Err(error) => Err(error.into()),
         }
@@ -155,19 +167,16 @@ impl LocalSession {
             Err(CatalogError::TableNotFound(_)) => return Ok(false),
             Err(error) => return Err(error.into()),
         };
-        let location = PersistentParquetDefinition::from_table_definition(definition)?.location;
         let mut bindings = self
             .source_bindings
             .write()
             .map_err(|_| source_binding_lock_error())?;
         self.table_catalog.drop_table(&identifier)?;
         if bindings
-            .get(&relation_key(&RelationReference::Parquet {
-                uri: location.clone(),
-            }))
+            .get(&table_key(&definition))
             .is_some_and(|binding| binding.table_name == identifier.name())
         {
-            bindings.remove(&relation_key(&RelationReference::Parquet { uri: location }));
+            bindings.remove(&table_key(&definition));
         }
         Ok(true)
     }
@@ -224,7 +233,7 @@ impl LocalSession {
             let _ = self.table_catalog.drop_table(&identifier);
             return Err(error.into());
         }
-        match self.bind_provider_source(&definition.location, provider, Some(identifier.name())) {
+        match self.bind_provider_reference(table_definition, provider, Some(identifier.name())) {
             Ok(binding) => Ok(binding.description()),
             Err(error) => {
                 let _ = self.context.deregister_table(table_reference(&identifier)?);
@@ -238,22 +247,17 @@ impl LocalSession {
     pub async fn restore_table_definitions(&self) -> Result<()> {
         for table_definition in self.list_table_definitions()? {
             let identifier = table_definition.identifier.clone();
-            let definition = PersistentParquetDefinition::from_table_definition(table_definition)?;
-            let provider = self.parquet_provider(&definition).await?;
-            if provider.schema().as_ref() != &definition.resolved_schema {
-                return Err(Error::InvalidSchema(format!(
-                    "persistent table schema changed: {}",
-                    identifier.name()
-                )));
-            }
+            let provider = self
+                .provider_from_table_definition(&table_definition)
+                .await?;
             self.context
                 .register_table(table_reference(&identifier)?, Arc::clone(&provider))?;
-            self.bind_provider_source(&definition.location, provider, Some(identifier.name()))?;
+            self.bind_provider_reference(table_definition, provider, Some(identifier.name()))?;
         }
         Ok(())
     }
 
-    fn resolve_table_identifier(&self, table_name: &str) -> Result<TableIdentifier> {
+    pub(super) fn resolve_table_identifier(&self, table_name: &str) -> Result<TableIdentifier> {
         let reference = TableReference::from(table_name);
         let options = self.context.state().config_options().catalog.clone();
         let resolved = reference.resolve(&options.default_catalog, &options.default_schema);
@@ -292,14 +296,18 @@ impl LocalSession {
     ) -> Result<SourceDescription> {
         let provider = self.context.table_provider(table_name).await?;
         let identifier = self.resolve_default_table_identifier(table_name)?;
-        let binding = self.bind_provider_source(source, provider, Some(identifier.name()))?;
+        let uri = canonical_source(&self.warehouse.registry(), source)?;
+        let definition = minimal_parquet_definition(identifier.clone(), uri)?;
+        let binding =
+            self.bind_provider_reference(definition, provider, Some(identifier.name()))?;
         Ok(binding.description())
     }
 
     pub(super) async fn bind_source(&self, source: &str) -> Result<SourceBinding> {
         let uri = canonical_source(&self.warehouse.registry(), source)?;
-        let reference = RelationReference::Parquet { uri: uri.clone() };
-        if let Some(binding) = self.source_binding(&relation_key(&reference))? {
+        let identifier = anonymous_table_identifier(&uri)?;
+        let reference = minimal_parquet_definition(identifier, uri.clone())?;
+        if let Some(binding) = self.source_binding(&table_key(&reference))? {
             return Ok(binding);
         }
 
@@ -308,28 +316,14 @@ impl LocalSession {
         self.bind_provider_reference(reference, provider, None)
     }
 
-    fn bind_provider_source(
-        &self,
-        source: &str,
-        provider: Arc<dyn TableProvider>,
-        registered_name: Option<&str>,
-    ) -> Result<SourceBinding> {
-        let uri = canonical_source(&self.warehouse.registry(), source)?;
-        self.bind_provider_reference(
-            RelationReference::Parquet { uri },
-            provider,
-            registered_name,
-        )
-    }
-
     fn bind_provider_reference(
         &self,
-        reference: RelationReference,
+        reference: TableDefinition,
         provider: Arc<dyn TableProvider>,
         registered_name: Option<&str>,
     ) -> Result<SourceBinding> {
         reference.validate()?;
-        let key = relation_key(&reference);
+        let key = table_key(&reference);
         let mut bindings = self
             .source_bindings
             .write()
@@ -337,7 +331,7 @@ impl LocalSession {
         if let Some(existing) = bindings.get(&key) {
             if existing.schema.as_ref() != provider.schema().as_ref() {
                 return Err(Error::InvalidSchema(format!(
-                    "the same relation state was registered with different schemas: {key}"
+                    "the same table state was registered with different schemas: {key}"
                 )));
             }
             return Ok(existing.clone());
@@ -360,45 +354,49 @@ impl LocalSession {
         Ok(binding)
     }
 
-    /// Registers one exact Iceberg snapshot in this session's `DataFusion` context.
-    pub async fn register_iceberg_relation(
+    /// Binds an already resolved runtime provider to its exact durable definition.
+    pub fn bind_table_provider(
         &self,
-        reference: RelationReference,
-        metadata_location: &str,
-        file_io_properties: HashMap<String, String>,
+        reference: TableDefinition,
+        provider: Arc<dyn TableProvider>,
     ) -> Result<datafusion::dataframe::DataFrame> {
-        reference.validate()?;
-        let key = relation_key(&reference);
-        if let Some(provider) = self.index_relation_providers.registered(&key)? {
-            return Ok(self.context.read_table(provider)?);
-        }
-        let provider = parqdb_iceberg::exact_snapshot_provider(
-            &reference,
-            metadata_location,
-            file_io_properties,
-        )
-        .await?;
-        let provider = self.index_relation_providers.register(key, provider)?;
-        self.bind_provider_reference(reference, Arc::clone(&provider), None)?;
-        Ok(self.context.read_table(provider)?)
+        let binding = self.bind_provider_reference(reference, provider, None)?;
+        Ok(self.context.read_table(binding.provider)?)
     }
 
-    pub(super) async fn bind_relation(
-        &self,
-        reference: &RelationReference,
-    ) -> Result<SourceBinding> {
+    pub(super) async fn bind_table(&self, reference: &TableDefinition) -> Result<SourceBinding> {
         reference.validate()?;
-        match reference {
-            RelationReference::Parquet { uri } => self.bind_source(uri).await,
-            RelationReference::Iceberg { .. } => self
-                .source_binding(&relation_key(reference))?
-                .ok_or_else(|| {
-                    Error::InvalidArgument(format!(
-                        "Iceberg relation is not registered in this session: {}",
-                        relation_key(reference)
-                    ))
-                }),
+        if let Some(binding) = self.source_binding(&table_key(reference))? {
+            return Ok(binding);
         }
+        let provider = self.provider_from_table_definition(reference).await?;
+        self.bind_provider_reference(reference.clone(), provider, None)
+    }
+
+    async fn provider_from_table_definition(
+        &self,
+        definition: &TableDefinition,
+    ) -> Result<Arc<dyn TableProvider>> {
+        if definition.provider == "parquet" {
+            return self
+                .parquet_provider(&PersistentParquetDefinition::from_table_definition(
+                    definition,
+                )?)
+                .await;
+        }
+        let state = self.context.state();
+        let factory = state
+            .table_factories()
+            .get(&definition.provider.to_ascii_uppercase())
+            .cloned()
+            .ok_or_else(|| {
+                Error::InvalidArgument(format!(
+                    "table provider factory is not registered: {}",
+                    definition.provider
+                ))
+            })?;
+        let command = external_table_command(definition)?;
+        Ok(factory.create(&state, &command).await?)
     }
 
     async fn parquet_provider(
@@ -467,21 +465,57 @@ struct PersistentParquetDefinition {
 }
 
 impl PersistentParquetDefinition {
+    fn from_table_definition(definition: &TableDefinition) -> Result<Self> {
+        let required = |name: &str| {
+            definition.properties.get(name).ok_or_else(|| {
+                invalid_table_definition(format!("missing persistent property: {name}"))
+            })
+        };
+        if required("definition-version")? != "1" {
+            return Err(invalid_table_definition(
+                "unsupported persistent Parquet definition version".into(),
+            ));
+        }
+        Ok(Self {
+            location: required("location")?.clone(),
+            partition_schema: decode_schema(required("partition-schema")?)?,
+            parquet_pruning: decode_bool(
+                required("option.format.pruning")?,
+                "option.format.pruning",
+            )?,
+            file_extension: required("file-extension")?.clone(),
+            skip_metadata: decode_bool(
+                required("option.format.skip_metadata")?,
+                "option.format.skip_metadata",
+            )?,
+            provided_schema: definition
+                .properties
+                .get("provided-schema")
+                .map(|encoded| decode_schema(encoded))
+                .transpose()?,
+            resolved_schema: decode_schema(required("resolved-schema")?)?,
+            file_sort_order: serde_json::from_str(required("file-sort-order")?).map_err(
+                |error| invalid_table_definition(format!("invalid file sort order: {error}")),
+            )?,
+        })
+    }
+
     fn to_table_definition(&self, identifier: TableIdentifier) -> Result<TableDefinition> {
         let mut properties = BTreeMap::from([
             ("definition-version".into(), "1".into()),
             ("location".into(), self.location.clone()),
+            ("table-identity".into(), self.location.clone()),
             (
                 "partition-schema".into(),
                 encode_schema(&self.partition_schema)?,
             ),
             (
-                "parquet-pruning".into(),
+                "option.format.pruning".into(),
                 encode_bool(self.parquet_pruning).into(),
             ),
             ("file-extension".into(), self.file_extension.clone()),
             (
-                "skip-metadata".into(),
+                "option.format.skip_metadata".into(),
                 encode_bool(self.skip_metadata).into(),
             ),
             (
@@ -498,57 +532,15 @@ impl PersistentParquetDefinition {
         }
         Ok(TableDefinition::new(identifier, "parquet", properties)?)
     }
-
-    fn from_table_definition(definition: TableDefinition) -> Result<Self> {
-        if definition.provider != "parquet" {
-            return Err(invalid_table_definition(format!(
-                "unsupported persistent table provider: {}",
-                definition.provider
-            )));
-        }
-        let mut properties = definition.properties;
-        let version = take_property(&mut properties, "definition-version")?;
-        if version != "1" {
-            return Err(invalid_table_definition(format!(
-                "unsupported persistent table definition version: {version}"
-            )));
-        }
-        let location = take_property(&mut properties, "location")?;
-        let partition_schema = decode_schema(&take_property(&mut properties, "partition-schema")?)?;
-        let parquet_pruning = decode_bool(&take_property(&mut properties, "parquet-pruning")?)?;
-        let file_extension = take_property(&mut properties, "file-extension")?;
-        let skip_metadata = decode_bool(&take_property(&mut properties, "skip-metadata")?)?;
-        let resolved_schema = decode_schema(&take_property(&mut properties, "resolved-schema")?)?;
-        let file_sort_order =
-            serde_json::from_str(&take_property(&mut properties, "file-sort-order")?)?;
-        let provided_schema = properties
-            .remove("provided-schema")
-            .map(|encoded| decode_schema(&encoded))
-            .transpose()?;
-        if !properties.is_empty() {
-            return Err(invalid_table_definition(format!(
-                "unknown persistent Parquet properties: {}",
-                properties.keys().cloned().collect::<Vec<_>>().join(", ")
-            )));
-        }
-        Ok(Self {
-            location,
-            partition_schema,
-            parquet_pruning,
-            file_extension,
-            skip_metadata,
-            provided_schema,
-            resolved_schema,
-            file_sort_order,
-        })
-    }
 }
 
 impl SourceBinding {
     fn description(&self) -> SourceDescription {
-        let RelationReference::Parquet { uri } = &self.reference else {
-            unreachable!("source descriptions are exposed only for Parquet tables")
-        };
+        let uri = self
+            .reference
+            .properties
+            .get("location")
+            .expect("Parquet source definitions contain a location");
         SourceDescription {
             uri: uri.clone(),
             fields: self
@@ -565,11 +557,41 @@ impl SourceBinding {
     }
 }
 
-pub(super) fn relation_key(reference: &RelationReference) -> String {
-    match reference {
-        RelationReference::Parquet { uri } => uri.clone(),
-        RelationReference::Iceberg { .. } => reference.exact_state_key(),
-    }
+pub(super) fn table_key(reference: &TableDefinition) -> String {
+    reference.exact_state_key()
+}
+
+fn anonymous_table_identifier(location: &str) -> Result<TableIdentifier> {
+    let name = format!(
+        "__parqdb_{}",
+        Uuid::new_v5(&Uuid::NAMESPACE_URL, location.as_bytes()).simple()
+    );
+    Ok(TableIdentifier::new(
+        "datafusion",
+        vec!["public".into()],
+        name,
+    )?)
+}
+
+fn minimal_parquet_definition(
+    identifier: TableIdentifier,
+    location: String,
+) -> Result<TableDefinition> {
+    let definition = PersistentParquetDefinition {
+        location,
+        partition_schema: Schema::empty(),
+        parquet_pruning: true,
+        file_extension: ".parquet".into(),
+        skip_metadata: true,
+        provided_schema: None,
+        resolved_schema: Schema::empty(),
+        file_sort_order: Vec::new(),
+    };
+    definition.to_table_definition(identifier)
+}
+
+pub(super) fn parquet_table_definition(location: String) -> Result<TableDefinition> {
+    minimal_parquet_definition(anonymous_table_identifier(&location)?, location)
 }
 
 fn table_reference(identifier: &TableIdentifier) -> Result<TableReference> {
@@ -583,6 +605,73 @@ fn table_reference(identifier: &TableIdentifier) -> Result<TableReference> {
         schema.clone(),
         identifier.name().to_owned(),
     ))
+}
+
+fn external_table_command(definition: &TableDefinition) -> Result<CreateExternalTable> {
+    let version = definition
+        .properties
+        .get("definition-version")
+        .ok_or_else(|| {
+            invalid_table_definition("missing persistent property: definition-version".into())
+        })?;
+    if version != "1" {
+        return Err(invalid_table_definition(format!(
+            "unsupported persistent table definition version: {version}"
+        )));
+    }
+    let location = definition
+        .properties
+        .get("location")
+        .ok_or_else(|| invalid_table_definition("missing persistent property: location".into()))?;
+    let schema = definition
+        .properties
+        .get("resolved-schema")
+        .map(|encoded| decode_schema(encoded))
+        .transpose()?
+        .unwrap_or_else(Schema::empty);
+    let partition_columns = definition
+        .properties
+        .get("partition-schema")
+        .map(|encoded| decode_schema(encoded))
+        .transpose()?
+        .unwrap_or_else(Schema::empty)
+        .fields()
+        .iter()
+        .map(|field| field.name().clone())
+        .collect();
+    let order_exprs = definition
+        .properties
+        .get("file-sort-order")
+        .map(|encoded| serde_json::from_str::<Vec<Vec<String>>>(encoded))
+        .transpose()?
+        .unwrap_or_default()
+        .into_iter()
+        .map(|order| {
+            order
+                .into_iter()
+                .map(|name| Sort::new(col(name), true, true))
+                .collect()
+        })
+        .collect();
+    let options = definition
+        .properties
+        .iter()
+        .filter_map(|(name, value)| {
+            name.strip_prefix("option.")
+                .map(|name| (name.to_owned(), value.clone()))
+        })
+        .collect();
+    let schema = Arc::new(DFSchema::try_from(schema)?);
+    Ok(CreateExternalTable::builder(
+        table_reference(&definition.identifier)?,
+        location,
+        definition.provider.clone(),
+        schema,
+    )
+    .with_partition_cols(partition_columns)
+    .with_order_exprs(order_exprs)
+    .with_options(options)
+    .build())
 }
 
 fn encode_schema(schema: &Schema) -> Result<String> {
@@ -609,20 +698,10 @@ fn encode_bool(value: bool) -> &'static str {
     if value { "true" } else { "false" }
 }
 
-fn decode_bool(value: &str) -> Result<bool> {
-    match value {
-        "true" => Ok(true),
-        "false" => Ok(false),
-        _ => Err(invalid_table_definition(format!(
-            "invalid persistent boolean: {value}"
-        ))),
-    }
-}
-
-fn take_property(properties: &mut BTreeMap<String, String>, name: &str) -> Result<String> {
-    properties
-        .remove(name)
-        .ok_or_else(|| invalid_table_definition(format!("missing persistent property: {name}")))
+fn decode_bool(value: &str, name: &str) -> Result<bool> {
+    value.parse().map_err(|_| {
+        invalid_table_definition(format!("persistent property {name} must be true or false"))
+    })
 }
 
 fn invalid_table_definition(message: String) -> Error {
@@ -644,7 +723,7 @@ pub(super) fn canonical_source(registry: &StorageRegistry, source: &str) -> Resu
     let path = PathBuf::from(source);
     if !path.is_absolute() {
         return Err(Error::InvalidArgument(
-            "Parquet source must be an absolute path or URI".into(),
+            "table location must be an absolute path or URI".into(),
         ));
     }
     canonical_file_location(&path)

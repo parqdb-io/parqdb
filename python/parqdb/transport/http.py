@@ -400,6 +400,13 @@ class HttpTransport:
             )
         if not identifier:
             raise ValueError("table identifier must not be empty")
+        qualified = identifier.split(".")
+        if len(qualified) >= 3 and all(qualified):
+            return TableIdentifier(
+                qualified[0],
+                tuple(qualified[1:-1]),
+                qualified[-1],
+            )
         candidates = [
             item
             for item in await self.list_tables()
