@@ -45,7 +45,7 @@ jobs:
           browser_changed=false
           while IFS= read -r -d '' path; do
             case "$path" in
-              *.md|assets/*|.github/workflows/ci.yml) ;;
+              *.md|assets/*|.github/workflows/star-history.yml) ;;
               browser/*|rust/parqdb-browser-kernels/*|rust/parqdb-kernels/*)
                 docs_only=false
                 browser_changed=true
