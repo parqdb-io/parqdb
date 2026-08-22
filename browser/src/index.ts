@@ -7,7 +7,7 @@ import type { HttpOptions } from './http.js'
 import { WasmKernel } from './kernel.js'
 import type { WasmSource } from './kernel.js'
 import { parseManifest } from './manifest.js'
-import type { PackageManifest, PostingsFile, SourceKeyField } from './manifest.js'
+import type { IndexArtifactManifest, PostingsFile, SourceKeyField } from './manifest.js'
 
 export type SourceKeyValue = boolean | number | bigint | string | Date | Uint8Array
 export type SearchHit = Record<string, SourceKeyValue | number> & { _distance: number }
@@ -52,7 +52,7 @@ interface RowSpan {
 const POSTINGS_METADATA_PREFETCH_BYTES = 128 * 1024
 
 export class ParqDB {
-  readonly manifest: PackageManifest
+  readonly manifest: IndexArtifactManifest
   private centroidData: Promise<{
     codes: Uint8Array
     offsets: Float32Array
@@ -62,7 +62,7 @@ export class ParqDB {
   private readonly postingsMetadata = new Map<string, Promise<FileMetaData>>()
 
   private constructor(
-    manifest: PackageManifest,
+    manifest: IndexArtifactManifest,
     private readonly manifestUrl: URL,
     private readonly kernel: WasmKernel,
     private readonly httpOptions: HttpOptions,
@@ -77,14 +77,18 @@ export class ParqDB {
     }
     const rangeCache = options.rangeCache ?? new HttpRangeCache(options.rangeCacheBytes)
     const manifest = parseManifest(await fetchManifest(url, options))
-    if (manifest.postings.files.length + 2 > (options.maxObjects ?? 1_000_000)) {
-      throw new Error('package object count exceeds client limit')
+    const objectCount = manifest.postings.files.length
+      + 1
+      + (manifest.source?.files.length ?? 0)
+      + (manifest.embedding?.assets.length ?? 0)
+    if (objectCount > (options.maxObjects ?? 1_000_000)) {
+      throw new Error('artifact object count exceeds client limit')
     }
     if (manifest.index.dimension > (options.maxDimension ?? 65_536)) {
-      throw new Error('package vector dimension exceeds client limit')
+      throw new Error('artifact vector dimension exceeds client limit')
     }
     if (manifest.index.nlist > (options.maxNlist ?? 1_000_000)) {
-      throw new Error('package nlist exceeds client limit')
+      throw new Error('artifact nlist exceeds client limit')
     }
     const kernel = await WasmKernel.load(options.wasm)
     const httpOptions: HttpOptions = {
@@ -232,7 +236,7 @@ export class ParqDB {
       throw new Error('leaf centroid count does not match manifest nlist')
     }
     if (metadata.row_groups.length !== this.manifest.hierarchy.rootCount) {
-      throw new Error('leaf centroid row groups do not match root-count')
+      throw new Error('leaf centroid row groups do not match cid-offsets')
     }
     const rows = await parquetReadObjects({
       file: centroidFile,
@@ -425,4 +429,4 @@ function normalize(query: Float32Array): Float32Array {
   return Float32Array.from(query, value => value * inverseNorm)
 }
 
-export type { PackageManifest, SourceKeyField, WasmSource }
+export type { IndexArtifactManifest, SourceKeyField, WasmSource }

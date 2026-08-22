@@ -11,6 +11,7 @@ import parqdb
 import pytest
 from _support import (
     WAIT,
+    artifact_manifest_location,
     build_index,
     drop_table_index_entry,
     load_table_index,
@@ -130,8 +131,9 @@ def test_removed_metadata_cannot_be_registered_from_session_cache(
     write_vectors(source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
     session = parqdb.connect(tmp_path / "parqdb-data")
     vectors = register_source(session, source)
-    build_index(vectors, nlist=1)
+    build_index(vectors, nlist=1, encoding="lvq8")
     entry = load_table_index(session, vectors, "vectors_embedding")
+    manifest_location = artifact_manifest_location(entry, session.warehouse)
     drop_table_index_entry(session, vectors, "vectors_embedding")
     _set_tombstone_time(session, datetime.now(UTC) - timedelta(days=30))
 
@@ -146,7 +148,7 @@ def test_removed_metadata_cannot_be_registered_from_session_cache(
         register_table_index(
             vectors,
             "resurrected",
-            entry.metadata_location,
+            manifest_location,
         )
     assert vectors.list_indexes() == []
 

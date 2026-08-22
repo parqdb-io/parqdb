@@ -125,7 +125,7 @@ print(summary.to_pydict())
 
 一条命令即可发布源表和不可变浏览器索引。对于原始文本，ParqDB 使用固定
 revision 的 MiniLM ONNX 模型生成离线 embedding 和浏览器一致性元数据，随后
-构建分层 IVF-LVQ8，并在公开 `index/manifest.json` 前上传全部对象：
+构建分层 IVF-LVQ8，并在公开唯一的顶层 `manifest.json` 前上传全部对象：
 
 ```bash
 python -m pip install "parqdb[publish]"

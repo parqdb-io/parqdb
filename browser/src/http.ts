@@ -309,22 +309,22 @@ function validateContentRange(header: string | null, start: number, end: number,
 export function objectUrl(manifestUrl: URL, path: string): URL {
   const base = new URL('.', manifestUrl)
   const resolved = new URL(path, base)
-  if (!resolved.href.startsWith(base.href)) throw new Error('package object URL escapes package root')
+  if (!resolved.href.startsWith(base.href)) throw new Error('artifact object URL escapes publication root')
   return resolved
 }
 
 function validateUrl(url: URL, allowHttp: boolean): void {
   if (url.username !== '' || url.password !== '' || url.search !== '' || url.hash !== '') {
-    throw new Error('package URLs cannot contain credentials, query, or fragment')
+    throw new Error('artifact URLs cannot contain credentials, query, or fragment')
   }
   if (url.protocol === 'https:') return
   if (allowHttp && url.protocol === 'http:') return
-  throw new Error('package URLs must use HTTPS')
+  throw new Error('artifact URLs must use HTTPS')
 }
 
 function validateResponseUrl(response: Response, allowHttp: boolean): void {
   if (response.url === '') return
   const url = new URL(response.url)
   if (url.protocol === 'https:' || (allowHttp && url.protocol === 'http:')) return
-  throw new Error('final package response URL must use HTTPS')
+  throw new Error('final artifact response URL must use HTTPS')
 }

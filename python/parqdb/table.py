@@ -45,7 +45,7 @@ class Table(Protocol):
         self,
         index: str,
         *,
-        metadata_location: str,
+        manifest_location: str,
     ) -> None: ...
 
     def refresh_index(

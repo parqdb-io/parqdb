@@ -383,7 +383,7 @@ impl LocalSession {
         let build = build_ivf_postings(
             prepared,
             IvfPostingsSpec {
-                package_uuid: Uuid::new_v5(&index_uuid, &snapshot_id.to_be_bytes()),
+                artifact_uuid: Uuid::new_v5(&index_uuid, &snapshot_id.to_be_bytes()),
                 vector_field,
                 source_key_fields,
                 config,
@@ -495,7 +495,10 @@ impl LocalSession {
         let build = build_ivf_postings(
             prepared,
             IvfPostingsSpec {
-                package_uuid: Uuid::new_v5(&loaded.metadata.index_uuid, &snapshot_id.to_be_bytes()),
+                artifact_uuid: Uuid::new_v5(
+                    &loaded.metadata.index_uuid,
+                    &snapshot_id.to_be_bytes(),
+                ),
                 vector_field: &current.vector_field,
                 source_key_fields: &current.source_key_fields,
                 config,

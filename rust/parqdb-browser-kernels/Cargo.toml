@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "WebAssembly distance and bounded top-k kernels for ParqDB static packages"
+description = "WebAssembly distance and bounded top-k kernels for ParqDB index artifacts"
 repository.workspace = true
 publish = false
 

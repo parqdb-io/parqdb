@@ -16,11 +16,12 @@ use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::ParquetReadOptions;
 use futures::StreamExt;
 use parqdb_catalog::{IvfCentroidsCatalogEntry, IvfCentroidsClaim, IvfCentroidsClaimResult};
+use parqdb_index::resolve_artifact_object;
 use parqdb_kernels::{LvqBits, encode_lvq_rows};
 use parqdb_meta::{
-    DistanceMetric, IVF_CLUSTERING_PROFILE_VERSION, IndexMetadata, IvfCentroidsDescriptor,
-    IvfCentroidsMetadata, IvfCentroidsReference, PostingEncoding, SnapshotLogEntry,
-    StaticIndexPackageManifest, ivf_centroids_reference,
+    DistanceMetric, IVF_CLUSTERING_PROFILE_VERSION, IndexArtifactManifest, IndexMetadata,
+    IvfCentroidsDescriptor, IvfCentroidsMetadata, IvfCentroidsReference, PostingEncoding,
+    SnapshotLogEntry,
 };
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
@@ -939,16 +940,19 @@ async fn manages_published_indexes_through_catalog_and_source_scoped_operations(
         .unwrap();
     assert_eq!(session.list_indexes().unwrap(), Vec::<String>::new());
 
-    session
+    let error = session
         .register_source_index(
             source_path.to_str().unwrap(),
             "direct_index",
             &metadata_location,
         )
         .await
-        .unwrap();
-    assert_eq!(session.list_indexes().unwrap(), ["direct_index"]);
-    session.drop_index("direct_index").unwrap();
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        Error::InvalidMetadata(message)
+            if message.contains("expected one of `format-version`, `artifact-uuid`")
+    ));
     assert_eq!(session.list_indexes().unwrap(), Vec::<String>::new());
 }
 
@@ -1110,75 +1114,54 @@ async fn lvq_indexes_build_and_query_through_parquet() {
 
     let lvq4 = published[0].metadata.current_snapshot().unwrap();
     let lvq8 = published[1].metadata.current_snapshot().unwrap();
-    assert_eq!(
-        ivf_centroids_reference(lvq4).unwrap(),
-        ivf_centroids_reference(lvq8).unwrap()
+    assert_ne!(
+        lvq4.index_relations["artifact_manifest"],
+        lvq8.index_relations["artifact_manifest"]
     );
     assert_ne!(
-        lvq4.index_relations["ivf_postings"],
-        lvq8.index_relations["ivf_postings"]
+        lvq4.parameters["artifact_uuid"],
+        lvq8.parameters["artifact_uuid"]
     );
 
-    let centroid_reference = ivf_centroids_reference(lvq4).unwrap();
-    let centroid_metadata_location = session
+    let lvq4_manifest_location = session
         .indexes
         .metadata_store()
-        .resolve_location(&centroid_reference.metadata_location, false)
+        .resolve_location(&lvq4.index_relations["artifact_manifest"], false)
         .unwrap();
-    let centroid_metadata = session
-        .indexes
-        .metadata_store()
-        .load_ivf_centroids(&centroid_metadata_location)
+    session
+        .drop_source_index(source_path.to_str().unwrap(), "lvq4_index")
         .await
         .unwrap();
-    let centroids = session
-        .indexes
-        .metadata_store()
-        .resolve_location(&centroid_metadata.centroids, true)
+    session
+        .register_source_index(
+            source_path.to_str().unwrap(),
+            "lvq4_registered",
+            &lvq4_manifest_location,
+        )
+        .await
         .unwrap();
-    let ivf_roots = session
-        .indexes
-        .metadata_store()
-        .resolve_location(&centroid_metadata.roots, true)
+    assert_eq!(
+        session.list_indexes().unwrap(),
+        ["lvq4_registered", "lvq8_index"]
+    );
+    let (registered_result, _) = session
+        .search(&SearchRequest {
+            index_namespace: vec![],
+            source: RelationReference::Parquet {
+                uri: directory_to_file_uri(&source_path).unwrap(),
+            },
+            index: Some("lvq4_registered".into()),
+            column: None,
+            query: vec![10.0, 0.0],
+            nprobe: Some(2),
+            limit: 1,
+            projection: Some(vec!["source_pid".into()]),
+            filter: None,
+            bypass_index: false,
+        })
+        .await
         .unwrap();
-    let lvq4_postings = session
-        .indexes
-        .metadata_store()
-        .resolve_location(&lvq4.index_relations["ivf_postings"], true)
-        .unwrap();
-    let lvq8_postings = session
-        .indexes
-        .metadata_store()
-        .resolve_location(&lvq8.index_relations["ivf_postings"], true)
-        .unwrap();
-    let lvq4_package = lvq4_postings
-        .strip_suffix("ivf_postings/")
-        .unwrap()
-        .to_owned();
-    let lvq8_package = lvq8_postings
-        .strip_suffix("ivf_postings/")
-        .unwrap()
-        .to_owned();
-    let roots = [centroids, ivf_roots, lvq4_package, lvq8_package];
-    let objects = session.warehouse.list("indexes").await.unwrap();
-    assert!(!objects.is_empty());
-    let mut observed_roots = [false; 4];
-    for object in objects {
-        let location = session
-            .warehouse
-            .object_location(&object.location, false)
-            .unwrap();
-        let root = roots
-            .iter()
-            .position(|root| location.starts_with(root.as_str()))
-            .unwrap_or_else(|| {
-                panic!(
-                    "unexpected index object outside centroid, root, and encoded-postings roots: {location}"
-                )
-            });
-        observed_roots[root] = true;
-    }
-    assert_eq!(observed_roots, [true, true, true, true]);
+    assert_nearest_pid(&registered_result);
 }
 
 async fn assert_lvq_index(
@@ -1191,15 +1174,15 @@ async fn assert_lvq_index(
     let snapshot = published.metadata.current_snapshot().unwrap();
     assert_eq!(snapshot.index_schema_version, 1);
     assert_eq!(PostingEncoding::from_snapshot(snapshot).unwrap(), encoding);
-    let uri = session
+    let manifest_location = session
         .indexes
         .metadata_store()
-        .resolve_location(&snapshot.index_relations["ivf_postings"], true)
+        .resolve_location(&snapshot.index_relations["artifact_manifest"], false)
         .unwrap();
-    let package_root = uri.strip_suffix("ivf_postings/").unwrap();
-    let package_path = file_uri_to_path(package_root).unwrap();
-    let manifest = StaticIndexPackageManifest::from_json_slice(
-        &std::fs::read(package_path.join("manifest.json")).unwrap(),
+    let artifact_root = manifest_location.strip_suffix("manifest.json").unwrap();
+    let artifact_path = file_uri_to_path(artifact_root).unwrap();
+    let manifest = IndexArtifactManifest::from_json_slice(
+        &std::fs::read(artifact_path.join("manifest.json")).unwrap(),
     )
     .unwrap();
     assert_eq!(manifest.index.posting_encoding, encoding);
@@ -1207,9 +1190,8 @@ async fn assert_lvq_index(
     assert_eq!(manifest.index.source_key_fields[0].name, "source_pid");
     assert_eq!(manifest.index.source_key_fields[0].data_type, "long");
     assert_eq!(manifest.index.ntotal, 3);
-    assert!(package_path.join(&manifest.hierarchy.roots.path).is_file());
     assert!(
-        package_path
+        artifact_path
             .join(&manifest.hierarchy.centroids.path)
             .is_file()
     );
@@ -1218,17 +1200,22 @@ async fn assert_lvq_index(
             .postings
             .files
             .iter()
-            .all(|file| package_path.join(&file.path).is_file())
+            .all(|file| artifact_path.join(&file.path).is_file())
     );
     let centroid_file = parquet::file::reader::SerializedFileReader::new(
-        std::fs::File::open(package_path.join(&manifest.hierarchy.centroids.path)).unwrap(),
+        std::fs::File::open(artifact_path.join(&manifest.hierarchy.centroids.path)).unwrap(),
     )
     .unwrap();
     assert_eq!(
         centroid_file.metadata().num_row_groups(),
-        usize::try_from(manifest.hierarchy.root_count).unwrap()
+        manifest.hierarchy.cid_offsets.len() - 1
     );
-    let postings = session.parquet.dataframe(&uri).await.unwrap();
+    let postings_location = resolve_artifact_object(
+        &manifest_location,
+        &manifest.postings.files.first().unwrap().path,
+    )
+    .unwrap();
+    let postings = session.parquet.dataframe(&postings_location).await.unwrap();
     assert_lvq_postings_schema(postings.schema().inner());
 
     let request = SearchRequest {

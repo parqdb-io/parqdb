@@ -95,9 +95,28 @@ fn accepts_valid_metadata_round_trip() {
 fn accepts_all_posting_encodings() {
     for encoding in ["source", "lvq4", "lvq8"] {
         let mut metadata = valid_metadata();
-        metadata.snapshots[0]
+        let snapshot = &mut metadata.snapshots[0];
+        snapshot
             .parameters
             .insert("posting_encoding".into(), encoding.into());
+        if encoding != "source" {
+            snapshot.parameters.retain(|key, _| {
+                !matches!(
+                    key.as_str(),
+                    "ivf_centroids_fingerprint"
+                        | "ivf_centroids_uuid"
+                        | "ivf_centroids_metadata_location"
+                )
+            });
+            snapshot.parameters.insert(
+                "artifact_uuid".into(),
+                "64502d1f-d5bd-4e2e-910e-c1f62171a76a".into(),
+            );
+            snapshot.index_relations = BTreeMap::from([(
+                "artifact_manifest".into(),
+                "artifacts/64502d1fd5bd4e2e910ec1f62171a76a/manifest.json".into(),
+            )]);
+        }
 
         metadata.validate().unwrap();
         assert_eq!(

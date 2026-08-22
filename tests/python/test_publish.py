@@ -14,9 +14,9 @@ FIXTURE = Path(__file__).parents[2] / "spec" / "fixtures" / "v1" / "valid" / "lv
 
 
 def _inputs(tmp_path: Path, keys: list[int] | None = None) -> tuple[Path, Path]:
-    package = tmp_path / "package"
-    shutil.copytree(FIXTURE, package)
-    manifest_path = package / "manifest.json"
+    artifact = tmp_path / "artifact"
+    shutil.copytree(FIXTURE, artifact)
+    manifest_path = artifact / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["index"]["source-key-fields"] = [{"name": "chunk_id", "type": "long"}]
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
@@ -50,17 +50,15 @@ def test_publish_local_source_and_index(tmp_path: Path) -> None:
 
     assert result.destination == str(destination)
     assert result.manifest_url is None
-    assert (
-        destination / "index" / "manifest.json"
-    ).read_bytes() == manifest.read_bytes()
-    source_manifest = json.loads(
-        (destination / "source-manifest.json").read_text(encoding="utf-8")
+    publication = json.loads(
+        (destination / "manifest.json").read_text(encoding="utf-8")
     )
-    assert source_manifest["key"] == {"name": "chunk_id", "type": "long"}
-    assert source_manifest["rows"] == 3
-    assert source_manifest["row-group-rows"] == 2
-    assert source_manifest["object"]["path"] == "documents.parquet"
-    assert (destination / "index" / "ivf_postings" / "manifest.json").is_file()
+    assert publication["source"]["key"] == {"name": "chunk_id", "type": "long"}
+    assert publication["source"]["rows"] == 3
+    assert publication["source"]["row-group-rows"] == 2
+    assert publication["source"]["files"][0]["path"] == "documents.parquet"
+    assert not (destination / "source-manifest.json").exists()
+    assert not (destination / "ivf_postings" / "manifest.json").exists()
 
     with pytest.raises(FileExistsError, match="destination already exists"):
         publish(
@@ -117,10 +115,10 @@ def test_build_work_cannot_silently_reuse_a_different_source(
             source,
         )
 
-    package = tmp_path / "package"
-    shutil.copytree(FIXTURE, package)
+    artifact = tmp_path / "artifact"
+    shutil.copytree(FIXTURE, artifact)
     monkeypatch.setattr(
-        "parqdb.publish._build_parqdb_index", lambda *args, **kwargs: package
+        "parqdb.publish._build_parqdb_index", lambda *args, **kwargs: artifact
     )
     work = tmp_path / "work"
     write([[1.0, 0.0], [0.0, 1.0]])
@@ -174,4 +172,6 @@ def test_publish_cli_accepts_an_existing_static_index(
     output = json.loads(capsys.readouterr().out)
     assert output["destination"] == str(destination)
     assert output["manifest_url"] is None
-    assert output["files"] >= 6
+    assert output["files"] == 3
+    published = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
+    assert "source" not in published

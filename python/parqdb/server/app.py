@@ -281,17 +281,17 @@ async def _register_index(request: Request) -> Response:
         body = await _json_body(request)
         _only_fields(
             body,
-            {"source", "index", "metadata_location"},
+            {"source", "index", "manifest_location"},
         )
         identifier = _scoped_identifier(request, body)
         index = _scoped_index(request, body)
-        metadata_location = _required_string(
-            body.get("metadata_location"), "metadata_location"
+        manifest_location = _required_string(
+            body.get("manifest_location"), "manifest_location"
         )
         await _service(request).register_index(
             identifier,
             index,
-            metadata_location=metadata_location,
+            manifest_location=manifest_location,
         )
         return _json_response(request, {"registered": True})
 

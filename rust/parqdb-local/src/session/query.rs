@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, Int32Array};
+use arrow::array::{
+    Array, ArrayRef, BinaryArray, BinaryViewArray, Float32Array, Int32Array, LargeBinaryArray,
+};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -11,8 +13,8 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::execution::context::SQLOptions;
 use datafusion::logical_expr::Expr;
 use datafusion::prelude::{SessionContext, col, lit};
-use parqdb_index::LoadedIndex;
-use parqdb_meta::{DistanceMetric, PostingEncoding, RelationReference};
+use parqdb_index::{LoadedIndex, resolve_artifact_object};
+use parqdb_meta::{DistanceMetric, IndexArtifactManifest, PostingEncoding, RelationReference};
 use uuid::Uuid;
 
 use super::LocalSession;
@@ -204,16 +206,41 @@ impl LocalSession {
             Error::InvalidMetadata(format!("unsupported IVF metric: {}", snapshot.metric))
         })?;
         let query = crate::vector::transform_query(&request.query, metric)?;
-        let centroid_artifact = self.indexes.load_snapshot_ivf_centroids(&loaded).await?;
-        let postings_relation = index_relation(&self.warehouse, &loaded, "ivf_postings")?;
-        let postings_relation_key = relation_key(&postings_relation);
-        let centroid_cache_key = format!(
-            "{}\0ivf_centroids",
-            centroid_artifact.entry.metadata_location
-        );
-        let (cluster_selection, nlist) = self
-            .resolve_cluster_selection(&loaded, &centroid_cache_key, &query, request.nprobe)
-            .await?;
+        let posting_encoding = PostingEncoding::from_snapshot(snapshot)?;
+        let (postings_relation_key, cluster_selection, nlist) = if matches!(
+            posting_encoding,
+            PostingEncoding::Lvq4 | PostingEncoding::Lvq8
+        ) {
+            let manifest_location = artifact_manifest_location(&self.warehouse, &loaded)?;
+            let manifest = self
+                .indexes
+                .metadata_store()
+                .load_artifact_manifest(&manifest_location)
+                .await?;
+            validate_artifact_snapshot(snapshot, &manifest)?;
+            let (selection, nlist) = self
+                .resolve_artifact_cluster_selection(
+                    snapshot,
+                    &manifest_location,
+                    &manifest,
+                    &query,
+                    request.nprobe,
+                )
+                .await?;
+            (manifest_location, selection, nlist)
+        } else {
+            let centroid_artifact = self.indexes.load_snapshot_ivf_centroids(&loaded).await?;
+            let postings_relation = index_relation(&self.warehouse, &loaded, "ivf_postings")?;
+            let postings_relation_key = relation_key(&postings_relation);
+            let centroid_cache_key = format!(
+                "{}\0ivf_centroids",
+                centroid_artifact.entry.metadata_location
+            );
+            let (selection, nlist) = self
+                .resolve_cluster_selection(&loaded, &centroid_cache_key, &query, request.nprobe)
+                .await?;
+            (postings_relation_key, selection, nlist)
+        };
         Ok(ResolvedSearch {
             source_relation_key: source.key.clone(),
             query,
@@ -225,7 +252,7 @@ impl LocalSession {
             )?,
             source_key_fields: snapshot.source_key_fields.clone(),
             postings_relation_key: Some(postings_relation_key),
-            posting_encoding: PostingEncoding::from_snapshot(snapshot)?,
+            posting_encoding,
             cluster_selection: Some(cluster_selection),
             nlist: Some(nlist),
             ntotal: Some(snapshot.parameter_usize("ntotal")?),
@@ -541,6 +568,48 @@ impl LocalSession {
         Ok((selection, nlist))
     }
 
+    async fn resolve_artifact_cluster_selection(
+        &self,
+        snapshot: &parqdb_meta::IndexSnapshot,
+        manifest_location: &str,
+        manifest: &IndexArtifactManifest,
+        query: &[f32],
+        requested_nprobe: Option<usize>,
+    ) -> Result<(ClusterSelection, usize)> {
+        let (dimension, nlist, nprobe) =
+            validated_cluster_search(snapshot, query, requested_nprobe)?;
+        if nprobe == nlist {
+            return Ok((ClusterSelection::All, nlist));
+        }
+        let cache_key = format!("{manifest_location}\0centroids");
+        let centroid_location =
+            resolve_artifact_object(manifest_location, &manifest.hierarchy.centroids.path)?;
+        let centroids = self
+            .index_relation_providers
+            .get_or_load_centroids(&cache_key, || async {
+                let batch = self
+                    .parquet
+                    .read(
+                        &centroid_location,
+                        Some(&["cid", "offset", "scale", "code"]),
+                    )
+                    .await?;
+                let values = decode_lvq8_centroids(&batch, nlist, dimension)?;
+                super::index_relation::CentroidNavigator::new(nlist, dimension, &values)
+            })
+            .await?;
+        let selected = centroids
+            .route(query, nprobe)?
+            .into_iter()
+            .map(|cid| {
+                i32::try_from(cid).map_err(|_| {
+                    Error::InvalidSchema("centroid cid exceeds the INT32 index domain".into())
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok((ClusterSelection::Native(selected), nlist))
+    }
+
     pub(super) async fn route_centroids_with_datafusion(
         &self,
         relation_key: &str,
@@ -712,8 +781,135 @@ fn index_relation(
         .get(role)
         .ok_or_else(|| Error::InvalidMetadata(format!("missing relation role: {role}")))?;
     Ok(RelationReference::Parquet {
-        uri: warehouse.location(relative, relative.ends_with('/'))?,
+        uri: resolve_snapshot_location(warehouse, relative, relative.ends_with('/'))?,
     })
+}
+
+fn artifact_manifest_location(
+    warehouse: &parqdb_storage::Warehouse,
+    loaded: &LoadedIndex,
+) -> Result<String> {
+    let location = loaded
+        .metadata
+        .current_snapshot()?
+        .index_relations
+        .get("artifact_manifest")
+        .ok_or_else(|| Error::InvalidMetadata("missing relation role: artifact_manifest".into()))?;
+    resolve_snapshot_location(warehouse, location, false)
+}
+
+fn resolve_snapshot_location(
+    warehouse: &parqdb_storage::Warehouse,
+    location: &str,
+    directory: bool,
+) -> Result<String> {
+    if url::Url::parse(location).is_ok() {
+        parqdb_meta::validate_absolute_location(location)?;
+        Ok(location.to_owned())
+    } else {
+        Ok(warehouse.location(location, directory)?)
+    }
+}
+
+fn validate_artifact_snapshot(
+    snapshot: &parqdb_meta::IndexSnapshot,
+    manifest: &IndexArtifactManifest,
+) -> Result<()> {
+    let artifact_uuid = snapshot
+        .parameters
+        .get("artifact_uuid")
+        .and_then(|value| Uuid::parse_str(value).ok());
+    let source_keys = manifest
+        .index
+        .source_key_fields
+        .iter()
+        .map(|field| field.name.as_str())
+        .collect::<Vec<_>>();
+    if artifact_uuid != Some(manifest.artifact_uuid)
+        || snapshot.vector_field != manifest.index.vector_field
+        || snapshot
+            .source_key_fields
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            != source_keys
+        || snapshot.metric != manifest.index.metric.as_str()
+        || PostingEncoding::from_snapshot(snapshot)? != manifest.index.posting_encoding
+        || snapshot.parameter_usize("dimension")?
+            != usize::try_from(manifest.index.dimension).unwrap_or_default()
+        || snapshot.parameter_usize("nlist")?
+            != usize::try_from(manifest.index.nlist).unwrap_or_default()
+        || snapshot.parameter_usize("ntotal")?
+            != usize::try_from(manifest.index.ntotal).unwrap_or_default()
+    {
+        return Err(Error::InvalidMetadata(
+            "catalog snapshot does not match its artifact manifest".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn decode_lvq8_centroids(batch: &RecordBatch, nlist: usize, dimension: usize) -> Result<Vec<f32>> {
+    if batch.num_rows() != nlist || batch.num_columns() != 4 {
+        return Err(Error::InvalidSchema(
+            "artifact centroid table has the wrong shape".into(),
+        ));
+    }
+    let cids = batch
+        .column_by_name("cid")
+        .and_then(|array| array.as_any().downcast_ref::<Int32Array>())
+        .ok_or_else(|| Error::InvalidSchema("artifact centroid cid must be int32".into()))?;
+    let offsets = batch
+        .column_by_name("offset")
+        .and_then(|array| array.as_any().downcast_ref::<Float32Array>())
+        .ok_or_else(|| Error::InvalidSchema("artifact centroid offset must be float32".into()))?;
+    let scales = batch
+        .column_by_name("scale")
+        .and_then(|array| array.as_any().downcast_ref::<Float32Array>())
+        .ok_or_else(|| Error::InvalidSchema("artifact centroid scale must be float32".into()))?;
+    let codes = batch
+        .column_by_name("code")
+        .ok_or_else(|| Error::InvalidSchema("artifact centroid code is missing".into()))?;
+    if cids.null_count() != 0
+        || offsets.null_count() != 0
+        || scales.null_count() != 0
+        || codes.null_count() != 0
+    {
+        return Err(Error::InvalidSchema(
+            "artifact centroid columns must be non-null".into(),
+        ));
+    }
+    let code_at = |row: usize| -> Result<&[u8]> {
+        if let Some(values) = codes.as_any().downcast_ref::<BinaryViewArray>() {
+            Ok(values.value(row))
+        } else if let Some(values) = codes.as_any().downcast_ref::<BinaryArray>() {
+            Ok(values.value(row))
+        } else if let Some(values) = codes.as_any().downcast_ref::<LargeBinaryArray>() {
+            Ok(values.value(row))
+        } else {
+            Err(Error::InvalidSchema(
+                "artifact centroid code must be binary".into(),
+            ))
+        }
+    };
+    let mut decoded = Vec::with_capacity(nlist.saturating_mul(dimension));
+    for row in 0..nlist {
+        if usize::try_from(cids.value(row)).ok() != Some(row) {
+            return Err(Error::InvalidSchema(
+                "artifact centroid rows must be ordered by cid".into(),
+            ));
+        }
+        let offset = offsets.value(row);
+        let scale = scales.value(row);
+        let code = code_at(row)?;
+        if code.len() != dimension || !offset.is_finite() || !scale.is_finite() || scale < 0.0 {
+            return Err(Error::InvalidSchema(
+                "artifact centroid LVQ8 row is invalid".into(),
+            ));
+        }
+        decoded.extend(code.iter().map(|value| offset + scale * f32::from(*value)));
+    }
+    Ok(decoded)
 }
 
 fn sql_relation_lock_error() -> Error {

@@ -27,8 +27,8 @@ use datafusion::prelude::col;
 use futures::StreamExt;
 use parallite::ParalliteContext;
 use parqdb_meta::{
-    IvfCentroidsReference, IvfPostingsManifest, PostingEncoding, RelationReference,
-    StaticIndexDescriptor, StaticIndexHierarchy, StaticIndexPackageManifest, StaticIndexPostings,
+    IndexArtifactManifest, IvfCentroidsReference, IvfPostingsManifest, PostingEncoding,
+    RelationReference, StaticIndexDescriptor, StaticIndexHierarchy, StaticIndexPostings,
     StaticPostingsFile, StaticSourceKeyField,
 };
 #[cfg(test)]
@@ -75,7 +75,7 @@ pub(crate) struct IvfBuildContext<'a> {
 }
 
 pub(crate) struct IvfPostingsSpec<'a> {
-    pub package_uuid: Uuid,
+    pub artifact_uuid: Uuid,
     pub vector_field: &'a str,
     pub source_key_fields: &'a [String],
     pub config: IvfConfig,
@@ -615,7 +615,7 @@ pub(crate) async fn build_ivf_postings(
     context: IvfBuildContext<'_>,
 ) -> Result<IndexArtifacts> {
     let IvfPostingsSpec {
-        package_uuid,
+        artifact_uuid,
         vector_field,
         source_key_fields,
         config,
@@ -653,33 +653,67 @@ pub(crate) async fn build_ivf_postings(
         partitions,
     )
     .await?;
-    if matches!(
+    let artifact_manifest = if matches!(
         config.posting_encoding,
         PostingEncoding::Lvq4 | PostingEncoding::Lvq8
     ) {
-        write_static_package(
-            parquet,
-            output_root,
-            package_uuid,
-            source_schema.as_ref(),
-            source_key_fields,
-            config,
-            trained,
-            &postings_manifest,
-            writer_options,
+        Some(
+            write_artifact_manifest(
+                parquet,
+                output_root,
+                artifact_uuid,
+                source_schema.as_ref(),
+                vector_field,
+                source_key_fields,
+                config,
+                trained,
+                &postings_manifest,
+                writer_options,
+            )
+            .await?,
         )
-        .await?;
-    }
-    Ok(IndexArtifacts {
-        format: IndexFormat::ivf(config.metric),
-        parameters: BTreeMap::from([
-            ("dimension".into(), trained.dimension.to_string()),
-            ("nlist".into(), trained.nlist.to_string()),
-            ("ntotal".into(), trained.ntotal.to_string()),
-            (
-                "posting_encoding".into(),
-                config.posting_encoding.as_str().into(),
-            ),
+    } else {
+        None
+    };
+    Ok(ivf_index_artifacts(
+        artifact_uuid,
+        &config,
+        trained,
+        ivf_centroids,
+        centroids,
+        postings_location,
+        artifact_manifest,
+    ))
+}
+
+fn ivf_index_artifacts(
+    artifact_uuid: Uuid,
+    config: &IvfConfig,
+    trained: &TrainedIvf,
+    ivf_centroids: &IvfCentroidsReference,
+    centroids: RelationReference,
+    postings_location: String,
+    artifact_manifest: Option<String>,
+) -> IndexArtifacts {
+    let mut parameters = BTreeMap::from([
+        ("dimension".into(), trained.dimension.to_string()),
+        ("nlist".into(), trained.nlist.to_string()),
+        ("ntotal".into(), trained.ntotal.to_string()),
+        (
+            "posting_encoding".into(),
+            config.posting_encoding.as_str().into(),
+        ),
+    ]);
+    let index_relations = if let Some(manifest_location) = artifact_manifest {
+        parameters.insert("artifact_uuid".into(), artifact_uuid.to_string());
+        BTreeMap::from([(
+            "artifact_manifest".into(),
+            RelationReference::Parquet {
+                uri: manifest_location,
+            },
+        )])
+    } else {
+        parameters.extend([
             (
                 "ivf_centroids_fingerprint".into(),
                 ivf_centroids.fingerprint.clone(),
@@ -692,8 +726,8 @@ pub(crate) async fn build_ivf_postings(
                 "ivf_centroids_metadata_location".into(),
                 ivf_centroids.metadata_location.clone(),
             ),
-        ]),
-        index_relations: BTreeMap::from([
+        ]);
+        BTreeMap::from([
             ("ivf_centroids".into(), centroids),
             (
                 "ivf_postings".into(),
@@ -701,8 +735,13 @@ pub(crate) async fn build_ivf_postings(
                     uri: postings_location,
                 },
             ),
-        ]),
-    })
+        ])
+    };
+    IndexArtifacts {
+        format: IndexFormat::ivf(config.metric),
+        parameters,
+        index_relations,
+    }
 }
 
 struct PostingsBuild<'a> {
@@ -772,23 +811,19 @@ async fn write_postings(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn write_static_package(
+async fn write_artifact_manifest(
     parquet: &ParquetStore,
     output_root: &str,
-    package_uuid: Uuid,
+    artifact_uuid: Uuid,
     source_schema: &Schema,
+    vector_field: &str,
     source_key_fields: &[String],
     config: IvfConfig,
     trained: &TrainedIvf,
     postings: &IvfPostingsManifest,
     writer_options: &ParquetWriterOptions,
-) -> Result<()> {
+) -> Result<String> {
     let centroids = centroids_batch(&trained.centroids, trained.dimension, &trained.cid_offsets)?;
-    let roots = roots_batch(
-        &trained.root_centroids,
-        trained.dimension,
-        &trained.cid_offsets,
-    )?;
     let centroid_ranges = trained
         .cid_offsets
         .windows(2)
@@ -805,23 +840,12 @@ async fn write_static_package(
             writer_options,
         )
         .await?;
-    let roots_path = "roots.parquet";
-    let roots_location = child_location(output_root, roots_path, false)?;
-    let roots_range = 0..roots.num_rows();
-    let roots = parquet
-        .write_static_parquet_object(
-            &roots_location,
-            roots_path,
-            &roots,
-            std::slice::from_ref(&roots_range),
-            writer_options,
-        )
-        .await?;
     let source_key_fields = static_source_key_fields(source_schema, source_key_fields)?;
-    let manifest = StaticIndexPackageManifest {
+    let manifest = IndexArtifactManifest {
         format_version: 1,
-        package_uuid,
+        artifact_uuid,
         index: StaticIndexDescriptor {
+            vector_field: vector_field.to_owned(),
             metric: config.metric,
             posting_encoding: config.posting_encoding,
             dimension: i32::try_from(trained.dimension)
@@ -833,8 +857,6 @@ async fn write_static_package(
             source_key_fields,
         },
         hierarchy: StaticIndexHierarchy {
-            root_count: i32::try_from(trained.cid_offsets.len() - 1)
-                .map_err(|_| Error::InvalidSchema("root count exceeds int32".into()))?,
             cid_offsets: trained
                 .cid_offsets
                 .iter()
@@ -844,7 +866,6 @@ async fn write_static_package(
                 })
                 .collect::<Result<Vec<_>>>()?,
             centroid_encoding: PostingEncoding::Lvq8,
-            roots,
             centroids,
         },
         postings: StaticIndexPostings {
@@ -862,12 +883,15 @@ async fn write_static_package(
                 })
                 .collect(),
         },
+        source: None,
+        embedding: None,
     };
     let bytes = manifest
         .to_json_vec()
         .map_err(|error| Error::InvalidSchema(error.to_string()))?;
     let location = child_location(output_root, "manifest.json", false)?;
-    parquet.write_new_object(&location, bytes.into()).await
+    parquet.write_new_object(&location, bytes.into()).await?;
+    Ok(location)
 }
 
 fn static_source_key_fields(

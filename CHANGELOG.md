@@ -7,6 +7,18 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** immutable publication format v1 now has one authoritative
+  top-level `manifest.json`. It contains the complete index inventory and
+  optional source and embedding sections; the separate source manifest,
+  nested postings manifest, published root-centroid object, and native index
+  metadata document are removed.
+- **Breaking:** published indexes are registered through their manifest
+  location rather than a native `vN.metadata.json` location. Catalog schema
+  `user_version` remains `1`, but catalogs and warehouses created by earlier
+  `0.2.0` release candidates must be rebuilt.
+
 ## [0.2.0rc3] - 2026-08-21
 
 ### Fixed

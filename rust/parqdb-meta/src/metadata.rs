@@ -81,8 +81,12 @@ impl IndexSnapshot {
         {
             return invalid("map keys must be non-empty");
         }
-        for location in self.index_relations.values() {
-            validate_relative_location(location)?;
+        for (role, location) in &self.index_relations {
+            if role == "artifact_manifest" && Url::parse(location).is_ok() {
+                validate_absolute_location(location)?;
+            } else {
+                validate_relative_location(location)?;
+            }
         }
         validate_family(self)
     }

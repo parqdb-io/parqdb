@@ -13,7 +13,14 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 import uvicorn
-from _support import WAIT, build_index, load_table_index, register_source, write_vectors
+from _support import (
+    WAIT,
+    artifact_manifest_location,
+    build_index,
+    load_table_index,
+    register_source,
+    write_vectors,
+)
 from parqdb.facade import AsyncSession
 from parqdb.runtime.service import SessionService
 from parqdb.server.app import create_http_app, create_http_app_for_service
@@ -254,8 +261,9 @@ def test_http_registers_an_index_already_published_in_the_warehouse(
     write_vectors(source, [0, 1], [[0.0, 0.0], [1.0, 0.0]])
     embedded = parqdb.connect(root)
     vectors = register_source(embedded, source)
-    build_index(vectors, nlist=1)
+    build_index(vectors, nlist=1, encoding="lvq8")
     published = load_table_index(embedded, vectors, "vectors_embedding")
+    manifest_location = artifact_manifest_location(published, embedded.warehouse)
     vectors.drop_index("vectors_embedding")
     embedded.close()
 
@@ -279,7 +287,7 @@ def test_http_registers_an_index_already_published_in_the_warehouse(
             remote_vectors = await session.table("vectors")
             await remote_vectors.register_index(
                 "vectors_embedding",
-                metadata_location=published.metadata_location,
+                manifest_location=manifest_location,
             )
 
             assert (

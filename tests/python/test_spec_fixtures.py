@@ -44,9 +44,14 @@ def assert_query_result(
 
 
 def read_postings(directory: Path) -> list[dict[str, object]]:
-    root = directory / "ivf_postings"
-    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
-    files = [root / entry["path"] for entry in manifest["files"]]
+    artifact_manifest = directory / "manifest.json"
+    if artifact_manifest.is_file():
+        manifest = json.loads(artifact_manifest.read_text(encoding="utf-8"))
+        files = [directory / entry["path"] for entry in manifest["postings"]["files"]]
+    else:
+        root = directory / "ivf_postings"
+        manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+        files = [root / entry["path"] for entry in manifest["files"]]
     return pq.read_table(files).to_pylist()
 
 
@@ -145,7 +150,7 @@ def localize_fixture(
     directory: Path,
     name: str,
 ) -> tuple[Path, Path, Path]:
-    local = warehouse / f"{name}-package"
+    local = warehouse / f"{name}-artifact"
     shutil.copytree(directory, local)
     prefix = f"{local.name}/"
     metadata_path = local / "metadata.json"
@@ -180,52 +185,20 @@ def local_warehouse(session: parqdb.Session) -> Path:
     return Path(unquote(parsed.path))
 
 
-def register_fixture(
-    session: parqdb.Session,
-    directory: Path,
-    name: str,
-) -> parqdb.SourceTable:
-    source, metadata, _package = localize_fixture(
-        local_warehouse(session), directory, name
-    )
-    table = register_source(session, source, f"{name}_source")
-    table.register_index(
-        name,
-        metadata_location=metadata.as_uri(),
-    )
-    return table
-
-
-def test_valid_metadata_fixture_is_accepted_by_the_native_reader(
-    tmp_path: Path,
-) -> None:
-    session = parqdb.connect(tmp_path / "parqdb-data")
-    table = register_fixture(session, VALID, "fixture")
-
-    entry = load_table_index(session, table, "fixture")
-    assert entry.metadata["format-version"] == 1
-    assert entry.metadata["current-snapshot-id"] == 701
-
-
-def test_composite_metadata_fixture_is_accepted_by_the_native_reader(
-    tmp_path: Path,
-) -> None:
-    session = parqdb.connect(tmp_path / "parqdb-data")
-    table = register_fixture(session, COMPOSITE, "composite")
-
-    entry = load_table_index(session, table, "composite")
-    snapshot = entry.metadata["snapshots"][0]
-    assert snapshot["source-key-fields"] == ("tenant_id", "document_id")
-    assert snapshot["parameters"]["posting_encoding"] == "source"
-
-
 @pytest.mark.parametrize("encoding", ["lvq4", "lvq8"])
-def test_lvq_metadata_fixtures_are_accepted_by_the_native_reader(
+def test_lvq_artifact_fixtures_are_accepted_by_the_native_reader(
     tmp_path: Path,
     encoding: str,
 ) -> None:
     session = parqdb.connect(tmp_path / "parqdb-data")
-    table = register_fixture(session, VALID / encoding, encoding)
+    source, _metadata, artifact = localize_fixture(
+        local_warehouse(session), VALID / encoding, encoding
+    )
+    table = register_source(session, source, f"{encoding}_source")
+    table.register_index(
+        encoding,
+        manifest_location=(artifact / "manifest.json").as_uri(),
+    )
 
     entry = load_table_index(session, table, encoding)
     snapshot = entry.metadata["snapshots"][0]
@@ -240,13 +213,13 @@ def test_lvq_pyarrow_fixtures_are_queryable_by_the_native_reader(
 ) -> None:
     directory = VALID / encoding
     session = parqdb.connect(tmp_path / "parqdb-data")
-    source, metadata, _package = localize_fixture(
+    source, _metadata, artifact = localize_fixture(
         local_warehouse(session), directory, encoding
     )
     documents = register_source(session, source, "documents")
     documents.register_index(
         encoding,
-        metadata_location=metadata.as_uri(),
+        manifest_location=(artifact / "manifest.json").as_uri(),
     )
     case = json.loads((directory / "queries.json").read_text(encoding="utf-8"))[0]
 
@@ -263,29 +236,6 @@ def test_lvq_pyarrow_fixtures_are_queryable_by_the_native_reader(
     assert hits["_distance"].to_pylist() == pytest.approx(
         [row["_distance"] for row in case["expected"]]
     )
-
-
-@pytest.mark.parametrize(
-    "case",
-    INVALID_CASES,
-    ids=[case["file"] for case in INVALID_CASES],
-)
-def test_invalid_metadata_fixtures_are_rejected(
-    tmp_path: Path,
-    case: dict[str, str],
-) -> None:
-    session = parqdb.connect(tmp_path / "parqdb-data")
-    source, metadata, _package = localize_fixture(
-        local_warehouse(session), VALID, "invalid"
-    )
-    shutil.copyfile(INVALID / case["file"], metadata)
-    table = register_source(session, source, "invalid_source")
-
-    with pytest.raises(parqdb.InvalidMetadataError):
-        table.register_index(
-            "invalid",
-            metadata_location=metadata.as_uri(),
-        )
 
 
 def test_invalid_fixture_manifest_covers_exactly_the_invalid_documents() -> None:

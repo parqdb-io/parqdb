@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 import parqdb
 import pyarrow as pa
@@ -11,6 +12,7 @@ import pyarrow.parquet as pq
 import pytest
 from _support import (
     WAIT,
+    artifact_manifest_location,
     load_metadata_file,
     load_table_index,
     register_source,
@@ -201,8 +203,14 @@ def test_local_lvq_build_and_search(tmp_path: Path) -> None:
         assert snapshot["index-schema-version"] == 1
         assert snapshot["parameters"]["posting_encoding"] == encoding
         assert snapshot["parameters"]["dimension"] == str(dimension)
-        postings = snapshot["index-relations"]["ivf_postings"]
-        posting_files = relation_files(postings, session.warehouse)
+        entry = load_table_index(session, documents, name)
+        manifest_location = artifact_manifest_location(entry, session.warehouse)
+        manifest_path = Path(unquote(urlparse(manifest_location).path))
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        posting_files = [
+            manifest_path.parent / descriptor["path"]
+            for descriptor in manifest["postings"]["files"]
+        ]
         assert posting_files
         assert pq.read_schema(posting_files[0]) == pa.schema(
             [
@@ -327,28 +335,28 @@ def test_ivf_centroids_float64_and_cosine_end_to_end(tmp_path: Path) -> None:
             [0.0, 1.0 - 2.0**-0.5, 1.0], abs=1e-5
         )
 
+    source_snapshot, *artifact_snapshots = cosine_snapshots
     centroid_fields = (
         "ivf_centroids_fingerprint",
         "ivf_centroids_uuid",
         "ivf_centroids_metadata_location",
     )
     for field in centroid_fields:
-        assert (
-            len({snapshot["parameters"][field] for snapshot in cosine_snapshots}) == 1
+        assert field in source_snapshot["parameters"]
+        assert all(
+            field not in snapshot["parameters"] for snapshot in artifact_snapshots
         )
-    centroid_relations = [
-        snapshot["index-relations"]["ivf_centroids"] for snapshot in cosine_snapshots
-    ]
-    assert all(relation == centroid_relations[0] for relation in centroid_relations[1:])
-    assert (
-        len(
-            {
-                snapshot["index-relations"]["ivf_postings"]
-                for snapshot in cosine_snapshots
-            }
-        )
-        == 3
+    assert set(source_snapshot["index-relations"]) == {
+        "ivf_centroids",
+        "ivf_postings",
+    }
+    assert all(
+        set(snapshot["index-relations"]) == {"artifact_manifest"}
+        for snapshot in artifact_snapshots
     )
+    assert len(
+        {snapshot["parameters"]["artifact_uuid"] for snapshot in artifact_snapshots}
+    ) == len(artifact_snapshots)
 
     documents.create_index(
         "l2_source",

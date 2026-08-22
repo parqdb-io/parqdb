@@ -251,7 +251,7 @@ class HttpTransport:
         identifier: TableIdentifier,
         index: str,
         *,
-        metadata_location: str,
+        manifest_location: str,
     ) -> None:
         self._ensure_open()
         path, params = _index_path(identifier, index, "register")
@@ -262,7 +262,7 @@ class HttpTransport:
             json_body={
                 "source": identifier_to_json(identifier),
                 "index": index,
-                "metadata_location": metadata_location,
+                "manifest_location": manifest_location,
             },
         )
 

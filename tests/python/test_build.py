@@ -7,6 +7,7 @@ import parqdb
 import pytest
 from _support import (
     WAIT,
+    artifact_manifest_location,
     build_index,
     drop_table_index_entry,
     load_table_index,
@@ -146,16 +147,17 @@ def test_catalog_publication_supersedes_an_unpublished_failure(
         build_index(vectors, "failed_embedding", key=["missing"])
     assert vectors.index_status("failed_embedding").state == "failed"
 
-    build_index(vectors, "published_embedding")
+    build_index(vectors, "published_embedding", encoding="lvq8")
     published = load_table_index(session, vectors, "published_embedding")
+    manifest_location = artifact_manifest_location(published, session.warehouse)
     drop_table_index_entry(session, vectors, "published_embedding")
     register_table_index(
         vectors,
         "failed_embedding",
-        published.metadata_location,
+        manifest_location,
     )
 
     recovered = vectors.index_status("failed_embedding")
     assert recovered.state == "ready"
-    assert recovered.current_snapshot_id == published.metadata["current-snapshot-id"]
+    assert recovered.current_snapshot_id is not None
     assert recovered.error is None

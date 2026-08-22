@@ -94,8 +94,8 @@ def main() -> None:
             source_key="chunk_id",
             destination=str(published),
         )
-        if not (published / "index" / "manifest.json").is_file():
-            raise RuntimeError("installed-wheel static publication smoke failed")
+        if not (published / "manifest.json").is_file():
+            raise RuntimeError("installed-wheel artifact publication smoke failed")
     print(f"installed parqdb {version('parqdb')} wheel build/search smoke passed")
 
 

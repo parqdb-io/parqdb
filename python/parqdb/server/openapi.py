@@ -449,12 +449,12 @@ def openapi_document() -> dict[str, Any]:
                     "required": [
                         "source",
                         "index",
-                        "metadata_location",
+                        "manifest_location",
                     ],
                     "properties": {
                         "source": {"$ref": "#/components/schemas/TableIdentifier"},
                         "index": {"type": "string", "minLength": 1},
-                        "metadata_location": {"type": "string", "minLength": 1},
+                        "manifest_location": {"type": "string", "minLength": 1},
                     },
                 },
                 "RefreshIndexRequest": {

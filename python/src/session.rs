@@ -318,7 +318,7 @@ impl PyNativeSession {
         source: &str,
         index_namespace: Vec<String>,
         name: String,
-        metadata_location: String,
+        manifest_location: String,
     ) -> PyResult<()> {
         let source = parse_relation_reference(source)?;
         let session = Arc::clone(&self.session);
@@ -328,7 +328,7 @@ impl PyNativeSession {
                 &index_namespace,
                 &source,
                 &name,
-                &metadata_location,
+                &manifest_location,
             ))
         })
         .map_err(|error| core_error(&error))

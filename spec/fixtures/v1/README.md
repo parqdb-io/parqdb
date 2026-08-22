@@ -11,8 +11,13 @@ postings, and ordered query results.
 Additional directories cover:
 
 - `valid/composite/`: a composite source key;
-- `valid/lvq4/`: LVQ4 codes and expected approximate distances; and
-- `valid/lvq8/`: LVQ8 codes and expected approximate distances.
+- `valid/lvq4/`: one-manifest LVQ4 artifact, codes, and expected approximate
+  distances; and
+- `valid/lvq8/`: one-manifest LVQ8 artifact, codes, and expected approximate
+  distances.
+
+The LVQ directories use their top-level `manifest.json` as the only physical
+object inventory. They deliberately contain no nested postings manifest.
 
 All logical indexes use the same public IVF schema version. Encoding changes
 the postings fields, not the schema-version history. Full source vectors are

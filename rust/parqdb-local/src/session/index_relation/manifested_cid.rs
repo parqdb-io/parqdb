@@ -20,7 +20,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion_datasource_parquet::ParquetAccessPlan;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
-use parqdb_meta::{IvfPostingsFile, IvfPostingsManifest};
+use parqdb_meta::{IndexArtifactManifest, IvfPostingsFile, IvfPostingsManifest};
 use parqdb_storage::StorageRegistry;
 use parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
 use parquet::file::statistics::Statistics as ParquetStatistics;
@@ -71,29 +71,17 @@ impl ManifestedCidParquetProvider {
         state: &dyn Session,
         index_io: IndexIoMode,
     ) -> Result<Self> {
-        let resolved = registry.resolve(location)?;
+        let (relation_root, manifest) = load_postings_manifest(registry, location).await?;
+        let resolved = registry.resolve(&relation_root)?;
         let store = resolved.store();
         state
             .runtime_env()
             .register_object_store(resolved.base_url(), Arc::clone(&store));
-        let table_path = ListingTableUrl::parse(location)?;
-        let manifest_location = child_location(location, "manifest.json", false)?;
-        let resolved_manifest = registry.resolve(&manifest_location)?;
-        let manifest_bytes = resolved_manifest
-            .store()
-            .get(resolved_manifest.path())
-            .await
-            .map_err(parqdb_storage::Error::from)?
-            .bytes()
-            .await
-            .map_err(parqdb_storage::Error::from)?;
-        let manifest = Arc::new(
-            IvfPostingsManifest::from_json_slice(&manifest_bytes)
-                .map_err(|error| Error::InvalidSchema(error.to_string()))?,
-        );
+        let table_path = ListingTableUrl::parse(&relation_root)?;
+        let manifest = Arc::new(manifest);
         let mut files = Vec::with_capacity(manifest.files.len());
         for entry in &manifest.files {
-            let file_location = child_location(location, &entry.path, false)?;
+            let file_location = child_location(&relation_root, &entry.path, false)?;
             let resolved_file = registry.resolve(&file_location)?;
             if resolved_file.base_url() != resolved.base_url() {
                 return Err(Error::InvalidSchema(
@@ -316,6 +304,70 @@ impl ManifestedCidParquetProvider {
             |projection| Ok(Arc::new(self.schema.project(projection)?)),
         )
     }
+}
+
+async fn load_postings_manifest(
+    registry: &StorageRegistry,
+    location: &str,
+) -> Result<(String, IvfPostingsManifest)> {
+    let artifact_location = location.ends_with("/manifest.json").then_some(location);
+    let manifest_location = match artifact_location {
+        Some(location) => location.to_owned(),
+        None => child_location(location, "manifest.json", false)?,
+    };
+    let resolved = registry.resolve(&manifest_location)?;
+    let bytes = resolved
+        .store()
+        .get(resolved.path())
+        .await
+        .map_err(parqdb_storage::Error::from)?
+        .bytes()
+        .await
+        .map_err(parqdb_storage::Error::from)?;
+    if artifact_location.is_none() {
+        let manifest = IvfPostingsManifest::from_json_slice(&bytes)
+            .map_err(|error| Error::InvalidSchema(error.to_string()))?;
+        return Ok((location.to_owned(), manifest));
+    }
+
+    let artifact = IndexArtifactManifest::from_json_slice(&bytes)
+        .map_err(|error| Error::InvalidSchema(error.to_string()))?;
+    let relation_root = url::Url::parse(&manifest_location)
+        .and_then(|url| url.join("ivf_postings/"))
+        .map_err(|error| Error::InvalidSchema(error.to_string()))?
+        .to_string();
+    let files = artifact
+        .postings
+        .files
+        .into_iter()
+        .map(|file| {
+            let path = file
+                .path
+                .strip_prefix("ivf_postings/")
+                .ok_or_else(|| Error::InvalidSchema("invalid artifact postings path".into()))?
+                .to_owned();
+            Ok(IvfPostingsFile {
+                path,
+                cid_bucket: file.cid_bucket,
+                min_cid: file.min_cid,
+                max_cid: file.max_cid,
+                rows: file.rows,
+                size: file.size,
+                sha256: file.sha256,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let manifest = IvfPostingsManifest {
+        format_version: 1,
+        nlist: artifact.index.nlist,
+        ntotal: artifact.index.ntotal,
+        cid_offsets: artifact.hierarchy.cid_offsets,
+        files,
+    };
+    manifest
+        .validate()
+        .map_err(|error| Error::InvalidSchema(error.to_string()))?;
+    Ok((relation_root, manifest))
 }
 
 #[async_trait]

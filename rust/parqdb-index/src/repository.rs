@@ -259,6 +259,18 @@ pub fn resolve_warehouse_location(
     Ok(resolved.into())
 }
 
+/// Resolves one manifest-relative artifact object without listing its prefix.
+pub fn resolve_artifact_object(manifest_location: &str, relative: &str) -> Result<String> {
+    parqdb_meta::validate_absolute_location(manifest_location)?;
+    parqdb_meta::validate_relative_location(relative)?;
+    let manifest = url::Url::parse(manifest_location)
+        .map_err(|error| Error::InvalidMetadata(error.to_string()))?;
+    let resolved = manifest
+        .join(relative)
+        .map_err(|error| Error::InvalidMetadata(error.to_string()))?;
+    Ok(resolved.into())
+}
+
 fn validate_ivf_centroids_identity(
     fingerprint: &str,
     artifact_uuid: uuid::Uuid,

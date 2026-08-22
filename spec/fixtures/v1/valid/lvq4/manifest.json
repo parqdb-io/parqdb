@@ -1,4 +1,5 @@
 {
+  "artifact-uuid": "849bc22f-7f83-5faf-a2c9-6becd8f6482c",
   "format-version": 1,
   "hierarchy": {
     "centroid-encoding": "lvq8",
@@ -10,13 +11,7 @@
     "cid-offsets": [
       0,
       2
-    ],
-    "root-count": 1,
-    "roots": {
-      "path": "roots.parquet",
-      "sha256": "feef3cfdbc6ab528be45361293745cbcaeffe5ae741004d9f57fdc0aa059c19a",
-      "size": 1336
-    }
+    ]
   },
   "index": {
     "dimension": 3,
@@ -29,9 +24,9 @@
         "name": "document_id",
         "type": "string"
       }
-    ]
+    ],
+    "vector-field": "embedding"
   },
-  "package-uuid": "849bc22f-7f83-5faf-a2c9-6becd8f6482c",
   "postings": {
     "files": [
       {

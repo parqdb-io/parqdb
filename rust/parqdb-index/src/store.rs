@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
-use parqdb_meta::{IndexMetadata, IvfCentroidsMetadata};
+use parqdb_meta::{IndexArtifactManifest, IndexMetadata, IvfCentroidsMetadata};
 use parqdb_storage::Warehouse;
 use uuid::Uuid;
 
@@ -208,6 +208,13 @@ impl MetadataStore {
             serialized_bytes,
         );
         Ok(metadata.as_ref().clone())
+    }
+
+    /// Loads and validates one immutable publication manifest from any supported URI.
+    pub async fn load_artifact_manifest(&self, location: &str) -> Result<IndexArtifactManifest> {
+        parqdb_meta::validate_absolute_location(location)?;
+        let bytes = self.read(location).await?;
+        Ok(IndexArtifactManifest::from_json_slice(&bytes)?)
     }
 
     /// Loads and decodes one immutable metadata document.
