@@ -57,7 +57,7 @@ afterAll(async () => {
   })
 })
 
-describe('static package manifest', () => {
+describe('immutable artifact manifest', () => {
   test('rejects duplicate keys and non-canonical integers', () => {
     const duplicate = new TextEncoder().encode('{"format-version":1,"format-version":1}').buffer
     expect(() => parseManifest(duplicate)).toThrow(/duplicate JSON key/)

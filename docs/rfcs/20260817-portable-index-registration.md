@@ -1,5 +1,7 @@
 # Catalog-Owned Index Registration
 
+> Superseded by [Single Publication Manifest](20260821-single-publication-manifest.md).
+
 ## Problem
 
 ParqDB metadata currently binds an index snapshot to physical source and index

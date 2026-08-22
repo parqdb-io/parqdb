@@ -1,5 +1,10 @@
 # Static HTTP Index Packages
 
+> **Status: superseded.** The pre-release format described here was shipped in
+> `0.2.0rc2` and `0.2.0rc3` only. It is replaced by the
+> [single publication manifest RFC](20260821-single-publication-manifest.md).
+> Implementations must not combine requirements from the two RFCs.
+
 - Status: Proposed
 - Date: 2026-08-18
 
@@ -158,7 +163,7 @@ An abbreviated example is:
 ```json
 {
   "format-version": 1,
-  "package-uuid": "249343c7-9989-48d8-b2ca-d0caa62ba940",
+  "artifact-uuid": "249343c7-9989-48d8-b2ca-d0caa62ba940",
   "index": {
     "metric": "l2_squared",
     "posting-encoding": "lvq8",
@@ -231,7 +236,7 @@ An abbreviated example is:
 are:
 
 - `format-version` is `1`;
-- `package-uuid` is a non-nil lowercase UUID;
+- `artifact-uuid` is a non-nil lowercase UUID;
 - `metric` is `l2_squared` or `cosine`;
 - `posting-encoding` is `lvq4` or `lvq8`;
 - `dimension`, `nlist`, `ntotal`, and `root-count` are positive;

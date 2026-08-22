@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import shutil
 import urllib.request
 from dataclasses import dataclass
@@ -61,16 +60,18 @@ class _Object:
 class BuiltIndex:
     manifest: Path
     model_assets: tuple[tuple[str, Path], ...] = ()
+    embedding: dict[str, object] | None = None
 
 
 def publish(
     *,
     index_manifest: Path,
-    source: Path,
-    source_key: str,
     destination: str,
+    source: Path | None = None,
+    source_key: str | None = None,
+    embedding: dict[str, object] | None = None,
+    model_assets: tuple[tuple[str, Path], ...] = (),
     public_url: str | None = None,
-    assets: tuple[tuple[str, Path], ...] = (),
     s3_endpoint: str | None = None,
     s3_region: str | None = None,
     verify_http: bool = True,
@@ -78,10 +79,21 @@ def publish(
 ) -> PublicationResult:
     """Publish all objects, making the static index manifest visible last."""
     index_manifest = index_manifest.resolve()
-    source = source.resolve()
     manifest = _load_index_manifest(index_manifest)
-    source_manifest = _source_manifest(source, source_key, manifest)
-    objects = _publication_objects(index_manifest, source, source_manifest, assets)
+    if (source is None) != (source_key is None):
+        raise ValueError("source and source_key must be provided together")
+    source_descriptor = None
+    if source is not None and source_key is not None:
+        source = source.resolve()
+        source_descriptor = _source_descriptor(source, source_key, manifest)
+    objects = _publication_objects(
+        index_manifest,
+        manifest,
+        source=source,
+        source_descriptor=source_descriptor,
+        embedding=embedding,
+        model_assets=model_assets,
+    )
     _ensure_unique_paths(objects)
     writer = _writer(destination, s3_endpoint=s3_endpoint, s3_region=s3_region)
     writer.ensure_empty(tuple(item.path for item in objects))
@@ -93,7 +105,7 @@ def publish(
         raise
     manifest_url = None
     if public_url is not None:
-        manifest_url = f"{public_url.rstrip('/')}/index/manifest.json"
+        manifest_url = f"{public_url.rstrip('/')}/manifest.json"
         if verify_http:
             try:
                 verify_publication(public_url, objects, cors_origin=cors_origin)
@@ -164,13 +176,14 @@ def build_index(
         },
     )
     model_assets: tuple[tuple[str, Path], ...] = ()
+    embedding: dict[str, object] | None = None
     index_source = source
     column = vector_column
     if text_columns:
         model_root = work / "model"
         _download_minilm(model_root)
         index_source = work / "embedding-source.parquet"
-        model_metadata = _embed_minilm(
+        embedding = _embed_minilm(
             source,
             index_source,
             source_key=source_key,
@@ -179,18 +192,13 @@ def build_index(
             batch_size=embedding_batch_size,
             threads=threads,
         )
-        metadata_path = work / "model.json"
-        metadata_path.write_bytes(_json_bytes(model_metadata))
-        model_assets = (
-            ("model.json", metadata_path),
-            *(
-                (f"models/all-MiniLM-L6-v2/{path}", model_root / path)
-                for path in _MINILM_FILES
-            ),
+        model_assets = tuple(
+            (f"models/all-MiniLM-L6-v2/{path}", model_root / path)
+            for path in _MINILM_FILES
         )
         column = "embedding"
     assert column is not None
-    package = _build_parqdb_index(
+    artifact = _build_parqdb_index(
         index_source,
         source_key=source_key,
         vector_column=column,
@@ -200,7 +208,7 @@ def build_index(
         metric=metric,
         threads=threads,
     )
-    return BuiltIndex(package / "manifest.json", model_assets)
+    return BuiltIndex(artifact / "manifest.json", model_assets, embedding)
 
 
 def verify_publication(
@@ -219,9 +227,9 @@ def verify_publication(
         raise ValueError("publication has no non-empty Parquet object to range-check")
     candidate = max(candidates, key=lambda item: item.size)
     with httpx.Client(follow_redirects=True, timeout=30) as client:
-        response = client.get(f"{root}index/manifest.json")
+        response = client.get(f"{root}manifest.json")
         response.raise_for_status()
-        if response.content != paths["index/manifest.json"].content:
+        if response.content != paths["manifest.json"].content:
             raise RuntimeError(
                 "public index manifest bytes differ from the publication"
             )
@@ -249,13 +257,13 @@ def _load_index_manifest(path: Path) -> dict[str, object]:
     except json.JSONDecodeError as error:
         raise ValueError(f"invalid index manifest JSON: {error}") from error
     if not isinstance(manifest, dict) or manifest.get("format-version") != 1:
-        raise ValueError("index manifest must be a static package format version 1")
-    if not isinstance(manifest.get("package-uuid"), str):
-        raise ValueError("index manifest is missing package-uuid")
+        raise ValueError("index manifest must be an artifact format version 1")
+    if not isinstance(manifest.get("artifact-uuid"), str):
+        raise ValueError("index manifest is missing artifact-uuid")
     return manifest
 
 
-def _source_manifest(
+def _source_descriptor(
     source: Path, source_key: str, index_manifest: dict[str, object]
 ) -> dict[str, object]:
     if not source.is_file():
@@ -285,16 +293,19 @@ def _source_manifest(
                 "all source row groups except the final group must be uniform"
             )
     return {
-        "format-version": 1,
         "rows": rows,
         "row-group-rows": row_group_rows,
-        "object": {
-            "path": source.name,
-            "size": source.stat().st_size,
-            "sha256": _sha256(source),
-        },
         "key": {"name": source_key, "type": "long"},
         "columns": parquet.schema_arrow.names,
+        "files": [
+            {
+                "path": source.name,
+                "size": source.stat().st_size,
+                "sha256": _sha256(source),
+                "row-begin": 0,
+                "row-end": rows,
+            }
+        ],
     }
 
 
@@ -439,8 +450,7 @@ def _embed_minilm(
         "repository": _MINILM_REPOSITORY,
         "revision": _MINILM_REVISION,
         "runtime": "onnx",
-        "onnx-file": "onnx/model_quantized.onnx",
-        "onnx-sha256": _sha256(model_root / "onnx/model_quantized.onnx"),
+        "onnx-file": "models/all-MiniLM-L6-v2/onnx/model_quantized.onnx",
         "dimension": _MINILM_DIMENSION,
         "max-length": _MINILM_MAX_LENGTH,
         "pooling": "attention-mask-mean",
@@ -467,7 +477,7 @@ def _build_parqdb_index(
 ) -> Path:
     from .api import IVF, SessionConfig, WriteOptions, connect
 
-    existing = _find_static_package(warehouse)
+    existing = _find_index_artifact(warehouse)
     if existing is not None:
         return existing
     config = (
@@ -495,13 +505,13 @@ def _build_parqdb_index(
         table.wait_for_index("publication_index", timeout=timedelta(hours=24))
     finally:
         session.close()
-    package = _find_static_package(warehouse)
-    if package is None:
-        raise RuntimeError("index build completed without a static manifest.json")
-    return package
+    artifact = _find_index_artifact(warehouse)
+    if artifact is None:
+        raise RuntimeError("index build completed without an artifact manifest.json")
+    return artifact
 
 
-def _find_static_package(root: Path) -> Path | None:
+def _find_index_artifact(root: Path) -> Path | None:
     if not root.exists():
         return None
     for path in sorted(root.rglob("manifest.json")):
@@ -509,7 +519,7 @@ def _find_static_package(root: Path) -> Path | None:
             value = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        if value.get("format-version") == 1 and "package-uuid" in value:
+        if value.get("format-version") == 1 and "artifact-uuid" in value:
             return path.parent
     return None
 
@@ -541,33 +551,43 @@ def _prepare_build_work(work: Path, request: dict[str, object]) -> None:
 
 def _publication_objects(
     index_manifest_path: Path,
-    source: Path,
-    source_manifest: dict[str, object],
-    assets: tuple[tuple[str, Path], ...],
+    manifest: dict[str, object],
+    *,
+    source: Path | None,
+    source_descriptor: dict[str, object] | None,
+    embedding: dict[str, object] | None,
+    model_assets: tuple[tuple[str, Path], ...],
 ) -> list[_Object]:
-    manifest = _load_index_manifest(index_manifest_path)
     root = index_manifest_path.parent
     _validate_index_objects(manifest, root)
     referenced = _referenced_index_paths(manifest)
-    objects = [_Object(f"index/{path}", source=root / path) for path in referenced]
-    native_manifest = root / "ivf_postings" / "manifest.json"
-    if native_manifest.is_file():
-        objects.append(
-            _Object("index/ivf_postings/manifest.json", source=native_manifest)
-        )
-    objects.append(_Object(source.name, source=source))
-    for relative, asset in assets:
-        relative = _safe_relative_path(relative)
-        asset = asset.resolve()
-        if not asset.is_file():
-            raise ValueError(f"asset does not exist: {asset}")
-        objects.append(_Object(relative, source=asset))
-    source_bytes = _json_bytes(source_manifest)
-    objects.append(_Object("source-manifest.json", content=source_bytes))
-    # The entry-point index manifest is the commit marker and is always written last.
-    objects.append(
-        _Object("index/manifest.json", content=index_manifest_path.read_bytes())
-    )
+    objects = [_Object(path, source=root / path) for path in referenced]
+    publication = json.loads(json.dumps(manifest))
+    if source is not None and source_descriptor is not None:
+        publication["source"] = source_descriptor
+        objects.append(_Object(source.name, source=source))
+    if embedding is not None:
+        if not model_assets:
+            raise ValueError("embedding publication requires model assets")
+        descriptors: list[dict[str, object]] = []
+        for relative, asset in model_assets:
+            relative = _safe_relative_path(relative)
+            asset = asset.resolve()
+            if not asset.is_file():
+                raise ValueError(f"model asset does not exist: {asset}")
+            objects.append(_Object(relative, source=asset))
+            descriptors.append(
+                {
+                    "path": relative,
+                    "size": asset.stat().st_size,
+                    "sha256": _sha256(asset),
+                }
+            )
+        publication["embedding"] = {**embedding, "assets": descriptors}
+    elif model_assets:
+        raise ValueError("model assets require an embedding descriptor")
+    # The only manifest is the commit marker and is always written last.
+    objects.append(_Object("manifest.json", content=_json_bytes(publication)))
     for item in objects:
         if item.source is not None and not item.source.is_file():
             raise ValueError(f"index object does not exist: {item.source}")
@@ -579,7 +599,7 @@ def _referenced_index_paths(manifest: dict[str, object]) -> list[str]:
     postings = manifest.get("postings")
     if not isinstance(hierarchy, dict) or not isinstance(postings, dict):
         raise ValueError("index manifest is missing hierarchy or postings")
-    values = [hierarchy.get("roots"), hierarchy.get("centroids")]
+    values = [hierarchy.get("centroids")]
     files = postings.get("files")
     if not isinstance(files, list):
         raise ValueError("index manifest postings.files must be an array")
@@ -596,7 +616,7 @@ def _validate_index_objects(manifest: dict[str, object], root: Path) -> None:
     hierarchy = manifest["hierarchy"]
     postings = manifest["postings"]
     assert isinstance(hierarchy, dict) and isinstance(postings, dict)
-    descriptors = [hierarchy["roots"], hierarchy["centroids"], *postings["files"]]
+    descriptors = [hierarchy["centroids"], *postings["files"]]
     for descriptor in descriptors:
         if not isinstance(descriptor, dict):
             raise ValueError("index object descriptor must be an object")
@@ -747,11 +767,3 @@ def _sha256(path: Path) -> str:
 
 def _json_bytes(value: object) -> bytes:
     return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
-
-
-def parse_asset(value: str) -> tuple[str, Path]:
-    """Parse a CLI ``RELATIVE_PATH=LOCAL_PATH`` asset declaration."""
-    relative, separator, local = value.partition("=")
-    if not separator or not local:
-        raise ValueError("asset must use RELATIVE_PATH=LOCAL_PATH")
-    return _safe_relative_path(relative), Path(os.path.expanduser(local))

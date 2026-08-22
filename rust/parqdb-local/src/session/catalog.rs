@@ -1,14 +1,14 @@
 //! Embedded catalog operations and index discovery.
 
-use std::time::Duration;
+use std::collections::BTreeMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow::datatypes::{DataType, Schema};
-use parqdb_catalog::{
-    CatalogEntry, Error as CatalogError, IndexIdentifier, IvfCentroidsClaimResult,
-};
-use parqdb_index::{Error as IndexError, LoadedIndex};
+use parqdb_catalog::{CatalogEntry, Error as CatalogError, IndexIdentifier};
+use parqdb_index::{Error as IndexError, LoadedIndex, new_snapshot_id, resolve_artifact_object};
 use parqdb_meta::{
-    IndexMetadata, IndexSnapshot, PostingEncoding, RelationReference, ivf_centroids_reference,
+    IndexArtifactManifest, IndexMetadata, IndexSnapshot, PostingEncoding, RelationReference,
+    SnapshotLogEntry, ivf_centroids_reference,
 };
 use uuid::Uuid;
 
@@ -57,40 +57,40 @@ impl LocalSession {
         ))
     }
 
-    /// Registers an existing index package for one Parquet source.
+    /// Registers an existing immutable index artifact for one Parquet source.
     pub async fn register_source_index(
         &self,
         source: &str,
         name: &str,
-        metadata_location: &str,
+        manifest_location: &str,
     ) -> Result<()> {
         let source_uri = canonical_source(&self.warehouse.registry(), source)?;
         self.register_relation_index(
             &RelationReference::Parquet { uri: source_uri },
             name,
-            metadata_location,
+            manifest_location,
         )
         .await
     }
 
-    /// Registers an existing index package for one exact source relation.
+    /// Registers an existing immutable index artifact for one exact source relation.
     pub async fn register_relation_index(
         &self,
         source: &RelationReference,
         name: &str,
-        metadata_location: &str,
+        manifest_location: &str,
     ) -> Result<()> {
-        self.register_relation_index_in(&[], source, name, metadata_location)
+        self.register_relation_index_in(&[], source, name, manifest_location)
             .await
     }
 
-    /// Registers an existing index package in one catalog namespace.
+    /// Registers an existing immutable index artifact in one catalog namespace.
     pub async fn register_relation_index_in(
         &self,
         namespace: &[String],
         source: &RelationReference,
         name: &str,
-        metadata_location: &str,
+        manifest_location: &str,
     ) -> Result<()> {
         source.validate()?;
         let identifier = namespaced_index_identifier(namespace, name)?;
@@ -99,12 +99,21 @@ impl LocalSession {
             return Err(CatalogError::AlreadyExists(identifier).into());
         }
         let binding = self.bind_relation(source).await?;
-        let metadata = self.indexes.load_unregistered(metadata_location).await?;
+        let manifest = self
+            .indexes
+            .metadata_store()
+            .load_artifact_manifest(manifest_location)
+            .await?;
+        let metadata = registered_artifact_metadata(&manifest, manifest_location)?;
         self.validate_registration(&binding, &metadata).await?;
-        self.publish_registered_centroids(source, &metadata).await?;
+        let metadata_location = self
+            .indexes
+            .metadata_store()
+            .write_initial(&metadata)
+            .await?;
         self.indexes
             .catalog()
-            .register(&identifier, source, metadata_location, &metadata)?;
+            .register(&identifier, source, &metadata_location, &metadata)?;
         Ok(())
     }
 
@@ -115,10 +124,14 @@ impl LocalSession {
     ) -> Result<()> {
         for snapshot in &metadata.snapshots {
             validate_index_source_schema(source.schema.as_ref(), snapshot)?;
-            for location in snapshot.index_relations.values() {
-                self.indexes
-                    .metadata_store()
-                    .resolve_location(location, location.ends_with('/'))?;
+            for (role, location) in &snapshot.index_relations {
+                if role == "artifact_manifest" && url::Url::parse(location).is_ok() {
+                    parqdb_meta::validate_absolute_location(location)?;
+                } else {
+                    self.indexes
+                        .metadata_store()
+                        .resolve_location(location, location.ends_with('/'))?;
+                }
             }
         }
         let snapshot = metadata.current_snapshot()?;
@@ -134,6 +147,72 @@ impl LocalSession {
             )));
         }
 
+        if let Some(location) = snapshot.index_relations.get("artifact_manifest") {
+            return self
+                .validate_artifact_registration(source, snapshot, location)
+                .await;
+        }
+
+        self.validate_warehouse_registration(source, snapshot).await
+    }
+
+    async fn validate_artifact_registration(
+        &self,
+        source: &super::source::SourceBinding,
+        snapshot: &IndexSnapshot,
+        location: &str,
+    ) -> Result<()> {
+        let manifest_location = if url::Url::parse(location).is_ok() {
+            location.to_owned()
+        } else {
+            self.indexes
+                .metadata_store()
+                .resolve_location(location, false)?
+        };
+        let manifest = self
+            .indexes
+            .metadata_store()
+            .load_artifact_manifest(&manifest_location)
+            .await?;
+        let centroid_location =
+            resolve_artifact_object(&manifest_location, &manifest.hierarchy.centroids.path)?;
+        let centroids = self.parquet.read(&centroid_location, None).await?;
+        if centroids.num_rows() != snapshot.parameter_usize("nlist")? {
+            return Err(Error::InvalidSchema(
+                "artifact centroid row count does not match nlist".into(),
+            ));
+        }
+        let cid_offsets = manifest
+            .hierarchy
+            .cid_offsets
+            .iter()
+            .map(|value| usize::try_from(*value).unwrap_or_default())
+            .collect::<Vec<_>>();
+        self.index_relation_providers
+            .validate_manifested_cid_identity(
+                &manifest_location,
+                snapshot.parameter_usize("nlist")?,
+                snapshot.parameter_usize("ntotal")?,
+                &cid_offsets,
+                &self.context.state(),
+            )
+            .await?;
+        let postings = self
+            .index_relation_providers
+            .get_or_create_parquet(
+                &manifest_location,
+                IndexRelationLayout::ManifestedCid,
+                &self.context.state(),
+            )
+            .await?;
+        validate_postings_schema(source.schema.as_ref(), postings.schema().as_ref(), snapshot)
+    }
+
+    async fn validate_warehouse_registration(
+        &self,
+        source: &super::source::SourceBinding,
+        snapshot: &IndexSnapshot,
+    ) -> Result<()> {
         let centroids = self
             .indexes
             .load_ivf_centroids_reference(&source.reference, &ivf_centroids_reference(snapshot)?)
@@ -194,40 +273,6 @@ impl LocalSession {
             )));
         }
         Ok(())
-    }
-
-    async fn publish_registered_centroids(
-        &self,
-        source: &RelationReference,
-        metadata: &IndexMetadata,
-    ) -> Result<()> {
-        let reference = ivf_centroids_reference(metadata.current_snapshot()?)?;
-        let loaded = self
-            .indexes
-            .load_ivf_centroids_reference(source, &reference)
-            .await?;
-        let owner = Uuid::new_v4();
-        loop {
-            match self.catalog.claim_ivf_centroids(
-                source,
-                &loaded.metadata.descriptor,
-                owner,
-                60_000,
-            )? {
-                IvfCentroidsClaimResult::Ready(_) => return Ok(()),
-                IvfCentroidsClaimResult::Busy { .. } => {
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                }
-                IvfCentroidsClaimResult::Claimed(claim) => {
-                    self.catalog.publish_ivf_centroids(
-                        &claim,
-                        &loaded.entry.metadata_location,
-                        &loaded.metadata,
-                    )?;
-                    return Ok(());
-                }
-            }
-        }
     }
 
     /// Removes a root-namespace index mapping without deleting index data.
@@ -414,6 +459,68 @@ pub(super) fn validate_index_name(name: &str) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+fn registered_artifact_metadata(
+    manifest: &IndexArtifactManifest,
+    manifest_location: &str,
+) -> Result<IndexMetadata> {
+    parqdb_meta::validate_absolute_location(manifest_location)?;
+    let timestamp_ms = i64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| Error::InvalidArgument(error.to_string()))?
+            .as_millis(),
+    )
+    .map_err(|_| Error::InvalidArgument("current timestamp is out of range".into()))?;
+    let snapshot_id = new_snapshot_id();
+    let source_key_fields = manifest
+        .index
+        .source_key_fields
+        .iter()
+        .map(|field| field.name.clone())
+        .collect();
+    let snapshot = IndexSnapshot {
+        snapshot_id,
+        sequence_number: 1,
+        timestamp_ms,
+        summary: BTreeMap::from([("operation".into(), "register".into())]),
+        vector_field: manifest.index.vector_field.clone(),
+        source_key_fields,
+        indexed_rows: manifest.index.ntotal,
+        index_family: "ivf".into(),
+        index_schema_version: parqdb_meta::IVF_SCHEMA_VERSION,
+        metric: manifest.index.metric.as_str().into(),
+        parameters: BTreeMap::from([
+            ("artifact_uuid".into(), manifest.artifact_uuid.to_string()),
+            ("dimension".into(), manifest.index.dimension.to_string()),
+            ("nlist".into(), manifest.index.nlist.to_string()),
+            ("ntotal".into(), manifest.index.ntotal.to_string()),
+            (
+                "posting_encoding".into(),
+                manifest.index.posting_encoding.as_str().into(),
+            ),
+        ]),
+        index_relations: BTreeMap::from([(
+            "artifact_manifest".into(),
+            manifest_location.to_owned(),
+        )]),
+    };
+    let metadata = IndexMetadata {
+        format_version: 1,
+        index_uuid: Uuid::new_v4(),
+        last_updated_ms: timestamp_ms,
+        last_sequence_number: 1,
+        current_snapshot_id: snapshot_id,
+        snapshots: vec![snapshot],
+        snapshot_log: vec![SnapshotLogEntry {
+            timestamp_ms,
+            snapshot_id,
+        }],
+        properties: BTreeMap::new(),
+    };
+    metadata.validate()?;
+    Ok(metadata)
 }
 
 fn index_info(entry: &CatalogEntry, metadata: &IndexMetadata) -> Result<IndexInfo> {

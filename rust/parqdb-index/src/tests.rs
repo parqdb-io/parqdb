@@ -537,9 +537,6 @@ async fn publication_uses_the_builder_format_descriptor() {
     let repository = repository(&temporary);
     let mut build = artifacts(repository.metadata_store(), "indexes/v2", 2);
     build.format = IndexFormat::ivf(DistanceMetric::Cosine);
-    build
-        .parameters
-        .insert("posting_encoding".into(), "lvq8".into());
 
     let published = publish_initial(
         repository.catalog(),
@@ -562,7 +559,7 @@ async fn publication_uses_the_builder_format_descriptor() {
     assert_eq!(snapshot.index_family, "ivf");
     assert_eq!(snapshot.index_schema_version, 1);
     assert_eq!(snapshot.metric, "cosine");
-    assert_eq!(snapshot.parameters["posting_encoding"], "lvq8");
+    assert_eq!(snapshot.parameters["posting_encoding"], "source");
 }
 
 #[tokio::test]

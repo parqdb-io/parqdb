@@ -6,6 +6,7 @@ import parqdb
 import pyarrow
 from _support import (
     WAIT,
+    artifact_manifest_location,
     drop_table_index_entry,
     load_table_index,
     register_source,
@@ -104,16 +105,17 @@ def test_python_api_catalog_recovery_example(tmp_path: Path) -> None:
         "documents_embedding",
         column="embedding",
         key=["id"],
-        config=parqdb.IVF(nlist=1),
+        config=parqdb.IVF(nlist=1, encoding="lvq8"),
         wait_timeout=WAIT,
     )
 
     entry = load_table_index(session, documents, "documents_embedding")
+    manifest_location = artifact_manifest_location(entry, session.warehouse)
     drop_table_index_entry(session, documents, "documents_embedding")
     register_table_index(
         documents,
         "recovered_index",
-        entry.metadata_location,
+        manifest_location,
     )
 
     assert [index.name for index in documents.list_indexes()] == ["recovered_index"]

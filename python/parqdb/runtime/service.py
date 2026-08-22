@@ -214,18 +214,18 @@ class SessionService:
         identifier: TableIdentifier,
         index: str,
         *,
-        metadata_location: str,
+        manifest_location: str,
     ) -> None:
         self._ensure_open()
-        if not isinstance(metadata_location, str) or not metadata_location:
-            raise ValueError("metadata_location must be a non-empty string")
+        if not isinstance(manifest_location, str) or not manifest_location:
+            raise ValueError("manifest_location must be a non-empty string")
         source = await self._source_reference(identifier)
         await asyncio.to_thread(
             self._host._native.register_index,
             source,
             _index_namespace(identifier),
             index,
-            metadata_location,
+            manifest_location,
         )
 
     async def refresh_index(

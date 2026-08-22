@@ -199,12 +199,12 @@ class AsyncSourceTable:
         self,
         index: str,
         *,
-        metadata_location: str,
+        manifest_location: str,
     ) -> None:
         await self._session._transport.register_index(
             self.identifier,
             index,
-            metadata_location=metadata_location,
+            manifest_location=manifest_location,
         )
 
     async def refresh_index(
@@ -421,14 +421,14 @@ class SourceTable:
         self,
         index: str,
         *,
-        metadata_location: str,
+        manifest_location: str,
     ) -> None:
         _run_sync(
             self._session,
             self._session._async._transport.register_index(
                 self.identifier,
                 index,
-                metadata_location=metadata_location,
+                manifest_location=manifest_location,
             ),
         )
 

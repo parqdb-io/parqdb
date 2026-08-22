@@ -72,7 +72,7 @@ impl Warehouse {
     /// Reads an absolute location through this warehouse's storage registry.
     ///
     /// Unlike [`Self::read`], the location need not be below the managed
-    /// warehouse root. This is used to inspect immutable packages before they
+    /// warehouse root. This is used to inspect immutable artifacts before they
     /// are registered in a catalog.
     pub async fn read_external(&self, location: &str) -> Result<Bytes> {
         let resolved = self.registry.resolve(location)?;

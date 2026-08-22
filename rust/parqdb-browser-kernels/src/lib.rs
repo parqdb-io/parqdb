@@ -1,4 +1,4 @@
-//! Small WebAssembly ABI for static-package distance and bounded top-k search.
+//! Small WebAssembly ABI for immutable-artifact distance and bounded top-k search.
 
 #[cfg(any(target_arch = "wasm32", test))]
 use std::cmp::Ordering;

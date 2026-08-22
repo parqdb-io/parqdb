@@ -1,5 +1,6 @@
 //! Portable `ParqDB` index metadata types and format validation.
 
+mod artifact_manifest;
 mod error;
 mod family;
 mod ivf_centroids;
@@ -7,8 +8,13 @@ mod metadata;
 mod postings_manifest;
 mod relation;
 mod serde_helpers;
-mod static_package;
 
+pub use artifact_manifest::{
+    IndexArtifactManifest, JSON_SAFE_INTEGER_MAX, StaticEmbeddingDescriptor,
+    StaticEmbeddingParityProbe, StaticIndexDescriptor, StaticIndexHierarchy, StaticIndexObject,
+    StaticIndexPostings, StaticPostingsFile, StaticSourceDescriptor, StaticSourceFile,
+    StaticSourceKeyField,
+};
 pub use error::{Error, Result};
 pub use family::{IVF_SCHEMA_VERSION, PostingEncoding, ivf_centroids_reference};
 pub use ivf_centroids::{
@@ -21,7 +27,3 @@ pub use metadata::{
 };
 pub use postings_manifest::{IvfPostingsFile, IvfPostingsManifest};
 pub use relation::RelationReference;
-pub use static_package::{
-    JSON_SAFE_INTEGER_MAX, StaticIndexDescriptor, StaticIndexHierarchy, StaticIndexObject,
-    StaticIndexPackageManifest, StaticIndexPostings, StaticPostingsFile, StaticSourceKeyField,
-};

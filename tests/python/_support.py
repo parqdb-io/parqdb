@@ -119,12 +119,19 @@ def load_table_index(
 def register_table_index(
     table: parqdb.SourceTable,
     index: str,
-    metadata_location: str,
+    manifest_location: str,
 ) -> None:
     table.register_index(
         index,
-        metadata_location=metadata_location,
+        manifest_location=manifest_location,
     )
+
+
+def artifact_manifest_location(entry: CatalogEntry, warehouse: str) -> str:
+    snapshot = entry.metadata["snapshots"][0]
+    reference = snapshot["index-relations"]["artifact_manifest"]
+    assert isinstance(reference, str)
+    return urljoin(warehouse.rstrip("/") + "/", reference)
 
 
 def drop_table_index_entry(

@@ -182,11 +182,10 @@ def test_publish_static_index_to_s3(
         assert result.destination == destination
         assert result.files > 1
         assert (
-            filesystem.get_file_info(f"{prefix}/index/manifest.json").type
-            == fs.FileType.File
+            filesystem.get_file_info(f"{prefix}/manifest.json").type == fs.FileType.File
         )
         assert (
-            filesystem.get_file_info(f"{prefix}/source-manifest.json").type
+            filesystem.get_file_info(f"{prefix}/documents.parquet").type
             == fs.FileType.File
         )
     finally:

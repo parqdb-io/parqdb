@@ -96,15 +96,34 @@ fn validate_ivf(snapshot: &IndexSnapshot) -> Result<()> {
         return invalid("IVF metric must be l2_squared or cosine");
     }
 
-    let expected_parameters = [
-        "dimension",
-        "nlist",
-        "ntotal",
-        "posting_encoding",
-        "ivf_centroids_fingerprint",
-        "ivf_centroids_uuid",
-        "ivf_centroids_metadata_location",
-    ];
+    let posting_encoding = snapshot
+        .parameters
+        .get("posting_encoding")
+        .and_then(|value| PostingEncoding::from_metadata(value))
+        .ok_or_else(|| crate::Error::new("invalid IVF posting_encoding parameter"))?;
+    let artifact_layout = matches!(
+        posting_encoding,
+        PostingEncoding::Lvq4 | PostingEncoding::Lvq8
+    );
+    let expected_parameters: &[&str] = if artifact_layout {
+        &[
+            "artifact_uuid",
+            "dimension",
+            "nlist",
+            "ntotal",
+            "posting_encoding",
+        ]
+    } else {
+        &[
+            "dimension",
+            "nlist",
+            "ntotal",
+            "posting_encoding",
+            "ivf_centroids_fingerprint",
+            "ivf_centroids_uuid",
+            "ivf_centroids_metadata_location",
+        ]
+    };
     if snapshot.parameters.len() != expected_parameters.len()
         || snapshot
             .parameters
@@ -119,22 +138,27 @@ fn validate_ivf(snapshot: &IndexSnapshot) -> Result<()> {
     if u64::try_from(snapshot.indexed_rows).ok() != Some(ntotal) {
         return invalid("indexed-rows must match the IVF ntotal parameter");
     }
-    if snapshot
-        .parameters
-        .get("posting_encoding")
-        .and_then(|value| PostingEncoding::from_metadata(value))
-        .is_none()
-    {
-        return invalid("invalid IVF posting_encoding parameter");
-    }
     if nlist > ntotal {
         return invalid("nlist must not exceed ntotal");
     }
-    ivf_centroids_reference(snapshot)?;
-
-    let expected_relations = ["ivf_centroids", "ivf_postings"];
-    if !snapshot.index_relations.contains_key(expected_relations[0])
-        || !snapshot.index_relations.contains_key(expected_relations[1])
+    let expected_relations: &[&str] = if artifact_layout {
+        let artifact_uuid = snapshot
+            .parameters
+            .get("artifact_uuid")
+            .ok_or_else(|| crate::Error::new("missing parameter: artifact_uuid"))?;
+        let artifact_uuid = Uuid::parse_str(artifact_uuid)
+            .map_err(|_| crate::Error::new("invalid parameter: artifact_uuid"))?;
+        if artifact_uuid.is_nil() {
+            return invalid("artifact_uuid must not be nil");
+        }
+        &["artifact_manifest"]
+    } else {
+        ivf_centroids_reference(snapshot)?;
+        &["ivf_centroids", "ivf_postings"]
+    };
+    if expected_relations
+        .iter()
+        .any(|role| !snapshot.index_relations.contains_key(*role))
         || snapshot
             .index_relations
             .keys()

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import httpx
 
-from .publish import build_index, parse_asset, publish
+from .publish import build_index, publish
 from .server import create_app
 from .server.config import (
     DEFAULT_CONFIG_FILENAME,
@@ -63,11 +63,10 @@ def _parser() -> argparse.ArgumentParser:
 
     publish_command = commands.add_parser(
         "publish",
-        help="build and publish a browser-queryable source table and static index",
+        help="build and publish an immutable browser-queryable index artifact",
         description=(
-            "Build or reuse an immutable IVF-LVQ index, then publish it with its "
-            "source Parquet file. Choose --index-manifest, --vector-column, or one "
-            "or more --text-column options."
+            "Build or reuse an immutable IVF-LVQ index artifact. Source data and "
+            "the embedding model are published only when explicitly requested."
         ),
     )
     publish_command.add_argument(
@@ -87,7 +86,7 @@ def _parser() -> argparse.ArgumentParser:
         "--index-manifest",
         type=Path,
         metavar="PATH",
-        help="reuse an existing static index",
+        help="reuse an existing index artifact",
     )
     publish_command.add_argument(
         "--vector-column", metavar="COLUMN", help="build from an existing vector column"
@@ -134,10 +133,14 @@ def _parser() -> argparse.ArgumentParser:
         help="resumable build directory (default: .parqdb-publish)",
     )
     publish_command.add_argument(
-        "--asset",
-        action="append",
-        default=[],
-        metavar="REMOTE_PATH=LOCAL_PATH",
+        "--include-source",
+        action="store_true",
+        help="publish the source Parquet file for browser payload lookup",
+    )
+    publish_command.add_argument(
+        "--include-model",
+        action="store_true",
+        help="publish the pinned embedding model used by --text-column",
     )
     publish_command.add_argument("--s3-endpoint", metavar="HTTPS_URL")
     publish_command.add_argument("--s3-region", metavar="REGION")
@@ -152,8 +155,9 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _publish(arguments: argparse.Namespace) -> int:
-    assets = tuple(parse_asset(value) for value in arguments.asset)
     index_manifest = arguments.index_manifest
+    embedding = None
+    model_assets: tuple[tuple[str, Path], ...] = ()
     if index_manifest is None:
         if arguments.nlist is None or arguments.nlist <= 0:
             raise ValueError("--nlist must be positive when building an index")
@@ -171,19 +175,24 @@ def _publish(arguments: argparse.Namespace) -> int:
             embedding_batch_size=arguments.embedding_batch_size,
         )
         index_manifest = built.manifest
-        assets = (*assets, *built.model_assets)
+        if arguments.include_model:
+            embedding = built.embedding
+            model_assets = built.model_assets
     elif arguments.vector_column is not None or arguments.text_column:
         raise ValueError(
             "--index-manifest cannot be combined with --vector-column or --text-column"
         )
-    print("Publishing source, index, and assets…", file=sys.stderr, flush=True)
+    if arguments.include_model and embedding is None:
+        raise ValueError("--include-model requires an index built with --text-column")
+    print("Publishing immutable index artifact…", file=sys.stderr, flush=True)
     result = publish(
         index_manifest=index_manifest,
-        source=arguments.source,
-        source_key=arguments.key,
         destination=arguments.destination,
+        source=arguments.source if arguments.include_source else None,
+        source_key=arguments.key if arguments.include_source else None,
+        embedding=embedding,
+        model_assets=model_assets,
         public_url=arguments.public_url,
-        assets=assets,
         s3_endpoint=arguments.s3_endpoint,
         s3_region=arguments.s3_region,
         verify_http=not arguments.no_verify_http,

@@ -88,7 +88,7 @@ class _NativeSession:
         source: str,
         index_namespace: Sequence[str],
         name: str,
-        metadata_location: str,
+        manifest_location: str,
     ) -> None: ...
     def select_index_metadata(
         self,

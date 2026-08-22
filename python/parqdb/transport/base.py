@@ -67,7 +67,7 @@ class SessionTransport(Protocol):
         identifier: TableIdentifier,
         index: str,
         *,
-        metadata_location: str,
+        manifest_location: str,
     ) -> None: ...
 
     async def refresh_index(
@@ -238,12 +238,12 @@ class InProcessTransport:
         identifier: TableIdentifier,
         index: str,
         *,
-        metadata_location: str,
+        manifest_location: str,
     ) -> None:
         await self._service.register_index(
             identifier,
             index,
-            metadata_location=metadata_location,
+            manifest_location=manifest_location,
         )
 
     async def drop_index(self, identifier: TableIdentifier, index: str) -> None:

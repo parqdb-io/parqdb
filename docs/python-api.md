@@ -139,23 +139,20 @@ normalize vectors before using squared Euclidean ranking.
 
 ## Register a Published Index
 
-An existing index can be attached without rebuilding or copying data when its
-metadata and Parquet relations are already present in the session warehouse:
+An immutable index artifact can be attached without rebuilding or copying its
+objects. The artifact may live outside the session warehouse:
 
 ```python
 documents.register_index(
     "documents_embedding",
-    metadata_location=(
-        "s3://shared-parqdb/metadata/"
-        "2f1c7f5e-3c43-4a44-8f2a-cf560c4db8d1/v1.metadata.json"
-    ),
+    manifest_location="s3://shared-parqdb/wiki/v1/manifest.json",
 )
 ```
 
 The selected table supplies the source binding. Registration validates the
-source schema and row count, centroid metadata, postings schema, and every
-warehouse-relative location before atomically creating the catalog entry. A
-session has one warehouse; there is no per-index root parameter.
+source schema and row count, the manifest identity, leaf centroids, postings
+schema, and explicit object boundaries before atomically creating the catalog
+entry. Registration and query do not list the artifact prefix.
 
 ## Index Lifecycle
 

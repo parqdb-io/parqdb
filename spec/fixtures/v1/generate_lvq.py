@@ -22,7 +22,7 @@ IVF_CENTROIDS_UUIDS = {
     "lvq4": "ac413538-8613-4ed5-8411-a9579eda38da",
     "lvq8": "269b3fe5-0fb3-48f9-85cc-78863622bb48",
 }
-PACKAGE_UUIDS = {
+ARTIFACT_UUIDS = {
     "lvq4": "849bc22f-7f83-5faf-a2c9-6becd8f6482c",
     "lvq8": "24691ca8-c58e-51d4-bbed-c78ba6fedb62",
 }
@@ -230,7 +230,6 @@ def write_fixture(encoding: str) -> None:
     pq.write_table(centroids, directory / "ivf_centroids.parquet", compression="NONE")
     pq.write_table(roots, directory / "ivf_roots.parquet", compression="NONE")
     pq.write_table(centroids, directory / "centroids.parquet", compression="NONE")
-    pq.write_table(roots, directory / "roots.parquet", compression="NONE")
     bucket = postings_root / "cid_bucket=000000"
     bucket.mkdir(parents=True)
     path = bucket / "part-00000.parquet"
@@ -240,27 +239,7 @@ def write_fixture(encoding: str) -> None:
         if rows.num_rows:
             writer.write_table(rows, row_group_size=rows.num_rows)
     writer.close()
-    write_json(
-        postings_root / "manifest.json",
-        {
-            "format-version": 1,
-            "nlist": 2,
-            "ntotal": postings.num_rows,
-            "cid-offsets": [0, 2],
-            "files": [
-                {
-                    "path": "cid_bucket=000000/part-00000.parquet",
-                    "cid-bucket": 0,
-                    "min-cid": 0,
-                    "max-cid": 1,
-                    "rows": postings.num_rows,
-                    "size": path.stat().st_size,
-                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-                }
-            ],
-        },
-    )
-    static_files = [
+    artifact_files = [
         {
             "path": "ivf_postings/cid_bucket=000000/part-00000.parquet",
             "cid-bucket": 0,
@@ -272,7 +251,7 @@ def write_fixture(encoding: str) -> None:
         }
     ]
 
-    def static_object(name: str) -> dict[str, object]:
+    def artifact_object(name: str) -> dict[str, object]:
         object_path = directory / name
         return {
             "path": name,
@@ -284,8 +263,9 @@ def write_fixture(encoding: str) -> None:
         directory / "manifest.json",
         {
             "format-version": 1,
-            "package-uuid": PACKAGE_UUIDS[encoding],
+            "artifact-uuid": ARTIFACT_UUIDS[encoding],
             "index": {
+                "vector-field": "embedding",
                 "metric": "l2_squared",
                 "posting-encoding": encoding,
                 "dimension": 3,
@@ -294,13 +274,11 @@ def write_fixture(encoding: str) -> None:
                 "source-key-fields": [{"name": "document_id", "type": "string"}],
             },
             "hierarchy": {
-                "root-count": 1,
                 "cid-offsets": [0, 2],
                 "centroid-encoding": "lvq8",
-                "roots": static_object("roots.parquet"),
-                "centroids": static_object("centroids.parquet"),
+                "centroids": artifact_object("centroids.parquet"),
             },
-            "postings": {"files": static_files},
+            "postings": {"files": artifact_files},
         },
     )
     write_json(directory / "metadata.json", metadata(encoding))

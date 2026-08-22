@@ -8339,7 +8339,7 @@
     },
     {
       "bom-ref": "pkg:cargo/parqdb-browser-kernels@0.2.0-rc.3",
-      "description": "WebAssembly distance and bounded top-k kernels for ParqDB static packages",
+      "description": "WebAssembly distance and bounded top-k kernels for ParqDB index artifacts",
       "externalReferences": [
         {
           "type": "vcs",

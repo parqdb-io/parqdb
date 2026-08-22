@@ -6,11 +6,11 @@ from pathlib import Path
 import parqdb
 import pytest
 from _support import (
+    artifact_manifest_location,
     drop_table_index_entry,
     load_table_index,
     register_source,
     register_table_index,
-    relation_files,
     write_vectors,
 )
 
@@ -85,20 +85,15 @@ def test_catalog_drop_and_register_recover_an_existing_index(
         "vectors_embedding",
         column="embedding",
         key=["id"],
-        config=parqdb.IVF(nlist=1),
+        config=parqdb.IVF(nlist=1, encoding="lvq8"),
         wait_timeout=timedelta(seconds=30),
     )
     entry = load_table_index(session, vectors, "vectors_embedding")
-    index_files = [
-        path
-        for reference in entry.metadata["snapshots"][0]["index-relations"].values()
-        for path in relation_files(reference, session.warehouse)
-    ]
+    manifest_location = artifact_manifest_location(entry, session.warehouse)
 
     drop_table_index_entry(session, vectors, "vectors_embedding")
 
     assert vectors.list_indexes() == []
-    assert all(path.exists() for path in index_files)
     with pytest.raises(parqdb.IndexNotFoundError):
         vectors.index_status("vectors_embedding")
     with pytest.raises(parqdb.IndexNotFoundError):
@@ -107,18 +102,22 @@ def test_catalog_drop_and_register_recover_an_existing_index(
     register_table_index(
         vectors,
         "vectors_embedding",
-        entry.metadata_location,
+        manifest_location,
     )
 
-    assert load_table_index(session, vectors, "vectors_embedding") == entry
+    registered = load_table_index(session, vectors, "vectors_embedding")
+    assert (
+        registered.metadata["snapshots"][0]["parameters"]["artifact_uuid"]
+        == (entry.metadata["snapshots"][0]["parameters"]["artifact_uuid"])
+    )
     recovered = vectors.index_status("vectors_embedding")
     assert recovered.state == "ready"
-    assert recovered.current_snapshot_id == entry.metadata["current-snapshot-id"]
+    assert recovered.current_snapshot_id is not None
     with pytest.raises(parqdb.AlreadyExistsError):
         register_table_index(
             vectors,
             "vectors_embedding",
-            entry.metadata_location,
+            manifest_location,
         )
 
 
@@ -133,7 +132,7 @@ def test_catalogs_share_indexes_through_one_warehouse(tmp_path: Path) -> None:
         "vectors_embedding",
         column="embedding",
         key=["id"],
-        config=parqdb.IVF(nlist=1),
+        config=parqdb.IVF(nlist=1, encoding="lvq8"),
         wait_timeout=timedelta(seconds=30),
     )
     published = load_table_index(
@@ -141,17 +140,21 @@ def test_catalogs_share_indexes_through_one_warehouse(tmp_path: Path) -> None:
         published_vectors,
         "vectors_embedding",
     )
+    manifest_location = artifact_manifest_location(published, publisher.warehouse)
 
     consumer = parqdb.connect(tmp_path / "consumer", warehouse=warehouse)
     consumed_vectors = register_source(consumer, source)
     register_table_index(
         consumed_vectors,
         "vectors_embedding",
-        published.metadata_location,
+        manifest_location,
     )
 
     consumed = load_table_index(consumer, consumed_vectors, "vectors_embedding")
-    assert consumed == published
+    assert (
+        consumed.metadata["snapshots"][0]["parameters"]["artifact_uuid"]
+        == (published.metadata["snapshots"][0]["parameters"]["artifact_uuid"])
+    )
     assert consumer.collect(consumed_vectors.search([0.0, 0.0]).limit(1))[
         "id"
     ].to_pylist() == [0]
