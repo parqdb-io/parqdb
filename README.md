@@ -21,7 +21,7 @@
     <a href="https://search.parqdb.io/">Browser Demo</a> |
     <a href="#quick-start">Quick Start</a> |
     <a href="#status">Status</a> |
-    <a href="#documentation">Documentation</a>
+    <a href="https://parqdb.io/docs">Documentation</a>
   </p>
 </div>
 
@@ -125,7 +125,7 @@ print(summary.to_pydict())
 ```
 
 The packaged dataset makes this example self-contained. The
-[getting-started guide](https://github.com/parqdb-io/parqdb/blob/main/docs/getting-started.md)
+[getting-started guide](https://parqdb.io/docs/getting-started)
 covers persistent tables, existing indexes, query inspection, and source schema
 requirements.
 
@@ -177,25 +177,28 @@ The first supported product surface is the embedded DataFusion runtime. The
 index specification remains independent of that runtime; distributed engine
 adapters are no longer bundled into the Python package.
 
-See the [local guide](https://github.com/parqdb-io/parqdb/blob/main/docs/guides/local.md)
+See the [embedded guide](https://parqdb.io/docs/guides/embedded)
 for installation and configuration.
 
 The experimental HTTP server is documented in the
-[server guide](https://github.com/parqdb-io/parqdb/blob/main/docs/guides/server.md).
+[server guide](https://parqdb.io/docs/guides/server).
 
 ## Documentation
 
-- [Getting started](https://github.com/parqdb-io/parqdb/blob/main/docs/getting-started.md)
+Public documentation is maintained at [parqdb.io/docs](https://parqdb.io/docs).
+Use the version selector there to switch between `latest` and release snapshots.
+
+- [Getting started](https://parqdb.io/docs/getting-started)
   and [Python examples](https://github.com/parqdb-io/parqdb/tree/main/examples/python)
-- [Core concepts](https://github.com/parqdb-io/parqdb/blob/main/docs/concepts.md),
-  [architecture](https://github.com/parqdb-io/parqdb/blob/main/docs/architecture.md),
+- [Core concepts](https://parqdb.io/docs/concepts),
+  [architecture](https://parqdb.io/docs/project/architecture),
   and [open index specification](https://github.com/parqdb-io/parqdb/blob/main/spec/README.md)
-- [Python API](https://github.com/parqdb-io/parqdb/blob/main/docs/python-api.md)
-  and [configuration](https://github.com/parqdb-io/parqdb/blob/main/docs/configuration.md),
-  including the [server guide](https://github.com/parqdb-io/parqdb/blob/main/docs/guides/server.md)
-- [Current limitations](https://github.com/parqdb-io/parqdb/blob/main/docs/limitations.md),
-  [troubleshooting](https://github.com/parqdb-io/parqdb/blob/main/docs/troubleshooting.md),
-  and [roadmap](https://github.com/parqdb-io/parqdb/blob/main/docs/roadmap.md)
+- [Python API](https://parqdb.io/docs/reference/python)
+  and [configuration](https://parqdb.io/docs/reference/configuration),
+  including the [server guide](https://parqdb.io/docs/guides/server)
+- [Current limitations](https://parqdb.io/docs/reference/limitations),
+  [troubleshooting](https://parqdb.io/docs/reference/troubleshooting),
+  and [roadmap](https://parqdb.io/docs/project/roadmap)
 
 ## TEngineDB-V and ParqDB
 
