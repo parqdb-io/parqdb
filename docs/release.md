@@ -14,15 +14,15 @@ the two manifests:
 
 | Purpose | First candidate | Final release |
 | --- | --- | --- |
-| Python package | `0.1.0rc1` | `0.1.0` |
-| Cargo workspace | `0.1.0-rc.1` | `0.1.0` |
-| Git tag | `v0.1.0rc1` | `v0.1.0` |
-| GitHub release | `ParqDB 0.1.0rc1` (pre-release) | `ParqDB 0.1.0` |
+| Python package | `0.3.0rc1` | `0.3.0` |
+| Cargo workspace | `0.3.0-rc.1` | `0.3.0` |
+| Git tag | `v0.3.0rc1` | `v0.3.0` |
+| GitHub release | `ParqDB 0.3.0rc1` (pre-release) | `ParqDB 0.3.0` |
 
-The first public package is `0.1.0rc1`. At that point the 0.1 feature and API
-scope is frozen; only release-blocking fixes are expected before `0.1.0`. A
-fix after publication produces `0.1.0rc2`, never a replacement artifact under
-the `0.1.0rc1` version.
+Publishing a release candidate freezes that release's feature and API scope;
+only release-blocking fixes are expected before the final release. A fix after
+publication produces a new candidate version, never a replacement artifact
+under an existing version.
 
 ## Branching Model
 
@@ -41,11 +41,11 @@ All candidates, final releases, and patches in a release series use the same
 branch. Annotated tags identify exact releases, for example:
 
 ```text
-release/0.1
-  v0.1.0rc1
-  v0.1.0rc2
-  v0.1.0
-  v0.1.1
+release/0.3
+  v0.3.0rc1
+  v0.3.0rc2
+  v0.3.0
+  v0.3.1
 ```
 
 Do not create a branch for each candidate, such as `release/0.1.0rc1`. When no
@@ -92,7 +92,7 @@ SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)" make verify-package
 ```
 
 Build and test every advertised Python/platform combination on that platform.
-The proposed 0.1 target is standard CPython 3.11 through 3.14 using one ABI3
+The current target is standard CPython 3.11 through 3.14 using one ABI3
 wheel for Linux x86_64 (`manylinux_2_28`) and one for macOS arm64 (macOS 11 or
 later), as defined by
 [`0009-python-abi3-wheels.md`](decisions/0009-python-abi3-wheels.md). Install the
@@ -101,7 +101,7 @@ and run the installed-package core suite plus optional-dependency smoke checks.
 The service-backed integration gates run separately in the canonical Python
 3.12 environment. Do not advertise a Python minor until its complete matrix is
 green. Free-threaded CPython requires separate artifacts and is not part of the
-0.1 target.
+current target.
 
 `make verify-package` regenerates the locked CycloneDX SBOM, builds the wheel,
 and validates package metadata, license files, typing markers, the native
@@ -119,14 +119,14 @@ verifies both platform wheels, publishes them together, and retains the exact
 wheels and `SHA256SUMS` as one GitHub Actions artifact.
 
 1. Create and push the annotated tag using the canonical Python version, for
-   example `v0.1.0rc1` or `v0.1.0`, on the verified commit.
+   example `v0.3.0rc1` or `v0.3.0`, on the verified commit.
 2. Require the `Release` workflow to complete successfully. Do not upload
    another build manually when the workflow fails.
 3. Download the `release-<tag>` workflow artifact and create the GitHub release
    from the changelog entry. Attach the two wheels and `SHA256SUMS`, and mark
    release candidates as pre-releases.
 4. Verify the exact version from PyPI in a new environment, for example with
-   `python -m pip install parqdb==0.1.0rc1`.
+   `python -m pip install parqdb==0.3.0`.
 5. Restore an empty `Unreleased` section in the changelog.
 
 Do not rebuild artifacts after tagging. If verification fails, fix the issue
