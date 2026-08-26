@@ -1,8 +1,10 @@
 <div align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/parqdb-io/parqdb/main/assets/parqdb/logo-dark.svg">
-    <img src="https://raw.githubusercontent.com/parqdb-io/parqdb/main/assets/parqdb/logo.svg" alt="ParqDB" width="520">
-  </picture>
+  <a href="https://parqdb.io/">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/parqdb-io/parqdb/main/assets/parqdb/logo-dark.svg">
+      <img src="https://raw.githubusercontent.com/parqdb-io/parqdb/main/assets/parqdb/logo.svg" alt="ParqDB" width="520">
+    </picture>
+  </a>
   <p>
     English |
     <a href="https://github.com/parqdb-io/parqdb/blob/main/README.zh-CN.md">中文</a>
@@ -18,6 +20,7 @@
     <a href="https://github.com/parqdb-io/parqdb/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT%20AND%20Apache--2.0-green.svg"></a>
   </p>
   <p>
+    <a href="https://parqdb.io/"><strong>Website</strong></a> |
     <a href="https://search.parqdb.io/">Browser Demo</a> |
     <a href="#quick-start">Quick Start</a> |
     <a href="#status">Status</a> |
@@ -192,7 +195,7 @@ Use the version selector there to switch between `latest` and release snapshots.
   and [Python examples](https://github.com/parqdb-io/parqdb/tree/main/examples/python)
 - [Core concepts](https://parqdb.io/docs/concepts),
   [architecture](https://parqdb.io/docs/project/architecture),
-  and [open index specification](https://github.com/parqdb-io/parqdb/blob/main/spec/README.md)
+  and [open index specification](https://parqdb.io/docs/spec)
 - [Python API](https://parqdb.io/docs/reference/python)
   and [configuration](https://parqdb.io/docs/reference/configuration),
   including the [server guide](https://parqdb.io/docs/guides/server)

@@ -1,8 +1,10 @@
 <div align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/parqdb-io/parqdb/main/assets/parqdb/logo-dark.svg">
-    <img src="https://raw.githubusercontent.com/parqdb-io/parqdb/main/assets/parqdb/logo.svg" alt="ParqDB" width="520">
-  </picture>
+  <a href="https://parqdb.io/">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/parqdb-io/parqdb/main/assets/parqdb/logo-dark.svg">
+      <img src="https://raw.githubusercontent.com/parqdb-io/parqdb/main/assets/parqdb/logo.svg" alt="ParqDB" width="520">
+    </picture>
+  </a>
   <p>
     <a href="https://github.com/parqdb-io/parqdb/blob/main/README.md">English</a> |
     中文
@@ -18,6 +20,7 @@
     <a href="https://github.com/parqdb-io/parqdb/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT%20AND%20Apache--2.0-green.svg"></a>
   </p>
   <p>
+    <a href="https://parqdb.io/"><strong>官网</strong></a> |
     <a href="https://search.parqdb.io/">浏览器演示</a> |
     <a href="#快速开始">快速开始</a> |
     <a href="#当前状态">当前状态</a> |
@@ -163,23 +166,26 @@ HTTP Range 和 CORS 行为。
 首个正式支持的产品形态是内嵌 DataFusion 运行时。索引规范仍独立于该运行
 时；Python 包不再内置分布式计算引擎适配器。
 
-安装和配置参见[本地 DataFusion 指南](https://github.com/parqdb-io/parqdb/blob/main/docs/guides/local.md)。
+安装和配置参见[嵌入式运行指南](https://parqdb.io/docs/guides/embedded)。
 实验性的 HTTP 服务端部署参见
-[Server guide](https://github.com/parqdb-io/parqdb/blob/main/docs/guides/server.md)。
+[Server guide](https://parqdb.io/docs/guides/server)。
 
 ## 文档
 
-- [入门指南](https://github.com/parqdb-io/parqdb/blob/main/docs/getting-started.md)
+公共文档在 [parqdb.io/docs](https://parqdb.io/docs) 独立维护，可通过版本选择器
+切换 `latest` 和历史版本快照。
+
+- [入门指南](https://parqdb.io/docs/getting-started)
   和 [Python 示例](https://github.com/parqdb-io/parqdb/tree/main/examples/python)
-- [核心概念](https://github.com/parqdb-io/parqdb/blob/main/docs/concepts.md)、
-  [系统架构](https://github.com/parqdb-io/parqdb/blob/main/docs/architecture.md)和
-  [开放索引规范](https://github.com/parqdb-io/parqdb/blob/main/spec/README.md)
-- [Python API](https://github.com/parqdb-io/parqdb/blob/main/docs/python-api.md)
-  和[配置说明](https://github.com/parqdb-io/parqdb/blob/main/docs/configuration.md)，包括
-  [Server guide](https://github.com/parqdb-io/parqdb/blob/main/docs/guides/server.md)
-- [当前限制](https://github.com/parqdb-io/parqdb/blob/main/docs/limitations.md)、
-  [故障排查](https://github.com/parqdb-io/parqdb/blob/main/docs/troubleshooting.md)和
-  [路线图](https://github.com/parqdb-io/parqdb/blob/main/docs/roadmap.md)
+- [核心概念](https://parqdb.io/docs/concepts)、
+  [系统架构](https://parqdb.io/docs/project/architecture)和
+  [开放索引规范](https://parqdb.io/docs/spec)
+- [Python API](https://parqdb.io/docs/reference/python)
+  和[配置说明](https://parqdb.io/docs/reference/configuration)，包括
+  [Server guide](https://parqdb.io/docs/guides/server)
+- [当前限制](https://parqdb.io/docs/reference/limitations)、
+  [故障排查](https://parqdb.io/docs/reference/troubleshooting)和
+  [路线图](https://parqdb.io/docs/project/roadmap)
 
 ## TEngineDB-V 与 ParqDB
 
