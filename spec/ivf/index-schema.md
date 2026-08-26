@@ -7,7 +7,7 @@ Supported metrics are `l2_squared` and `cosine`. Supported postings encodings
 are `source`, `lvq4`, and `lvq8`.
 
 An IVF index references one immutable centroid artifact and owns exactly one
-postings relation. Logical indexes over the same source state, vector field,
+postings table. Logical indexes over the same source state, vector field,
 dimension, metric, cluster count, and clustering profile may reference the
 same centroid artifact. They never share postings.
 
@@ -30,11 +30,11 @@ a positive integer, without a sign or leading zero. `dimension` and `nlist`
 must not exceed `2147483647`; `ntotal` must not exceed
 `9223372036854775807`; and `nlist` must not exceed `ntotal`.
 
-The snapshot contains exactly these index relation roles:
+The snapshot contains exactly these index table roles:
 
 | Role | Definition |
 |---|---|
-| `ivf_centroids` | The centroid relation named by the IVF centroid metadata. |
+| `ivf_centroids` | The centroid table named by the IVF centroid metadata. |
 | `ivf_postings` | The postings owned by this logical index. |
 
 The snapshot's `ivf_centroids` location must equal the centroid metadata's
@@ -72,7 +72,7 @@ source-table binding; the fingerprint itself is source-free.
 
 ## 4. Types
 
-Index relations use these canonical Iceberg types:
+Index tables use these canonical Iceberg types:
 
 | Type | Definition |
 |---|---|
@@ -86,7 +86,7 @@ Index relations use these canonical Iceberg types:
 Source vectors may use `list<float>` or `list<double>`. Implementations convert
 vector elements to finite `float` values before training, assignment, encoding,
 or distance evaluation; a value that is not representable as finite `float` is
-invalid. The source relation itself is not rewritten.
+invalid. The source table itself is not rewritten.
 
 Each `key_i` corresponds to source key field `i` and uses the same canonical
 type and value. Supported source-key types are `boolean`, `int`, `long`,
@@ -129,7 +129,7 @@ The root rows define ordered, adjacent, non-empty ranges that cover `[0, C)`.
 | `scale` | `float` | Required; finite and non-negative LVQ8 scale. |
 | `code` | `binary` | Required; exactly `D` LVQ8 bytes. |
 
-The relation contains exactly `C` rows. Centroid training is implementation
+The table contains exactly `C` rows. Centroid training is implementation
 specific. A source row is assigned to the centroid with the smallest squared
 Euclidean distance to its LVQ8 reconstruction; equal distances select the
 smaller `cid`. Leaf-centroid assignment and query routing both use this
@@ -159,7 +159,7 @@ Additional fields depend on `posting_encoding`:
 | `lvq8` | `offset: float`, `scale: float`, `code: binary` | LVQ8 reconstruction. |
 
 Fields not listed for the selected encoding must be absent. Every postings
-field is required. The relation contains exactly `N` rows, each source key
+field is required. The table contains exactly `N` rows, each source key
 tuple occurs exactly once, and every posting resolves to exactly one source
 row. Row position and physical file order have no semantic meaning.
 
@@ -209,7 +209,7 @@ reconstruction is not normalized again.
 
 ## 8. Source Contract
 
-The source relation contains exactly `N` rows. Its ordered source-key fields
+The source table contains exactly `N` rows. Its ordered source-key fields
 form a unique, non-null key. Its vector field is non-null; every vector has
 exactly `D` non-null elements that produce finite canonical `float` values.
 Cosine vectors additionally have a non-zero norm.
@@ -223,6 +223,6 @@ Writers may rely on source-key uniqueness and are not required to verify it.
 
 Parquet LVQ `code` is stored as `BYTE_ARRAY`; PLAIN encoding without a
 dictionary is recommended. Parquet postings retain physical `cid` and use the
-manifested, root-bucketed layout in the Parquet relation profile. One postings
+manifested, root-bucketed layout in the Parquet provider profile. One postings
 row group contains exactly one CID. File and row-group boundaries are physical
 tuning details subject to those invariants and have no logical identity.

@@ -10,8 +10,8 @@ A source table contains the original vectors and payload columns. ParqDB does
 not copy those rows into a private database. Each indexed source declares one
 or more key columns that join index candidates back to source rows.
 
-The embedded runtime persists Parquet source definitions. Iceberg references
-identify an exact table UUID and snapshot when a PyIceberg catalog is bound.
+The embedded runtime persists provider-neutral source definitions. Parquet is
+the only source-table provider exposed by the Python API in this release.
 
 ## Open Vector Index
 
@@ -45,9 +45,9 @@ not replace registered Parquet files in place while an index depends on them.
 
 Each session has one warehouse URI. Index metadata, centroid data, and postings
 all live below it, and portable metadata stores only warehouse-relative paths.
-Catalog entries do not carry separate roots. Multiple catalogs can attach the
-same published index by using the same warehouse and binding it to their own
-registered source table.
+Catalog entries do not carry separate roots. A published index remains
+portable: another session can register the same manifest in its own catalog
+while using the same warehouse.
 
 ## Session and Execution
 

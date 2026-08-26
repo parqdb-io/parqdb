@@ -16,9 +16,9 @@ from _support import (
 )
 
 
-def test_connect_rejects_invalid_capabilities(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="non-empty name"):
-        parqdb.connect(tmp_path / "iceberg", iceberg=object())
+def test_connect_rejects_removed_extension_arguments(tmp_path: Path) -> None:
+    with pytest.raises(TypeError, match="unexpected keyword argument 'iceberg'"):
+        parqdb.connect(tmp_path / "iceberg", iceberg=cast(Any, object()))
     with pytest.raises(TypeError, match="unexpected keyword argument 'backend'"):
         parqdb.connect(tmp_path / "backend", backend=cast(Any, object()))
 

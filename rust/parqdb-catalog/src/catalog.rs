@@ -1,4 +1,4 @@
-use parqdb_meta::{IndexMetadata, IvfCentroidsDescriptor, IvfCentroidsMetadata, RelationReference};
+use parqdb_meta::{IndexMetadata, IvfCentroidsDescriptor, IvfCentroidsMetadata, TableDefinition};
 use uuid::Uuid;
 
 use crate::{Error, IndexIdentifier, Result};
@@ -11,7 +11,7 @@ pub struct CatalogEntry {
     /// URI of the current immutable metadata document.
     pub metadata_location: String,
     /// Exact source table associated with this logical index.
-    pub source: RelationReference,
+    pub source: TableDefinition,
 }
 
 /// A metadata document that lost catalog reachability at a known time.
@@ -84,7 +84,7 @@ pub trait IndexCatalog: Send + Sync {
     fn register(
         &self,
         _identifier: &IndexIdentifier,
-        _source: &RelationReference,
+        _source: &TableDefinition,
         _metadata_location: &str,
         _metadata: &IndexMetadata,
     ) -> Result<()> {
@@ -95,7 +95,7 @@ pub trait IndexCatalog: Send + Sync {
     fn commit(
         &self,
         _identifier: &IndexIdentifier,
-        _source: &RelationReference,
+        _source: &TableDefinition,
         _base_metadata_location: &str,
         _new_metadata_location: &str,
         _base_metadata: &IndexMetadata,
@@ -129,7 +129,7 @@ pub trait IndexCatalog: Send + Sync {
     fn find_by_source(
         &self,
         _namespace: &[String],
-        _source: &RelationReference,
+        _source: &TableDefinition,
     ) -> Result<Vec<CatalogEntry>> {
         Err(Error::UnsupportedOperation("find_by_source"))
     }
@@ -151,7 +151,7 @@ pub trait IndexCatalog: Send + Sync {
     /// Loads one ready IVF centroid entry scoped to an exact source table.
     fn load_ivf_centroids(
         &self,
-        _source: &RelationReference,
+        _source: &TableDefinition,
         _fingerprint: &str,
     ) -> Result<IvfCentroidsCatalogEntry> {
         Err(Error::UnsupportedOperation("load_ivf_centroids"))
@@ -160,7 +160,7 @@ pub trait IndexCatalog: Send + Sync {
     /// Claims construction or returns the source-scoped state for one descriptor.
     fn claim_ivf_centroids(
         &self,
-        _source: &RelationReference,
+        _source: &TableDefinition,
         _descriptor: &IvfCentroidsDescriptor,
         _owner: Uuid,
         _lease_duration_ms: i64,

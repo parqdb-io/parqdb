@@ -113,7 +113,6 @@ class InProcessTransport:
         *,
         warehouse: str | None,
         storage_options: Mapping[str, str] | None,
-        iceberg: object | None,
         config: DataFusionSessionConfig | None,
         runtime: RuntimeEnvBuilder | None,
     ) -> InProcessTransport:
@@ -122,7 +121,6 @@ class InProcessTransport:
                 root,
                 warehouse=warehouse,
                 storage_options=storage_options,
-                iceberg=iceberg,
                 config=config,
                 runtime=runtime,
             )

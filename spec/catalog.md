@@ -16,8 +16,8 @@ identifier uses the
 an ordered namespace and a name. Namespace segments and names are non-empty
 UTF-8 strings and are compared as exact sequences of Unicode code points. The
 index catalog name identifies the runtime index catalog and is not part of the
-index identifier. It is distinct from the logical Iceberg catalog name stored
-in an Iceberg relation reference.
+index identifier. It is distinct from any external table catalog used by a
+registered table provider.
 
 This spec does not define a dotted textual representation because catalog,
 namespace, and name segments may require host-specific quoting. Catalog identity

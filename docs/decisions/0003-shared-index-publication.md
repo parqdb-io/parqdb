@@ -5,7 +5,7 @@
 
 ## Context
 
-Index builders produce immutable index relations, but publication has the same
+Index builders produce immutable index tables, but publication has the same
 portable state transition for every execution backend: construct a validated
 metadata document, write it to managed storage, and make it current with a
 catalog register or compare-and-swap commit.
@@ -18,13 +18,13 @@ metadata implicitly Parquet-specific.
 ## Decision
 
 `parqdb-publish` owns immutable metadata storage and catalog publication. It
-accepts a complete `RelationReference`, backend identity, and backend-produced
+accepts a complete `TableDefinition`, backend identity, and backend-produced
 `IndexArtifacts`. It has no dependency on DataFusion, Arrow, Parquet, or a
 construction engine.
 
 Execution backends remain responsible for resolving and scanning source tables,
-building index relations, and choosing their physical execution model. They
-call the shared publisher only after all immutable index relations are
+building index tables, and choosing their physical execution model. They
+call the shared publisher only after all immutable index tables are
 complete.
 
 ## Consequences

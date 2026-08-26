@@ -4,7 +4,7 @@ use parqdb_catalog::{
     CatalogEntry, Error as CatalogError, IndexCatalog, IndexIdentifier, IvfCentroidsCatalogEntry,
 };
 use parqdb_meta::{
-    DistanceMetric, IndexMetadata, IvfCentroidsMetadata, IvfCentroidsReference, RelationReference,
+    DistanceMetric, IndexMetadata, IvfCentroidsMetadata, IvfCentroidsReference, TableDefinition,
     ivf_centroids_reference,
 };
 
@@ -84,7 +84,7 @@ impl IndexRepository {
     /// Loads one ready IVF centroid artifact by fingerprint.
     pub async fn load_ivf_centroids(
         &self,
-        source: &RelationReference,
+        source: &TableDefinition,
         fingerprint: &str,
     ) -> Result<LoadedIvfCentroids> {
         let entry = self.catalog.load_ivf_centroids(source, fingerprint)?;
@@ -94,7 +94,7 @@ impl IndexRepository {
     /// Loads and validates the centroid artifact referenced by a logical index.
     pub async fn load_ivf_centroids_reference(
         &self,
-        source: &RelationReference,
+        source: &TableDefinition,
         reference: &IvfCentroidsReference,
     ) -> Result<LoadedIvfCentroids> {
         reference.validate()?;
@@ -133,9 +133,12 @@ impl IndexRepository {
             Error::InvalidMetadata(format!("unsupported IVF metric: {}", snapshot.metric))
         })?;
         let centroids = snapshot
-            .index_relations
+            .index_tables
             .get("ivf_centroids")
-            .ok_or_else(|| Error::InvalidMetadata("missing relation role: ivf_centroids".into()))?;
+            .ok_or_else(|| Error::InvalidMetadata("missing table role: ivf_centroids".into()))?;
+        let centroids = centroids.properties.get("location").ok_or_else(|| {
+            Error::InvalidMetadata("ivf_centroids table location is missing".into())
+        })?;
         if descriptor.vector_field != snapshot.vector_field
             || usize::try_from(descriptor.dimension).ok()
                 != Some(snapshot.parameter_usize("dimension")?)
@@ -154,7 +157,7 @@ impl IndexRepository {
     pub async fn find_by_source(
         &self,
         namespace: &[String],
-        source: &RelationReference,
+        source: &TableDefinition,
     ) -> Result<Vec<LoadedIndex>> {
         let entries = self.catalog.find_by_source(namespace, source)?;
         let mut loaded = Vec::with_capacity(entries.len());
@@ -169,7 +172,7 @@ impl IndexRepository {
     pub async fn select(
         &self,
         namespace: &[String],
-        source: &RelationReference,
+        source: &TableDefinition,
         identifier: Option<&IndexIdentifier>,
         vector_field: Option<&str>,
     ) -> Result<LoadedIndex> {
@@ -211,7 +214,7 @@ impl IndexRepository {
     pub async fn register(
         &self,
         identifier: &IndexIdentifier,
-        source: &RelationReference,
+        source: &TableDefinition,
         metadata_location: &str,
     ) -> Result<()> {
         let metadata = self.load_unregistered(metadata_location).await?;

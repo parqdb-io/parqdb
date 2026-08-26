@@ -27,9 +27,9 @@ use datafusion::prelude::col;
 use futures::StreamExt;
 use parallite::ParalliteContext;
 use parqdb_meta::{
-    IndexArtifactManifest, IvfCentroidsReference, IvfPostingsManifest, PostingEncoding,
-    RelationReference, StaticIndexDescriptor, StaticIndexHierarchy, StaticIndexPostings,
-    StaticPostingsFile, StaticSourceKeyField,
+    IndexArtifactManifest, IndexProviderDefinition, IndexTableDefinition, IvfCentroidsReference,
+    IvfPostingsManifest, PostingEncoding, StaticIndexDescriptor, StaticIndexHierarchy,
+    StaticIndexPostings, StaticPostingsFile, StaticSourceKeyField,
 };
 #[cfg(test)]
 use parqdb_storage::StorageRegistry;
@@ -81,7 +81,7 @@ pub(crate) struct IvfPostingsSpec<'a> {
     pub config: IvfConfig,
     pub trained: &'a TrainedIvf,
     pub ivf_centroids: &'a IvfCentroidsReference,
-    pub centroids: RelationReference,
+    pub centroids: IndexTableDefinition,
 }
 
 pub(crate) struct PreparedIvf {
@@ -548,7 +548,7 @@ pub(crate) fn reused_ivf(
         .ok_or_else(|| Error::InvalidSchema("IVF centroid shape overflows usize".into()))?;
     if centroids.len() != expected || centroids.iter().any(|value| !value.is_finite()) {
         return Err(Error::InvalidSchema(
-            "IVF centroid relation does not match the build descriptor".into(),
+            "IVF centroid table does not match the build descriptor".into(),
         ));
     }
     if cid_offsets.len() < 2
@@ -569,7 +569,7 @@ pub(crate) fn reused_ivf(
         || root_centroids.iter().any(|value| !value.is_finite())
     {
         return Err(Error::InvalidSchema(
-            "IVF root centroid relation does not match the build descriptor".into(),
+            "IVF root centroid table does not match the build descriptor".into(),
         ));
     }
     Ok(TrainedIvf {
@@ -691,7 +691,7 @@ fn ivf_index_artifacts(
     config: &IvfConfig,
     trained: &TrainedIvf,
     ivf_centroids: &IvfCentroidsReference,
-    centroids: RelationReference,
+    centroids: IndexTableDefinition,
     postings_location: String,
     artifact_manifest: Option<String>,
 ) -> IndexArtifacts {
@@ -704,14 +704,13 @@ fn ivf_index_artifacts(
             config.posting_encoding.as_str().into(),
         ),
     ]);
-    let index_relations = if let Some(manifest_location) = artifact_manifest {
+    let index_tables = if let Some(manifest_location) = artifact_manifest {
         parameters.insert("artifact_uuid".into(), artifact_uuid.to_string());
-        BTreeMap::from([(
-            "artifact_manifest".into(),
-            RelationReference::Parquet {
-                uri: manifest_location,
-            },
-        )])
+        let table = parquet_artifact_table(manifest_location);
+        BTreeMap::from([
+            ("ivf_centroids".into(), table.clone()),
+            ("ivf_postings".into(), table),
+        ])
     } else {
         parameters.extend([
             (
@@ -731,16 +730,15 @@ fn ivf_index_artifacts(
             ("ivf_centroids".into(), centroids),
             (
                 "ivf_postings".into(),
-                RelationReference::Parquet {
-                    uri: postings_location,
-                },
+                parquet_index_table(postings_location),
             ),
         ])
     };
     IndexArtifacts {
         format: IndexFormat::ivf(config.metric),
         parameters,
-        index_relations,
+        index_provider: parquet_index_provider(),
+        index_tables,
     }
 }
 
@@ -1263,18 +1261,14 @@ pub(crate) async fn build_ivf_with_options(
         )
         .await?;
 
-    let index_relations = BTreeMap::from([
+    let index_tables = BTreeMap::from([
         (
             "ivf_centroids".into(),
-            RelationReference::Parquet {
-                uri: centroids_location,
-            },
+            parquet_index_table(centroids_location),
         ),
         (
             "ivf_postings".into(),
-            RelationReference::Parquet {
-                uri: postings_location,
-            },
+            parquet_index_table(postings_location),
         ),
     ]);
     Ok(IndexArtifacts {
@@ -1297,8 +1291,30 @@ pub(crate) async fn build_ivf_with_options(
                 "file:///metadata/fe985f6d-3592-4385-a1ca-71347057a210/v1.metadata.json".into(),
             ),
         ]),
-        index_relations,
+        index_provider: parquet_index_provider(),
+        index_tables,
     })
+}
+
+fn parquet_index_provider() -> IndexProviderDefinition {
+    IndexProviderDefinition::new("parquet", BTreeMap::new())
+        .expect("the built-in Parquet provider definition is valid")
+}
+
+fn parquet_index_table(location: String) -> IndexTableDefinition {
+    IndexTableDefinition::new(1, BTreeMap::from([("location".into(), location)]))
+        .expect("the built-in Parquet table definition is valid")
+}
+
+fn parquet_artifact_table(location: String) -> IndexTableDefinition {
+    IndexTableDefinition::new(
+        1,
+        BTreeMap::from([
+            ("layout".into(), "artifact-manifest".into()),
+            ("location".into(), location),
+        ]),
+    )
+    .expect("the built-in Parquet artifact definition is valid")
 }
 
 #[cfg(test)]

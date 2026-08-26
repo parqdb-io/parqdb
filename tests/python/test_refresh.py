@@ -42,12 +42,12 @@ def test_refresh_reuses_ivf_centroids_for_the_same_immutable_source(
     ):
         assert snapshots[1]["parameters"][field] == snapshots[0]["parameters"][field]
     assert (
-        snapshots[1]["index-relations"]["ivf_centroids"]
-        == snapshots[0]["index-relations"]["ivf_centroids"]
+        snapshots[1]["index-tables"]["ivf_centroids"]
+        == snapshots[0]["index-tables"]["ivf_centroids"]
     )
     assert (
-        snapshots[1]["index-relations"]["ivf_postings"]
-        != snapshots[0]["index-relations"]["ivf_postings"]
+        snapshots[1]["index-tables"]["ivf_postings"]
+        != snapshots[0]["index-tables"]["ivf_postings"]
     )
     assert session.collect(vectors.search([2.0, 0.0]).limit(1))["id"].to_pylist() == [2]
     assert (

@@ -25,7 +25,7 @@ private embedded host
         |        +--> query admission
         |
         +--> SQLite catalog
-        +--> Parquet / Iceberg storage
+        +--> Parquet storage
 ```
 
 The asynchronous service path is authoritative. The blocking facade uses one
@@ -75,7 +75,8 @@ implementation evolves behind that package boundary.
   managed warehouse root.
 - `parqdb-kmeans` owns sampling, training, assignment, and cluster recovery.
 - `parqdb-kernels` owns runtime-selected SIMD and GEMM kernels.
-- `parqdb-iceberg` binds exact Iceberg snapshots to DataFusion providers.
+- `parqdb-iceberg` validates the native table-provider extension boundary with
+  exact Iceberg snapshots; it is not exposed through the Python API.
 - `parallite` provides partitioned local execution for index construction.
 
 Lower-level crates do not depend on Python API types. Metadata and catalog

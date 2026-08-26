@@ -4,6 +4,15 @@ use parqdb_catalog::IndexIdentifier;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    /// An index provider definition, request, or operation is invalid.
+    #[error("invalid index provider: {0}")]
+    InvalidProvider(String),
+    /// A provider does not implement the requested lifecycle operation.
+    #[error("unsupported index provider operation: {0}")]
+    UnsupportedProviderOperation(String),
+    /// `DataFusion` could not plan or open an index table.
+    #[error(transparent)]
+    DataFusion(#[from] datafusion::error::DataFusionError),
     /// Index metadata violates the `ParqDB` specification.
     #[error("invalid index metadata: {0}")]
     InvalidMetadata(String),

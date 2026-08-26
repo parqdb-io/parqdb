@@ -67,12 +67,12 @@ dimension requirements, distance metric, encoding, and artifact schemas. A
 reader validates the registered source's referenced fields against those
 requirements.
 
-Index relations are relative to the session warehouse rather than absolute
+Index tables are relative to the session warehouse rather than absolute
 source or warehouse URIs:
 
 ```json
 {
-  "index-relations": {
+  "index-tables": {
     "ivf-centroids": "centroids/ivf_centroids/",
     "ivf-postings": "snapshots/4820/ivf_postings/"
   }
@@ -165,7 +165,7 @@ Registration performs these steps:
    satisfy the index-family type requirements;
 3. count the rows eligible for indexing and require the result to equal
    `indexed-rows`;
-4. resolve all relative index relations against the warehouse;
+4. resolve all relative index tables against the warehouse;
 5. validate that the centroid and postings relations are permitted, readable,
    and structurally compatible with the metadata;
 6. make the validated centroid ready through the existing centroid lifecycle;

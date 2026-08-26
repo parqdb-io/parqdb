@@ -27,10 +27,6 @@ def test_environment_expands_secrets_and_parses_json(
 ) -> None:
     monkeypatch.setenv("TEST_ACCESS_KEY", "access")
     monkeypatch.setenv("TEST_SECRET_KEY", "secret")
-    monkeypatch.setenv(
-        "TEST_ICEBERG_PROPERTIES",
-        '{"type":"rest","uri":"http://iceberg:8181"}',
-    )
     path = tmp_path / "test-env.toml"
     path.write_text(
         """
@@ -39,10 +35,6 @@ uri = "s3://bucket/prefix"
 endpoint = "http://127.0.0.1:9000"
 access_key = "${TEST_ACCESS_KEY}"
 secret_key = "${TEST_SECRET_KEY}"
-
-[iceberg]
-name = "lakehouse"
-properties_json = "${TEST_ICEBERG_PROPERTIES}"
 
 """,
         encoding="utf-8",
@@ -53,8 +45,6 @@ properties_json = "${TEST_ICEBERG_PROPERTIES}"
     assert environment.s3 is not None
     assert environment.s3.access_key == "access"
     assert environment.s3.secret_key == "secret"
-    assert environment.iceberg is not None
-    assert environment.iceberg.properties["type"] == "rest"
 
 
 def test_environment_rejects_an_unset_placeholder(tmp_path: Path) -> None:

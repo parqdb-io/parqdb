@@ -58,7 +58,6 @@ def create_http_app(
             root,
             warehouse=warehouse,
             storage_options=storage_options,
-            iceberg=None,
             config=config,
             runtime=runtime,
         )

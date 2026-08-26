@@ -3,8 +3,10 @@
 use std::collections::{BTreeMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use datafusion::catalog::Session;
 use object_store::ObjectMeta;
 use parqdb_catalog::{CatalogTombstone, IndexCatalog};
+use parqdb_index::{IndexProviderRegistry, IndexTableRole};
 use parqdb_meta::ivf_centroids_reference;
 use parqdb_storage::Warehouse;
 use uuid::Uuid;
@@ -57,17 +59,22 @@ struct TombstoneReferences {
     references: HashSet<String>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn remove_orphans(
     warehouse: &Warehouse,
     metadata_store: &MetadataStore,
     catalog: &dyn IndexCatalog,
+    index_providers: &IndexProviderRegistry,
+    session: &dyn Session,
     active_roots: &HashSet<String>,
     older_than_ms: i64,
     dry_run: bool,
 ) -> Result<Vec<MaintenanceObject>> {
     let older_than_ms = older_than_ms.min(now_ms()?.saturating_sub(MINIMUM_RETENTION_MS));
-    let tombstones = tombstone_references(warehouse, metadata_store, catalog).await?;
-    let mut reachable = reachable_locations(warehouse, metadata_store, catalog).await?;
+    let tombstones =
+        tombstone_references(warehouse, metadata_store, catalog, index_providers, session).await?;
+    let mut reachable =
+        reachable_locations(warehouse, metadata_store, catalog, index_providers, session).await?;
     reachable.extend(active_roots.iter().cloned());
     let mut verified = HashSet::new();
     for state in &tombstones {
@@ -86,7 +93,8 @@ pub(crate) async fn remove_orphans(
             .collect());
     }
 
-    let mut reachable = reachable_locations(warehouse, metadata_store, catalog).await?;
+    let mut reachable =
+        reachable_locations(warehouse, metadata_store, catalog, index_providers, session).await?;
     reachable.extend(active_roots.iter().cloned());
     for state in &tombstones {
         if state.tombstone.unreachable_since_ms >= older_than_ms {
@@ -153,6 +161,8 @@ async fn tombstone_references(
     warehouse: &Warehouse,
     metadata_store: &MetadataStore,
     catalog: &dyn IndexCatalog,
+    index_providers: &IndexProviderRegistry,
+    session: &dyn Session,
 ) -> Result<Vec<TombstoneReferences>> {
     let mut states = Vec::new();
     for tombstone in catalog.list_tombstones()? {
@@ -162,11 +172,16 @@ async fn tombstone_references(
         }
         match metadata_store.load(&tombstone.metadata_location).await {
             Ok(metadata) => {
-                references.extend(index_metadata_references(
-                    warehouse,
-                    warehouse.root(),
-                    &metadata,
-                )?);
+                references.extend(
+                    index_metadata_references(
+                        warehouse,
+                        warehouse.root(),
+                        &metadata,
+                        index_providers,
+                        session,
+                    )
+                    .await?,
+                );
             }
             Err(parqdb_index::Error::InvalidMetadata(_)) => {
                 let metadata = metadata_store
@@ -195,6 +210,8 @@ async fn reachable_locations(
     warehouse: &Warehouse,
     metadata_store: &MetadataStore,
     catalog: &dyn IndexCatalog,
+    index_providers: &IndexProviderRegistry,
+    session: &dyn Session,
 ) -> Result<HashSet<String>> {
     let mut reachable = HashSet::new();
     for identifier in catalog.list_all()? {
@@ -203,11 +220,16 @@ async fn reachable_locations(
         if warehouse.managed(&entry.metadata_location).is_ok() {
             reachable.insert(entry.metadata_location);
         }
-        reachable.extend(index_metadata_references(
-            warehouse,
-            warehouse.root(),
-            &metadata,
-        )?);
+        reachable.extend(
+            index_metadata_references(
+                warehouse,
+                warehouse.root(),
+                &metadata,
+                index_providers,
+                session,
+            )
+            .await?,
+        );
     }
     Ok(reachable)
 }
@@ -232,10 +254,12 @@ async fn purge_missing_ivf_centroids(
     Ok(())
 }
 
-fn index_metadata_references(
+async fn index_metadata_references(
     warehouse: &Warehouse,
     warehouse_root: &str,
     metadata: &parqdb_meta::IndexMetadata,
+    index_providers: &IndexProviderRegistry,
+    session: &dyn Session,
 ) -> Result<HashSet<String>> {
     let mut references = HashSet::new();
     for snapshot in &metadata.snapshots {
@@ -249,12 +273,18 @@ fn index_metadata_references(
         {
             references.insert(location);
         }
-        for relative in snapshot.index_relations.values() {
-            let location = parqdb_index::resolve_warehouse_location(
-                warehouse_root,
-                relative,
-                relative.ends_with('/'),
-            )?;
+        let provider = index_providers
+            .open(session, &snapshot.index_provider)
+            .await?;
+        let tables = snapshot
+            .index_tables
+            .iter()
+            .map(|(role, table)| Ok((IndexTableRole::new(role)?, table.clone())))
+            .collect::<parqdb_index::Result<BTreeMap<_, _>>>()?;
+        for location in provider.managed_table_locations(&tables).await? {
+            if warehouse.managed(&location).is_err() {
+                continue;
+            }
             if let Some(root) = snapshot_root(warehouse, &location)? {
                 references.insert(root);
             }

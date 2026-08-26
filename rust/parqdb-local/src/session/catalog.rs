@@ -7,13 +7,14 @@ use arrow::datatypes::{DataType, Schema};
 use parqdb_catalog::{CatalogEntry, Error as CatalogError, IndexIdentifier};
 use parqdb_index::{Error as IndexError, LoadedIndex, new_snapshot_id, resolve_artifact_object};
 use parqdb_meta::{
-    IndexArtifactManifest, IndexMetadata, IndexSnapshot, PostingEncoding, RelationReference,
-    SnapshotLogEntry, ivf_centroids_reference,
+    IndexArtifactManifest, IndexMetadata, IndexProviderDefinition, IndexSnapshot,
+    IndexTableDefinition, PostingEncoding, SnapshotLogEntry, TableDefinition,
+    ivf_centroids_reference,
 };
 use uuid::Uuid;
 
-use super::index_relation::IndexRelationLayout;
-use super::source::{canonical_source, validate_index_source_schema};
+use super::index_table::IndexTableLayout;
+use super::source::{canonical_source, parquet_table_definition, validate_index_source_schema};
 use super::{IndexInfo, LocalSession};
 use crate::maintenance::{self, MaintenanceObject};
 use crate::{Error, Result};
@@ -65,30 +66,30 @@ impl LocalSession {
         manifest_location: &str,
     ) -> Result<()> {
         let source_uri = canonical_source(&self.warehouse.registry(), source)?;
-        self.register_relation_index(
-            &RelationReference::Parquet { uri: source_uri },
+        self.register_table_index(
+            &parquet_table_definition(source_uri)?,
             name,
             manifest_location,
         )
         .await
     }
 
-    /// Registers an existing immutable index artifact for one exact source relation.
-    pub async fn register_relation_index(
+    /// Registers an existing immutable index artifact for one exact source table.
+    pub async fn register_table_index(
         &self,
-        source: &RelationReference,
+        source: &TableDefinition,
         name: &str,
         manifest_location: &str,
     ) -> Result<()> {
-        self.register_relation_index_in(&[], source, name, manifest_location)
+        self.register_table_index_in(&[], source, name, manifest_location)
             .await
     }
 
     /// Registers an existing immutable index artifact in one catalog namespace.
-    pub async fn register_relation_index_in(
+    pub async fn register_table_index_in(
         &self,
         namespace: &[String],
-        source: &RelationReference,
+        source: &TableDefinition,
         name: &str,
         manifest_location: &str,
     ) -> Result<()> {
@@ -98,13 +99,13 @@ impl LocalSession {
         if self.indexes.exists(&identifier)? {
             return Err(CatalogError::AlreadyExists(identifier).into());
         }
-        let binding = self.bind_relation(source).await?;
+        let binding = self.bind_table(source).await?;
         let manifest = self
             .indexes
             .metadata_store()
             .load_artifact_manifest(manifest_location)
             .await?;
-        let metadata = registered_artifact_metadata(&manifest, manifest_location)?;
+        let metadata = registered_artifact_metadata(source, &manifest, manifest_location)?;
         self.validate_registration(&binding, &metadata).await?;
         let metadata_location = self
             .indexes
@@ -124,8 +125,16 @@ impl LocalSession {
     ) -> Result<()> {
         for snapshot in &metadata.snapshots {
             validate_index_source_schema(source.schema.as_ref(), snapshot)?;
-            for (role, location) in &snapshot.index_relations {
-                if role == "artifact_manifest" && url::Url::parse(location).is_ok() {
+            self.index_providers
+                .open(&self.context.state(), &snapshot.index_provider)
+                .await?
+                .validate_snapshot(snapshot)
+                .await?;
+            for table in snapshot.index_tables.values() {
+                let location = table.required_property("location")?;
+                if table.properties.get("layout").map(String::as_str) == Some("artifact-manifest")
+                    && url::Url::parse(location).is_ok()
+                {
                     parqdb_meta::validate_absolute_location(location)?;
                 } else {
                     self.indexes
@@ -147,7 +156,10 @@ impl LocalSession {
             )));
         }
 
-        if let Some(location) = snapshot.index_relations.get("artifact_manifest") {
+        if let Some(table) = snapshot.index_tables.get("ivf_postings")
+            && table.properties.get("layout").map(String::as_str) == Some("artifact-manifest")
+        {
+            let location = table.required_property("location")?;
             return self
                 .validate_artifact_registration(source, snapshot, location)
                 .await;
@@ -188,7 +200,7 @@ impl LocalSession {
             .iter()
             .map(|value| usize::try_from(*value).unwrap_or_default())
             .collect::<Vec<_>>();
-        self.index_relation_providers
+        self.index_table_providers
             .validate_manifested_cid_identity(
                 &manifest_location,
                 snapshot.parameter_usize("nlist")?,
@@ -198,10 +210,10 @@ impl LocalSession {
             )
             .await?;
         let postings = self
-            .index_relation_providers
+            .index_table_providers
             .get_or_create_parquet(
                 &manifest_location,
-                IndexRelationLayout::ManifestedCid,
+                IndexTableLayout::ManifestedCid,
                 &self.context.state(),
             )
             .await?;
@@ -240,14 +252,15 @@ impl LocalSession {
         crate::ivf::validate_centroid_buckets(&centroids_batch, &cid_offsets)?;
 
         let postings_location = snapshot
-            .index_relations
+            .index_tables
             .get("ivf_postings")
-            .ok_or_else(|| Error::InvalidMetadata("missing relation role: ivf_postings".into()))?;
+            .ok_or_else(|| Error::InvalidMetadata("missing table role: ivf_postings".into()))?
+            .required_property("location")?;
         let postings_location = self
             .indexes
             .metadata_store()
             .resolve_location(postings_location, postings_location.ends_with('/'))?;
-        self.index_relation_providers
+        self.index_table_providers
             .validate_manifested_cid_identity(
                 &postings_location,
                 snapshot.parameter_usize("nlist")?,
@@ -257,10 +270,10 @@ impl LocalSession {
             )
             .await?;
         let postings = self
-            .index_relation_providers
+            .index_table_providers
             .get_or_create_parquet(
                 &postings_location,
-                IndexRelationLayout::ManifestedCid,
+                IndexTableLayout::ManifestedCid,
                 &self.context.state(),
             )
             .await?;
@@ -290,10 +303,13 @@ impl LocalSession {
     ) -> Result<Vec<MaintenanceObject>> {
         let _guard = self.coordination.write()?;
         let active_roots = self.coordination.active_build_roots()?;
+        let state = self.context.state();
         maintenance::remove_orphans(
             &self.warehouse,
             self.indexes.metadata_store(),
             self.catalog.as_ref(),
+            self.index_providers.as_ref(),
+            &state,
             &active_roots,
             older_than_ms,
             dry_run,
@@ -304,23 +320,20 @@ impl LocalSession {
     /// Lists published indexes for the exact state of a Parquet source.
     pub async fn list_source_indexes(&self, source: &str) -> Result<Vec<IndexInfo>> {
         let source_uri = canonical_source(&self.warehouse.registry(), source)?;
-        let source = RelationReference::Parquet { uri: source_uri };
-        self.list_relation_indexes(&source).await
+        let source = parquet_table_definition(source_uri)?;
+        self.list_table_indexes(&source).await
     }
 
     /// Lists published indexes for one exact portable source reference.
-    pub async fn list_relation_indexes(
-        &self,
-        source: &RelationReference,
-    ) -> Result<Vec<IndexInfo>> {
-        self.list_relation_indexes_in(&[], source).await
+    pub async fn list_table_indexes(&self, source: &TableDefinition) -> Result<Vec<IndexInfo>> {
+        self.list_table_indexes_in(&[], source).await
     }
 
     /// Lists published indexes for a source within one catalog namespace.
-    pub async fn list_relation_indexes_in(
+    pub async fn list_table_indexes_in(
         &self,
         namespace: &[String],
-        source: &RelationReference,
+        source: &TableDefinition,
     ) -> Result<Vec<IndexInfo>> {
         source.validate()?;
         let _guard = self.coordination.read()?;
@@ -339,20 +352,20 @@ impl LocalSession {
     /// Removes an index mapping after verifying its exact source-table state.
     pub async fn drop_source_index(&self, source: &str, name: &str) -> Result<()> {
         let source_uri = canonical_source(&self.warehouse.registry(), source)?;
-        let source = RelationReference::Parquet { uri: source_uri };
-        self.drop_relation_index(&source, name).await
+        let source = parquet_table_definition(source_uri)?;
+        self.drop_table_index(&source, name).await
     }
 
-    /// Removes an index mapping after verifying its exact source relation.
-    pub async fn drop_relation_index(&self, source: &RelationReference, name: &str) -> Result<()> {
-        self.drop_relation_index_in(&[], source, name).await
+    /// Removes an index mapping after verifying its exact source table.
+    pub async fn drop_table_index(&self, source: &TableDefinition, name: &str) -> Result<()> {
+        self.drop_table_index_in(&[], source, name).await
     }
 
     /// Removes a source-bound index within one catalog namespace.
-    pub async fn drop_relation_index_in(
+    pub async fn drop_table_index_in(
         &self,
         namespace: &[String],
-        source: &RelationReference,
+        source: &TableDefinition,
         name: &str,
     ) -> Result<()> {
         source.validate()?;
@@ -372,10 +385,10 @@ impl LocalSession {
         Ok(())
     }
 
-    /// Selects one index for an exact portable source relation.
+    /// Selects one index for an exact portable source table.
     pub async fn select_index(
         &self,
-        source: &RelationReference,
+        source: &TableDefinition,
         index: Option<&str>,
         column: Option<&str>,
     ) -> Result<LoadedIndex> {
@@ -386,7 +399,7 @@ impl LocalSession {
     pub async fn select_index_in(
         &self,
         namespace: &[String],
-        source: &RelationReference,
+        source: &TableDefinition,
         index: Option<&str>,
         column: Option<&str>,
     ) -> Result<LoadedIndex> {
@@ -404,10 +417,10 @@ impl LocalSession {
             })
     }
 
-    /// Returns the selected metadata document for one exact source relation.
+    /// Returns the selected metadata document for one exact source table.
     pub async fn select_index_metadata(
         &self,
-        source: &RelationReference,
+        source: &TableDefinition,
         index: Option<&str>,
         column: Option<&str>,
     ) -> Result<String> {
@@ -419,7 +432,7 @@ impl LocalSession {
     pub async fn select_index_metadata_in(
         &self,
         namespace: &[String],
-        source: &RelationReference,
+        source: &TableDefinition,
         index: Option<&str>,
         column: Option<&str>,
     ) -> Result<String> {
@@ -462,6 +475,7 @@ pub(super) fn validate_index_name(name: &str) -> Result<()> {
 }
 
 fn registered_artifact_metadata(
+    source: &TableDefinition,
     manifest: &IndexArtifactManifest,
     manifest_location: &str,
 ) -> Result<IndexMetadata> {
@@ -485,6 +499,7 @@ fn registered_artifact_metadata(
         sequence_number: 1,
         timestamp_ms,
         summary: BTreeMap::from([("operation".into(), "register".into())]),
+        source_table: source.clone(),
         vector_field: manifest.index.vector_field.clone(),
         source_key_fields,
         indexed_rows: manifest.index.ntotal,
@@ -501,10 +516,20 @@ fn registered_artifact_metadata(
                 manifest.index.posting_encoding.as_str().into(),
             ),
         ]),
-        index_relations: BTreeMap::from([(
-            "artifact_manifest".into(),
-            manifest_location.to_owned(),
-        )]),
+        index_provider: IndexProviderDefinition::new("parquet", BTreeMap::new())?,
+        index_tables: {
+            let table = IndexTableDefinition::new(
+                1,
+                BTreeMap::from([
+                    ("layout".into(), "artifact-manifest".into()),
+                    ("location".into(), manifest_location.to_owned()),
+                ]),
+            )?;
+            BTreeMap::from([
+                ("ivf_centroids".into(), table.clone()),
+                ("ivf_postings".into(), table),
+            ])
+        },
     };
     let metadata = IndexMetadata {
         format_version: 1,

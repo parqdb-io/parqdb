@@ -20,7 +20,7 @@ with parqdb.connect("./parqdb-data") as session:
     print(session.list_tables())
 ```
 
-Index relations may be stored in a separate warehouse while catalog state stays
+Index tables may be stored in a separate warehouse while catalog state stays
 under the local root:
 
 ```python

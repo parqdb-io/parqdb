@@ -9,12 +9,6 @@ extension, Parquet support, and SQLite catalog:
 python -m pip install parqdb
 ```
 
-Install PyIceberg support when exact Iceberg table references are required:
-
-```bash
-python -m pip install "parqdb[iceberg]"
-```
-
 ## Connection
 
 The compact local form creates `catalog.sqlite` and the index warehouse under
@@ -24,7 +18,7 @@ one directory:
 session = parqdb.connect("./parqdb-data")
 ```
 
-Index relations may be stored in a separate warehouse while ParqDB keeps its
+Index tables may be stored in a separate warehouse while ParqDB keeps its
 SQLite catalog and metadata under the local root:
 
 ```python

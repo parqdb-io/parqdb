@@ -7,13 +7,13 @@ use parqdb_catalog::{
     CatalogEntry, CatalogTombstone, IndexCatalog, IndexIdentifier, IvfCentroidsCatalogEntry,
     IvfCentroidsClaim, IvfCentroidsClaimResult, TableCatalog, TableDefinition, TableIdentifier,
 };
-use parqdb_meta::{IndexMetadata, IvfCentroidsDescriptor, IvfCentroidsMetadata, RelationReference};
+use parqdb_meta::{IndexMetadata, IvfCentroidsDescriptor, IvfCentroidsMetadata};
 use uuid::Uuid;
 
 pub(super) struct ParqDBCatalogList {
     catalogs: Arc<dyn CatalogProviderList>,
     indexes: Arc<dyn IndexCatalog>,
-    tables: Option<Arc<dyn TableCatalog>>,
+    tables: Arc<dyn TableCatalog>,
 }
 
 impl std::fmt::Debug for ParqDBCatalogList {
@@ -21,7 +21,6 @@ impl std::fmt::Debug for ParqDBCatalogList {
         formatter
             .debug_struct("ParqDBCatalogList")
             .field("catalog_names", &self.catalogs.catalog_names())
-            .field("persistent_tables", &self.tables.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -30,21 +29,13 @@ impl ParqDBCatalogList {
     pub(super) fn new(
         catalogs: Arc<dyn CatalogProviderList>,
         indexes: Arc<dyn IndexCatalog>,
-        tables: Option<Arc<dyn TableCatalog>>,
+        tables: Arc<dyn TableCatalog>,
     ) -> Self {
         Self {
             catalogs,
             indexes,
             tables,
         }
-    }
-
-    fn tables(&self) -> parqdb_catalog::Result<&dyn TableCatalog> {
-        self.tables
-            .as_deref()
-            .ok_or(parqdb_catalog::Error::UnsupportedOperation(
-                "persistent tables",
-            ))
     }
 }
 
@@ -74,7 +65,7 @@ impl IndexCatalog for ParqDBCatalogList {
     fn register(
         &self,
         identifier: &IndexIdentifier,
-        source: &RelationReference,
+        source: &TableDefinition,
         metadata_location: &str,
         metadata: &IndexMetadata,
     ) -> parqdb_catalog::Result<()> {
@@ -85,7 +76,7 @@ impl IndexCatalog for ParqDBCatalogList {
     fn commit(
         &self,
         identifier: &IndexIdentifier,
-        source: &RelationReference,
+        source: &TableDefinition,
         base_metadata_location: &str,
         new_metadata_location: &str,
         base_metadata: &IndexMetadata,
@@ -116,7 +107,7 @@ impl IndexCatalog for ParqDBCatalogList {
     fn find_by_source(
         &self,
         namespace: &[String],
-        source: &RelationReference,
+        source: &TableDefinition,
     ) -> parqdb_catalog::Result<Vec<CatalogEntry>> {
         self.indexes.find_by_source(namespace, source)
     }
@@ -131,7 +122,7 @@ impl IndexCatalog for ParqDBCatalogList {
 
     fn load_ivf_centroids(
         &self,
-        source: &RelationReference,
+        source: &TableDefinition,
         fingerprint: &str,
     ) -> parqdb_catalog::Result<IvfCentroidsCatalogEntry> {
         self.indexes.load_ivf_centroids(source, fingerprint)
@@ -139,7 +130,7 @@ impl IndexCatalog for ParqDBCatalogList {
 
     fn claim_ivf_centroids(
         &self,
-        source: &RelationReference,
+        source: &TableDefinition,
         descriptor: &IvfCentroidsDescriptor,
         owner: Uuid,
         lease_duration_ms: i64,
@@ -189,11 +180,11 @@ impl IndexCatalog for ParqDBCatalogList {
 
 impl TableCatalog for ParqDBCatalogList {
     fn create_table(&self, definition: &TableDefinition) -> parqdb_catalog::Result<()> {
-        self.tables()?.create_table(definition)
+        self.tables.create_table(definition)
     }
 
     fn load_table(&self, identifier: &TableIdentifier) -> parqdb_catalog::Result<TableDefinition> {
-        self.tables()?.load_table(identifier)
+        self.tables.load_table(identifier)
     }
 
     fn list_tables(
@@ -201,10 +192,10 @@ impl TableCatalog for ParqDBCatalogList {
         catalog: &str,
         namespace: &[String],
     ) -> parqdb_catalog::Result<Vec<TableIdentifier>> {
-        self.tables()?.list_tables(catalog, namespace)
+        self.tables.list_tables(catalog, namespace)
     }
 
     fn drop_table(&self, identifier: &TableIdentifier) -> parqdb_catalog::Result<()> {
-        self.tables()?.drop_table(identifier)
+        self.tables.drop_table(identifier)
     }
 }

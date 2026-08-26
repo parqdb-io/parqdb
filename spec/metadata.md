@@ -4,8 +4,8 @@
 
 A ParqDB catalog identifier points to the current immutable metadata file for
 one logical index. The catalog owns the index name and source-table binding.
-The session owns one warehouse containing every metadata and index object.
-None of those deployment-specific values is duplicated in index metadata.
+Each snapshot records the exact source table definition and the index provider
+definitions required to reopen it after restart.
 
 Metadata files are immutable, self-contained UTF-8 JSON documents. A catalog
 commit atomically changes which file is current; readers may continue using a
@@ -23,20 +23,15 @@ Metadata is one JSON object conforming to RFC 8259.
 - Unknown fields, duplicate keys, missing required fields, incorrect types,
   and out-of-range integers are invalid.
 
-## Warehouse-relative Locations
+## Provider Definitions
 
-Index relation locations and nested metadata locations are strings relative to
-the session warehouse. A location:
-
-- is non-empty and not absolute;
-- uses `/`, never `\\`;
-- contains no empty, `.`, or `..` path segment;
-- contains no query or fragment; and
-- may end in `/` to identify a directory relation.
-
-The metadata file itself is identified by an absolute catalog location and
-must also be inside the session warehouse. Metadata contains no `location`
-field.
+Common metadata does not interpret physical table locations or layouts. A
+`table-definition` selects a registered DataFusion table-provider factory with
+`provider` and supplies its versioned, non-secret `properties`. An
+`index-provider-definition` does the same for physical index tables. Each
+`index-table-definition` contains a positive `definition-version` and
+provider-specific `properties`. Provider implementations validate those
+properties, including any location rules.
 
 ## Index Metadata
 
@@ -67,6 +62,7 @@ Each snapshot contains:
 | required | `sequence-number` | `long` | Positive commit sequence. |
 | required | `timestamp-ms` | `long` | Snapshot creation time. |
 | required | `summary` | `map<string,string>` | Non-semantic provenance; may be empty. |
+| required | `source-table` | `table-definition` | Exact source table state used to build this snapshot. |
 | required | `vector-field` | `string` | Vector field in the catalog-bound source. |
 | required | `source-key-fields` | `list<string>` | Ordered source key; non-empty and unique. |
 | required | `indexed-rows` | `long` | Positive number of represented source rows. |
@@ -74,16 +70,18 @@ Each snapshot contains:
 | required | `index-schema-version` | `int` | Family schema version. |
 | required | `metric` | `string` | Distance metric. |
 | required | `parameters` | `map<string,string>` | Family-defined parameters. |
-| required | `index-relations` | `map<string,string>` | Family roles to warehouse-relative Parquet locations. |
+| required | `index-provider` | `index-provider-definition` | Provider for this snapshot's physical index tables. |
+| required | `index-tables` | `map<string,index-table-definition>` | Family roles to immutable provider-defined tables. |
 
-Metadata contains no source URI, source identifier, source version, source
-snapshot, or source fingerprint. The catalog binds the metadata to one exact
-runtime source relation.
+The catalog separately records the source binding used for index discovery.
+It must match `source-table`; embedding the definition in each snapshot makes
+the metadata self-contained and preserves the exact source state across
+restart and future incremental updates.
 
 Snapshot and sequence IDs are unique. No sequence exceeds
 `last-sequence-number`. Snapshot list order has no meaning. The family spec
 defines supported schema versions, metrics, parameters, and the exact set of
-relation roles.
+index-table roles.
 
 These logical identity fields remain equal across retained snapshots:
 
@@ -93,7 +91,8 @@ These logical identity fields remain equal across retained snapshots:
 - `metric`.
 
 Changing an identity field creates a new index UUID. Row count, parameters,
-schema version, and physical relations may change in a successor snapshot.
+schema version, source state, and physical index tables may change in a
+successor snapshot.
 
 ## Snapshot Log and Updates
 
@@ -114,7 +113,7 @@ the final entry refers to `current-snapshot-id`.
 A metadata update may remove non-current snapshots and their log entries while
 preserving `last-sequence-number`. Snapshot IDs are never reused.
 
-## Catalog-owned Source Binding
+## Source Binding
 
 For a selected index, a reader validates that the catalog-bound source:
 
@@ -122,10 +121,9 @@ For a selected index, a reader validates that the catalog-bound source:
 2. satisfies the family-defined vector and key type requirements; and
 3. has exactly `indexed-rows` rows when an existing index is registered.
 
-The row count and schema checks are compatibility guardrails, not a content
-fingerprint. Registration is an administrative assertion that the selected
-source contains the rows represented by the index. Query results preserve
-source columns and add only family-defined result fields.
+The row count and schema checks are compatibility guardrails. The catalog
+binding and snapshot `source-table` must identify the same exact state. Query
+results preserve source columns and add only family-defined result fields.
 
 ## Example
 
@@ -142,6 +140,19 @@ source columns and add only family-defined result fields.
       "sequence-number": 1,
       "timestamp-ms": 1750000000000,
       "summary": {"operation": "create"},
+      "source-table": {
+        "identifier": {
+          "catalog": "datafusion",
+          "namespace": ["public"],
+          "name": "documents"
+        },
+        "provider": "parquet",
+        "properties": {
+          "definition-version": "1",
+          "location": "s3://example/documents/",
+          "table-identity": "s3://example/documents/"
+        }
+      },
       "vector-field": "embedding",
       "source-key-fields": ["document_id"],
       "indexed-rows": 1000000,
@@ -157,9 +168,19 @@ source columns and add only family-defined result fields.
         "ivf_centroids_uuid": "fe985f6d-3592-4385-a1ca-71347057a210",
         "ivf_centroids_metadata_location": "metadata/fe985f6d-3592-4385-a1ca-71347057a210/v1.metadata.json"
       },
-      "index-relations": {
-        "ivf_centroids": "indexes/fe985f6d35924385a1ca71347057a210/1/ivf_centroids/",
-        "ivf_postings": "indexes/2f1c7f5e3c434a448f2acf560c4db8d1/701/ivf_postings/"
+      "index-provider": {
+        "provider": "parquet",
+        "properties": {}
+      },
+      "index-tables": {
+        "ivf_centroids": {
+          "definition-version": 1,
+          "properties": {"location": "indexes/fe985f6d35924385a1ca71347057a210/1/ivf_centroids/"}
+        },
+        "ivf_postings": {
+          "definition-version": 1,
+          "properties": {"location": "indexes/2f1c7f5e3c434a448f2acf560c4db8d1/701/ivf_postings/"}
+        }
       }
     }
   ],

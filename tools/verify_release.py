@@ -9,7 +9,7 @@ from tempfile import TemporaryDirectory
 from verify_wheel import verify_wheel
 
 SUPPORTED_PYTHONS = ("3.11", "3.12", "3.13", "3.14")
-PYPI_INDEX = "https://pypi.org/simple"
+DEFAULT_INDEX = "https://mirrors.huaweicloud.com/repository/pypi/simple"
 
 
 def parser() -> argparse.ArgumentParser:
@@ -27,6 +27,11 @@ def parser() -> argparse.ArgumentParser:
         choices=SUPPORTED_PYTHONS,
         help="Python minor to verify; repeat to override the default full matrix",
     )
+    command.add_argument(
+        "--index-url",
+        default=DEFAULT_INDEX,
+        help="Package index used to install the locked verification dependencies",
+    )
     return command
 
 
@@ -38,8 +43,11 @@ def main() -> None:
     with TemporaryDirectory(prefix="parqdb-release-") as directory:
         root = Path(directory)
         requirements = root / "requirements.txt"
-        uv_environment = os.environ.copy()
-        uv_environment["UV_DEFAULT_INDEX"] = PYPI_INDEX
+        export_environment = os.environ.copy()
+        export_environment.pop("UV_DEFAULT_INDEX", None)
+        export_environment.pop("UV_INDEX_URL", None)
+        install_environment = os.environ.copy()
+        install_environment["UV_DEFAULT_INDEX"] = args.index_url
         subprocess.run(
             [
                 "uv",
@@ -57,6 +65,7 @@ def main() -> None:
                 str(requirements),
             ],
             cwd=repository,
+            env=export_environment,
             check=True,
         )
 
@@ -80,7 +89,7 @@ def main() -> None:
                 python = environment / (
                     "Scripts/python.exe" if os.name == "nt" else "bin/python"
                 )
-                requirement = "parqdb[iceberg,publish] @ " + wheel.as_uri()
+                requirement = "parqdb[publish] @ " + wheel.as_uri()
                 subprocess.run(
                     [
                         "uv",
@@ -93,7 +102,7 @@ def main() -> None:
                         str(requirements),
                     ],
                     cwd=repository,
-                    env=uv_environment,
+                    env=install_environment,
                     check=True,
                 )
                 subprocess.run(

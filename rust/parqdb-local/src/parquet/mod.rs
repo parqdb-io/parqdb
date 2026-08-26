@@ -1,4 +1,4 @@
-//! Managed Parquet relation I/O for the embedded backend.
+//! Managed Parquet table I/O for the embedded backend.
 
 #[cfg(target_os = "linux")]
 mod direct_io;

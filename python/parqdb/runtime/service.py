@@ -58,7 +58,6 @@ class SessionService:
         *,
         warehouse: str | None,
         storage_options: Mapping[str, str] | None,
-        iceberg: object | None,
         config: DataFusionSessionConfig | None,
         runtime: RuntimeEnvBuilder | None,
     ) -> SessionService:
@@ -68,7 +67,6 @@ class SessionService:
                 root,
                 warehouse=warehouse,
                 storage_options=storage_options,
-                iceberg=iceberg,
                 config=config,
                 runtime=runtime,
             )
@@ -329,7 +327,7 @@ class SessionService:
 
     def _prepare_vector_query(self, query: VectorQuery) -> str:
         source = self._host._resolve_query_source(query)
-        self._host._prepare_index_relations(query, source)
+        self._host._prepare_index_tables(query, source)
         return source
 
     async def _prepared_search_arguments(self, query: VectorQuery) -> dict[str, Any]:
@@ -350,7 +348,7 @@ class SessionService:
         }
 
     async def _source_reference(self, identifier: TableIdentifier) -> str:
-        return await asyncio.to_thread(self._host._relation_reference, identifier)
+        return await asyncio.to_thread(self._host._table_definition, identifier)
 
     async def _wait_for_index(
         self,

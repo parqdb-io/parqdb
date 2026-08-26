@@ -9,7 +9,83 @@ use uuid::Uuid;
 use crate::error::invalid;
 use crate::family::validate_family;
 use crate::serde_helpers::{deserialize_unique_map, lowercase_uuid};
-use crate::{Error, Result};
+use crate::{Error, Result, TableDefinition};
+
+/// Persistent provider selection for physical index tables.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct IndexProviderDefinition {
+    /// Registered index-provider name.
+    pub provider: String,
+    /// Provider-defined, versioned, non-secret properties.
+    #[serde(deserialize_with = "deserialize_unique_map")]
+    pub properties: BTreeMap<String, String>,
+}
+
+impl IndexProviderDefinition {
+    /// Creates and validates a storage definition.
+    pub fn new(provider: impl Into<String>, properties: BTreeMap<String, String>) -> Result<Self> {
+        let definition = Self {
+            provider: provider.into(),
+            properties,
+        };
+        definition.validate()?;
+        Ok(definition)
+    }
+
+    /// Validates provider-neutral invariants.
+    pub fn validate(&self) -> Result<()> {
+        if self.provider.is_empty() {
+            return invalid("index provider name must not be empty");
+        }
+        if self.properties.keys().any(String::is_empty) {
+            return invalid("index provider property names must not be empty");
+        }
+        Ok(())
+    }
+}
+
+/// Immutable provider-defined location and layout of one physical index table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct IndexTableDefinition {
+    /// Version of the provider-specific table definition.
+    pub definition_version: i32,
+    /// Provider-defined, versioned table properties.
+    #[serde(deserialize_with = "deserialize_unique_map")]
+    pub properties: BTreeMap<String, String>,
+}
+
+impl IndexTableDefinition {
+    /// Creates and validates an index-table definition.
+    pub fn new(definition_version: i32, properties: BTreeMap<String, String>) -> Result<Self> {
+        let definition = Self {
+            definition_version,
+            properties,
+        };
+        definition.validate()?;
+        Ok(definition)
+    }
+
+    /// Validates provider-neutral invariants.
+    pub fn validate(&self) -> Result<()> {
+        if self.definition_version <= 0 {
+            return invalid("index table definition version must be positive");
+        }
+        if self.properties.keys().any(String::is_empty) {
+            return invalid("index table property names must not be empty");
+        }
+        Ok(())
+    }
+
+    /// Returns one required provider property.
+    pub fn required_property(&self, name: &str) -> Result<&str> {
+        self.properties
+            .get(name)
+            .map(String::as_str)
+            .ok_or_else(|| Error(format!("index table property is missing: {name}")))
+    }
+}
 
 /// Entry recording when an index snapshot became current.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,6 +110,8 @@ pub struct IndexSnapshot {
     /// Non-semantic provenance values.
     #[serde(deserialize_with = "deserialize_unique_map")]
     pub summary: BTreeMap<String, String>,
+    /// Exact source table used to create this snapshot.
+    pub source_table: TableDefinition,
     /// Source column containing vectors.
     pub vector_field: String,
     /// Ordered source unique-key columns.
@@ -49,9 +127,11 @@ pub struct IndexSnapshot {
     /// Family-defined canonical parameters.
     #[serde(deserialize_with = "deserialize_unique_map")]
     pub parameters: BTreeMap<String, String>,
-    /// Family role to warehouse-relative index-table path.
+    /// Provider that stores this snapshot's physical index tables.
+    pub index_provider: IndexProviderDefinition,
+    /// Family role to immutable provider-defined table definition.
     #[serde(deserialize_with = "deserialize_unique_map")]
-    pub index_relations: BTreeMap<String, String>,
+    pub index_tables: BTreeMap<String, IndexTableDefinition>,
 }
 
 impl IndexSnapshot {
@@ -77,16 +157,14 @@ impl IndexSnapshot {
         }
         if self.summary.keys().any(String::is_empty)
             || self.parameters.keys().any(String::is_empty)
-            || self.index_relations.keys().any(String::is_empty)
+            || self.index_tables.keys().any(String::is_empty)
         {
             return invalid("map keys must be non-empty");
         }
-        for (role, location) in &self.index_relations {
-            if role == "artifact_manifest" && Url::parse(location).is_ok() {
-                validate_absolute_location(location)?;
-            } else {
-                validate_relative_location(location)?;
-            }
+        self.source_table.validate()?;
+        self.index_provider.validate()?;
+        for table in self.index_tables.values() {
+            table.validate()?;
         }
         validate_family(self)
     }
@@ -298,6 +376,8 @@ impl IndexMetadata {
 
 #[derive(PartialEq, Eq)]
 struct SnapshotIdentity {
+    source_identifier: crate::TableIdentifier,
+    source_provider: String,
     vector_field: String,
     source_key_fields: Vec<String>,
     index_family: String,
@@ -307,6 +387,8 @@ struct SnapshotIdentity {
 impl SnapshotIdentity {
     fn from_snapshot(snapshot: &IndexSnapshot) -> Self {
         Self {
+            source_identifier: snapshot.source_table.identifier.clone(),
+            source_provider: snapshot.source_table.provider.clone(),
             vector_field: snapshot.vector_field.clone(),
             source_key_fields: snapshot.source_key_fields.clone(),
             index_family: snapshot.index_family.clone(),

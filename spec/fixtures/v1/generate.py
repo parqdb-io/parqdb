@@ -134,6 +134,7 @@ def metadata() -> dict[str, object]:
                 "sequence-number": 1,
                 "timestamp-ms": 1_750_000_000_000,
                 "summary": {"operation": "create"},
+                "source-table": table_definition("source.parquet"),
                 "vector-field": "embedding",
                 "source-key-fields": ["document_id"],
                 "indexed-rows": 3,
@@ -149,9 +150,10 @@ def metadata() -> dict[str, object]:
                     "ivf_centroids_uuid": IVF_CENTROIDS_UUID,
                     "ivf_centroids_metadata_location": ("ivf-centroids.metadata.json"),
                 },
-                "index-relations": {
-                    "ivf_centroids": "ivf_centroids.parquet",
-                    "ivf_postings": "ivf_postings/",
+                "index-provider": {"provider": "parquet", "properties": {}},
+                "index-tables": {
+                    "ivf_centroids": index_table("ivf_centroids.parquet"),
+                    "ivf_postings": index_table("ivf_postings/"),
                 },
             }
         ],
@@ -163,6 +165,26 @@ def metadata() -> dict[str, object]:
         ],
         "properties": {"fixture": "ivf-parquet"},
     }
+
+
+def table_definition(location: str) -> dict[str, object]:
+    return {
+        "identifier": {
+            "catalog": "datafusion",
+            "namespace": ["public"],
+            "name": "source",
+        },
+        "provider": "parquet",
+        "properties": {
+            "definition-version": "1",
+            "location": location,
+            "table-identity": location,
+        },
+    }
+
+
+def index_table(location: str) -> dict[str, object]:
+    return {"definition-version": 1, "properties": {"location": location}}
 
 
 def ivf_centroids_metadata(
@@ -349,9 +371,9 @@ def composite_metadata() -> dict[str, object]:
     snapshot["parameters"]["ivf_centroids_metadata_location"] = (
         "ivf-centroids.metadata.json"
     )
-    snapshot["index-relations"] = {
-        "ivf_centroids": "ivf_centroids.parquet",
-        "ivf_postings": "ivf_postings/",
+    snapshot["index-tables"] = {
+        "ivf_centroids": index_table("ivf_centroids.parquet"),
+        "ivf_postings": index_table("ivf_postings/"),
     }
     return value
 
@@ -426,21 +448,21 @@ def write_invalid_documents(base: dict[str, object]) -> None:
         cases.append({"file": filename, "violates": violates})
 
     noncanonical = copy.deepcopy(base)
-    noncanonical["snapshots"][0]["index-relations"]["ivf_postings"] = (  # type: ignore[index]
-        "s3://parqdb-fixtures/v1/valid/ivf_postings/"
-    )
+    noncanonical["snapshots"][0]["index-tables"]["ivf_postings"][  # type: ignore[index]
+        "definition-version"
+    ] = 0
     write_case(
-        "absolute-index-relation.metadata.json",
+        "nonpositive-index-table-version.metadata.json",
         noncanonical,
-        "index relation locations must be relative to the warehouse",
+        "index table definition versions must be positive",
     )
 
     unknown_role = copy.deepcopy(base)
-    unknown_role["snapshots"][0]["index-relations"]["unknown"] = "unknown/"  # type: ignore[index]
+    unknown_role["snapshots"][0]["index-tables"]["unknown"] = index_table("unknown/")  # type: ignore[index]
     write_case(
         "unknown-ivf-role.metadata.json",
         unknown_role,
-        "IVF schema version 1 defines exactly two index relation roles",
+        "IVF schema version 1 defines exactly two index table roles",
     )
 
     unsupported_format = copy.deepcopy(base)
@@ -471,7 +493,7 @@ def write_invalid_documents(base: dict[str, object]) -> None:
     )
 
     missing_role = copy.deepcopy(base)
-    del missing_role["snapshots"][0]["index-relations"]["ivf_postings"]  # type: ignore[index]
+    del missing_role["snapshots"][0]["index-tables"]["ivf_postings"]  # type: ignore[index]
     write_case(
         "missing-ivf-role.metadata.json",
         missing_role,
@@ -510,14 +532,14 @@ def write_invalid_documents(base: dict[str, object]) -> None:
         "IVF metric must be l2_squared or cosine",
     )
 
-    escaping_relation = copy.deepcopy(base)
-    escaping_relation["snapshots"][0]["index-relations"]["ivf_postings"] = (  # type: ignore[index]
-        "../ivf_postings/"
-    )
+    empty_table_property = copy.deepcopy(base)
+    empty_table_property["snapshots"][0]["index-tables"]["ivf_postings"][  # type: ignore[index]
+        "properties"
+    ] = {"": "invalid"}
     write_case(
-        "escaping-index-relation.metadata.json",
-        escaping_relation,
-        "index relation locations must not escape the warehouse",
+        "empty-index-table-property.metadata.json",
+        empty_table_property,
+        "index table property names must be non-empty",
     )
 
     missing_field = copy.deepcopy(base)

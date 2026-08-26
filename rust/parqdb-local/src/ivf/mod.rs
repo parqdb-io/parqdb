@@ -1,4 +1,4 @@
-//! Arrow-level IVF relation validation and access.
+//! Arrow-level IVF table validation and access.
 
 #[cfg(test)]
 use std::collections::{HashMap, HashSet};
@@ -205,25 +205,25 @@ pub(crate) fn read_centroids(
 fn required_float32<'a>(
     table: &'a RecordBatch,
     name: &str,
-    relation: &str,
+    table_label: &str,
 ) -> Result<&'a Float32Array> {
     let index = table
         .schema()
         .index_of(name)
-        .map_err(|_| Error::InvalidSchema(format!("{relation} is missing {name}")))?;
+        .map_err(|_| Error::InvalidSchema(format!("{table_label} is missing {name}")))?;
     if table.schema().field(index).is_nullable() {
         return Err(Error::InvalidSchema(format!(
-            "{relation}.{name} must be required"
+            "{table_label}.{name} must be required"
         )));
     }
     let array = table
         .column(index)
         .as_any()
         .downcast_ref::<Float32Array>()
-        .ok_or_else(|| Error::InvalidSchema(format!("{relation}.{name} must be FLOAT32")))?;
+        .ok_or_else(|| Error::InvalidSchema(format!("{table_label}.{name} must be FLOAT32")))?;
     if array.null_count() != 0 {
         return Err(Error::InvalidSchema(format!(
-            "{relation}.{name} must not contain nulls"
+            "{table_label}.{name} must not contain nulls"
         )));
     }
     Ok(array)
@@ -530,25 +530,25 @@ fn borrow_float_values(array: &ArrayRef, offset: usize, len: usize) -> Result<&[
 fn required_int32<'a>(
     table: &'a RecordBatch,
     name: &str,
-    relation: &str,
+    table_label: &str,
 ) -> Result<&'a Int32Array> {
     let index = table
         .schema()
         .index_of(name)
-        .map_err(|_| Error::InvalidSchema(format!("{relation} is missing {name}")))?;
+        .map_err(|_| Error::InvalidSchema(format!("{table_label} is missing {name}")))?;
     if table.schema().field(index).is_nullable() {
         return Err(Error::InvalidSchema(format!(
-            "{relation}.{name} must be required"
+            "{table_label}.{name} must be required"
         )));
     }
     let array: &Int32Array = table
         .column(index)
         .as_any()
         .downcast_ref()
-        .ok_or_else(|| Error::InvalidSchema(format!("{relation}.{name} must be int")))?;
+        .ok_or_else(|| Error::InvalidSchema(format!("{table_label}.{name} must be int")))?;
     if array.null_count() != 0 {
         return Err(Error::InvalidSchema(format!(
-            "{relation}.{name} must not contain nulls"
+            "{table_label}.{name} must not contain nulls"
         )));
     }
     Ok(array)

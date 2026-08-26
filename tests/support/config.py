@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import re
 import tomllib
@@ -43,17 +42,10 @@ class HdfsConfig:
 
 
 @dataclass(frozen=True)
-class IcebergConfig:
-    name: str
-    properties: dict[str, Any]
-
-
-@dataclass(frozen=True)
 class TestEnvironment:
     path: Path | None
     s3: S3Config | None = None
     hdfs: HdfsConfig | None = None
-    iceberg: IcebergConfig | None = None
 
     def configured(self, capability: str) -> bool:
         if capability == "file":
@@ -76,12 +68,10 @@ def load_test_environment(path: str | Path | None) -> TestEnvironment:
 
     s3 = _parse_s3(expanded.get("s3"))
     hdfs = _parse_hdfs(expanded.get("hdfs"))
-    iceberg = _parse_iceberg(expanded.get("iceberg"))
     return TestEnvironment(
         path=resolved,
         s3=s3,
         hdfs=hdfs,
-        iceberg=iceberg,
     )
 
 
@@ -163,16 +153,6 @@ def _parse_hdfs(section: Any) -> HdfsConfig | None:
     return HdfsConfig(uri=uri.rstrip("/") if uri else None, mode=mode)
 
 
-def _parse_iceberg(section: Any) -> IcebergConfig | None:
-    values = _section(section, "iceberg")
-    if values is None:
-        return None
-    return IcebergConfig(
-        name=_required_string(values, "name", "iceberg"),
-        properties=_json_object(values, "properties_json", "iceberg"),
-    )
-
-
 def _section(value: Any, name: str) -> dict[str, Any] | None:
     if value is None:
         return None
@@ -198,29 +178,6 @@ def _optional_string(
     if not isinstance(value, str) or not value:
         raise TestEnvironmentError(f"[{section}].{key} must be a non-empty string")
     return value
-
-
-def _json_object(
-    values: dict[str, Any],
-    key: str,
-    section: str,
-    *,
-    default: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    value = values.get(key)
-    if value is None and default is not None:
-        return default
-    if not isinstance(value, str):
-        raise TestEnvironmentError(f"[{section}].{key} must be a JSON string")
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError as error:
-        raise TestEnvironmentError(
-            f"[{section}].{key} is not valid JSON: {error.msg}"
-        ) from error
-    if not isinstance(parsed, dict):
-        raise TestEnvironmentError(f"[{section}].{key} must contain a JSON object")
-    return parsed
 
 
 def _validate_uri(value: str, scheme: str, field: str) -> None:

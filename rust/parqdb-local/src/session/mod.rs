@@ -4,7 +4,7 @@ mod build;
 mod build_coordinator;
 mod catalog;
 mod catalog_list;
-mod index_relation;
+mod index_table;
 mod query;
 mod source;
 
@@ -21,9 +21,12 @@ use datafusion_datasource_parquet::ParquetPageCacheFactoryConfig;
 #[cfg(test)]
 use parqdb_catalog::{CatalogEntry, Error as CatalogError, IndexIdentifier};
 use parqdb_catalog::{IndexCatalog, SqliteCatalog, TableCatalog};
-use parqdb_index::{IndexRepository, MetadataCacheConfig, MetadataStore};
+use parqdb_index::{
+    IndexProviderFactory, IndexProviderRegistry, IndexRepository, MetadataCacheConfig,
+    MetadataStore,
+};
 #[cfg(test)]
-use parqdb_meta::{IndexSnapshot, RelationReference};
+use parqdb_meta::{IndexSnapshot, TableDefinition};
 use parqdb_storage::{StorageRegistry, Warehouse};
 
 #[cfg(test)]
@@ -32,7 +35,7 @@ use self::catalog_list::ParqDBCatalogList;
 #[cfg(test)]
 use crate::SearchRequest;
 use crate::config::{
-    LocalSessionOptions, build_dop, index_relation_cache_config, metadata_cache_config,
+    LocalSessionOptions, build_dop, index_table_cache_config, metadata_cache_config,
 };
 use crate::coordination::SessionCoordination;
 use crate::durability::{create_dir_all, sync_directory};
@@ -94,8 +97,10 @@ pub struct LocalSession {
     builds: build_coordinator::BuildCoordinator,
     context: SessionContext,
     source_bindings: Arc<RwLock<HashMap<String, source::SourceBinding>>>,
-    index_relation_providers: Arc<index_relation::IndexRelationProviderRegistry>,
-    sql_relations: Arc<RwLock<HashMap<String, String>>>,
+    index_table_providers: Arc<index_table::IndexTableProviderRegistry>,
+    index_providers: Arc<IndexProviderRegistry>,
+    index_table_bindings: Arc<RwLock<HashMap<String, index_table::IndexTableBinding>>>,
+    sql_tables: Arc<RwLock<HashMap<String, String>>>,
 }
 
 impl LocalSession {
@@ -115,7 +120,7 @@ impl LocalSession {
             root.clone(),
             &root,
             Arc::clone(&catalog) as Arc<dyn IndexCatalog>,
-            Some(catalog as Arc<dyn TableCatalog>),
+            catalog as Arc<dyn TableCatalog>,
             &warehouse,
             HashMap::new(),
             options,
@@ -151,7 +156,7 @@ impl LocalSession {
             state_root.clone(),
             &state_root,
             Arc::clone(&catalog) as Arc<dyn IndexCatalog>,
-            Some(catalog as Arc<dyn TableCatalog>),
+            catalog as Arc<dyn TableCatalog>,
             warehouse,
             storage_options,
             options,
@@ -197,7 +202,7 @@ impl LocalSession {
             state_root,
             &coordination_root,
             Arc::clone(&catalog) as Arc<dyn IndexCatalog>,
-            Some(catalog as Arc<dyn TableCatalog>),
+            catalog as Arc<dyn TableCatalog>,
             warehouse,
             storage_options,
             options,
@@ -205,36 +210,103 @@ impl LocalSession {
     }
 
     /// Opens a session using a caller-supplied catalog and local warehouse.
-    pub fn with_catalog(root: impl AsRef<Path>, catalog: Arc<dyn IndexCatalog>) -> Result<Self> {
+    pub fn with_catalog<C>(root: impl AsRef<Path>, catalog: Arc<C>) -> Result<Self>
+    where
+        C: IndexCatalog + TableCatalog + 'static,
+    {
         Self::with_catalog_and_options(root, catalog, LocalSessionOptions::default())
     }
 
     /// Opens a caller-supplied catalog with `DataFusion` initialization options.
-    pub fn with_catalog_and_options(
+    pub fn with_catalog_and_options<C>(
         root: impl AsRef<Path>,
-        catalog: Arc<dyn IndexCatalog>,
+        catalog: Arc<C>,
         options: LocalSessionOptions,
-    ) -> Result<Self> {
+    ) -> Result<Self>
+    where
+        C: IndexCatalog + TableCatalog + 'static,
+    {
         let root = prepare_root(root.as_ref())?;
         let warehouse = directory_to_file_uri(&root)?;
         Self::from_parts(
             root.clone(),
             &root,
-            catalog,
-            None,
+            Arc::clone(&catalog) as Arc<dyn IndexCatalog>,
+            catalog as Arc<dyn TableCatalog>,
             &warehouse,
             HashMap::new(),
             options,
         )
     }
 
-    /// Opens a session with independent catalog and warehouse implementations.
-    pub fn with_catalog_and_warehouse(
+    /// Opens independently supplied table and index catalogs with a local warehouse.
+    pub fn with_catalogs(
+        root: impl AsRef<Path>,
+        index_catalog: Arc<dyn IndexCatalog>,
+        table_catalog: Arc<dyn TableCatalog>,
+    ) -> Result<Self> {
+        let root = prepare_root(root.as_ref())?;
+        let warehouse = directory_to_file_uri(&root)?;
+        Self::from_parts(
+            root.clone(),
+            &root,
+            index_catalog,
+            table_catalog,
+            &warehouse,
+            HashMap::new(),
+            LocalSessionOptions::default(),
+        )
+    }
+
+    /// Opens independently supplied table and index catalogs with an independent warehouse.
+    pub fn with_catalogs_and_warehouse(
         state_root: impl AsRef<Path>,
-        catalog: Arc<dyn IndexCatalog>,
+        index_catalog: Arc<dyn IndexCatalog>,
+        table_catalog: Arc<dyn TableCatalog>,
         warehouse: &str,
         storage_options: HashMap<String, String>,
     ) -> Result<Self> {
+        Self::with_catalogs_and_warehouse_options(
+            state_root,
+            index_catalog,
+            table_catalog,
+            warehouse,
+            storage_options,
+            LocalSessionOptions::default(),
+        )
+    }
+
+    /// Opens independently supplied catalogs and warehouse with explicit options.
+    pub fn with_catalogs_and_warehouse_options(
+        state_root: impl AsRef<Path>,
+        index_catalog: Arc<dyn IndexCatalog>,
+        table_catalog: Arc<dyn TableCatalog>,
+        warehouse: &str,
+        storage_options: HashMap<String, String>,
+        options: LocalSessionOptions,
+    ) -> Result<Self> {
+        let state_root = prepare_root(state_root.as_ref())?;
+        Self::from_parts(
+            state_root.clone(),
+            &state_root,
+            index_catalog,
+            table_catalog,
+            warehouse,
+            storage_options,
+            options,
+        )
+    }
+
+    /// Opens a session with independent catalog and warehouse implementations.
+    pub fn with_catalog_and_warehouse<C>(
+        state_root: impl AsRef<Path>,
+        catalog: Arc<C>,
+        warehouse: &str,
+        storage_options: HashMap<String, String>,
+    ) -> Result<Self>
+    where
+        C: IndexCatalog + TableCatalog + 'static,
+    {
         Self::with_catalog_and_warehouse_options(
             state_root,
             catalog,
@@ -246,19 +318,22 @@ impl LocalSession {
 
     /// Opens independent catalog and warehouse implementations with explicit
     /// `DataFusion` initialization options.
-    pub fn with_catalog_and_warehouse_options(
+    pub fn with_catalog_and_warehouse_options<C>(
         state_root: impl AsRef<Path>,
-        catalog: Arc<dyn IndexCatalog>,
+        catalog: Arc<C>,
         warehouse: &str,
         storage_options: HashMap<String, String>,
         options: LocalSessionOptions,
-    ) -> Result<Self> {
+    ) -> Result<Self>
+    where
+        C: IndexCatalog + TableCatalog + 'static,
+    {
         let state_root = prepare_root(state_root.as_ref())?;
         Self::from_parts(
             state_root.clone(),
             &state_root,
-            catalog,
-            None,
+            Arc::clone(&catalog) as Arc<dyn IndexCatalog>,
+            catalog as Arc<dyn TableCatalog>,
             warehouse,
             storage_options,
             options,
@@ -268,17 +343,18 @@ impl LocalSession {
     fn from_parts(
         state_root: PathBuf,
         coordination_root: &Path,
-        catalog: Arc<dyn IndexCatalog>,
-        table_catalog: Option<Arc<dyn TableCatalog>>,
+        index_catalog: Arc<dyn IndexCatalog>,
+        table_catalog: Arc<dyn TableCatalog>,
         warehouse_root: &str,
         storage_options: HashMap<String, String>,
         options: LocalSessionOptions,
     ) -> Result<Self> {
         sync_directory(&state_root)?;
+        let iceberg_io_properties = Arc::new(parqdb_iceberg::file_io_properties(&storage_options));
         let registry = StorageRegistry::new(storage_options);
         let warehouse = Warehouse::open(warehouse_root, registry.clone())?;
         let (session_config, runtime) = options.into_parts()?;
-        let relation_cache_config = index_relation_cache_config(&session_config);
+        let table_cache_config = index_table_cache_config(&session_config);
         let index_io = crate::config::index_io_mode(&session_config)?;
         let build_dop = build_dop(&session_config)?;
         let session_config = session_config.with_extension(Arc::new(
@@ -287,7 +363,7 @@ impl LocalSession {
         let context = crate::query::parqdb_session_context(session_config, runtime.datafusion());
         let catalog_list = Arc::new(ParqDBCatalogList::new(
             context.state().catalog_list().clone(),
-            catalog,
+            index_catalog,
             table_catalog,
         ));
         context.register_catalog_list(Arc::clone(&catalog_list) as _);
@@ -297,9 +373,22 @@ impl LocalSession {
             MetadataStore::open_with_cache_config_resolver(warehouse.clone(), move || {
                 metadata_cache_config(&config_context.copied_config())
             });
-        Ok(Self {
+        let index_table_providers = Arc::new(index_table::IndexTableProviderRegistry::new(
+            registry.clone(),
+            table_cache_config,
+            index_io,
+        ));
+        let index_providers = Arc::new(IndexProviderRegistry::new());
+        index_providers.register(
+            "parquet",
+            Arc::new(index_table::ParquetIndexProviderFactory::new(
+                Arc::clone(&index_table_providers),
+                warehouse.clone(),
+            )),
+        )?;
+        let session = Self {
             catalog: Arc::clone(&index_catalog),
-            table_catalog: catalog_list as Arc<dyn TableCatalog>,
+            table_catalog: Arc::clone(&catalog_list) as Arc<dyn TableCatalog>,
             coordination: SessionCoordination::open(coordination_root)?,
             indexes: IndexRepository::new(index_catalog, metadata),
             parquet: ParquetStore::with_context(registry.clone(), context.clone()),
@@ -307,15 +396,29 @@ impl LocalSession {
             builds: build_coordinator::BuildCoordinator::new(build_dop),
             context,
             source_bindings: Arc::new(RwLock::new(HashMap::new())),
-            index_relation_providers: Arc::new(index_relation::IndexRelationProviderRegistry::new(
-                registry,
-                relation_cache_config,
-                index_io,
-            )),
-            sql_relations: Arc::new(RwLock::new(HashMap::new())),
+            index_table_providers,
+            index_providers,
+            index_table_bindings: Arc::new(RwLock::new(HashMap::new())),
+            sql_tables: Arc::new(RwLock::new(HashMap::new())),
             state_root,
             warehouse,
-        })
+        };
+        session.register_table_provider_factory(
+            "iceberg",
+            Arc::new(parqdb_iceberg::IcebergTableProviderFactory::new(
+                iceberg_io_properties.as_ref().clone(),
+            )),
+        )?;
+        Ok(session)
+    }
+
+    /// Registers an index-provider factory for this session.
+    pub fn register_index_provider_factory(
+        &self,
+        name: impl Into<String>,
+        factory: Arc<dyn IndexProviderFactory>,
+    ) -> Result<()> {
+        Ok(self.index_providers.register(name, factory)?)
     }
 
     /// Returns the local directory containing catalog state.

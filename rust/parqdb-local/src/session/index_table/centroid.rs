@@ -18,7 +18,7 @@ impl CentroidCache {
 
     pub(super) async fn get_or_load<F, Fut>(
         &self,
-        relation_key: &str,
+        table_key: &str,
         load: F,
     ) -> Result<Arc<CentroidNavigator>>
     where
@@ -26,7 +26,7 @@ impl CentroidCache {
         Fut: Future<Output = Result<CentroidNavigator>>,
     {
         self.cache
-            .get_or_try_insert(relation_key.to_owned(), || async {
+            .get_or_try_insert(table_key.to_owned(), || async {
                 let navigator = Arc::new(load().await?);
                 let charge = navigator.resident_size();
                 Ok((navigator, charge))

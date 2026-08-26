@@ -13,7 +13,8 @@ pub use catalog::{
     IvfCentroidsClaimResult,
 };
 pub use error::{Error, Result};
-pub use identifier::{IndexIdentifier, TableIdentifier};
+pub use identifier::IndexIdentifier;
+pub use parqdb_meta::{TableDefinition, TableIdentifier};
 #[cfg(feature = "sqlite")]
 pub use sqlite::SqliteCatalog;
-pub use table::{ParqDBCatalog, TableCatalog, TableDefinition};
+pub use table::TableCatalog;

@@ -26,12 +26,12 @@ pub use parqdb_core::{
     SearchRequest,
 };
 pub use parqdb_index::MetadataCacheConfig;
-pub use parqdb_meta::{IndexMetadata, IndexSnapshot, RelationReference};
+pub use parqdb_meta::{IndexMetadata, IndexSnapshot, TableDefinition};
 pub use parquet::{ParquetPageCacheStats, ParquetWriterOptions};
 pub use progress::{LocalBuildProgress, LocalBuildProgressSnapshot};
 pub use query::{
-    ManagedQueryStream, compile_datafusion_sql, datafusion_centroid_relation_required,
-    datafusion_cluster_relation_required, datafusion_source_relation_required, squared_l2_udf,
+    ManagedQueryStream, compile_datafusion_sql, datafusion_centroid_table_required,
+    datafusion_cluster_table_required, datafusion_source_table_required, squared_l2_udf,
 };
 pub use runtime::{ParqDBRuntime, QueryAdmissionOptions, QueryAdmissionStats};
 pub use search::{ClusterSelection, ResolvedSearch};

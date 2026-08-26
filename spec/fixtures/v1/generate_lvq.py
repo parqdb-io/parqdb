@@ -88,10 +88,38 @@ def descriptor(encoding: str) -> dict[str, object]:
     }
 
 
+def table_definition(location: str) -> dict[str, object]:
+    return {
+        "identifier": {
+            "catalog": "datafusion",
+            "namespace": ["public"],
+            "name": "source",
+        },
+        "provider": "parquet",
+        "properties": {
+            "definition-version": "1",
+            "location": location,
+            "table-identity": location,
+        },
+    }
+
+
+def index_table(location: str) -> dict[str, object]:
+    return {"definition-version": 1, "properties": {"location": location}}
+
+
+def artifact_table() -> dict[str, object]:
+    return {
+        "definition-version": 1,
+        "properties": {
+            "layout": "artifact-manifest",
+            "location": "manifest.json",
+        },
+    }
+
+
 def metadata(encoding: str) -> dict[str, object]:
     index_uuid = INDEX_UUIDS[encoding]
-    centroid_uuid = IVF_CENTROIDS_UUIDS[encoding]
-    centroid_descriptor = descriptor(encoding)
     return {
         "format-version": 1,
         "index-uuid": index_uuid,
@@ -104,6 +132,7 @@ def metadata(encoding: str) -> dict[str, object]:
                 "sequence-number": 1,
                 "timestamp-ms": 1_750_000_000_000,
                 "summary": {"operation": "create"},
+                "source-table": table_definition("source.parquet"),
                 "vector-field": "embedding",
                 "source-key-fields": ["document_id"],
                 "indexed-rows": 3,
@@ -115,13 +144,12 @@ def metadata(encoding: str) -> dict[str, object]:
                     "nlist": "2",
                     "ntotal": "3",
                     "posting_encoding": encoding,
-                    "ivf_centroids_fingerprint": fingerprint(centroid_descriptor),
-                    "ivf_centroids_uuid": centroid_uuid,
-                    "ivf_centroids_metadata_location": "ivf-centroids.metadata.json",
+                    "artifact_uuid": ARTIFACT_UUIDS[encoding],
                 },
-                "index-relations": {
-                    "ivf_centroids": "ivf_centroids.parquet",
-                    "ivf_postings": "ivf_postings/",
+                "index-provider": {"provider": "parquet", "properties": {}},
+                "index-tables": {
+                    "ivf_centroids": artifact_table(),
+                    "ivf_postings": artifact_table(),
                 },
             }
         ],

@@ -16,11 +16,25 @@
   "snapshots": [
     {
       "index-family": "ivf",
-      "index-relations": {
-        "ivf_centroids": "ivf_centroids.parquet",
-        "ivf_postings": "ivf_postings/"
+      "index-provider": {
+        "properties": {},
+        "provider": "parquet"
       },
       "index-schema-version": 1,
+      "index-tables": {
+        "ivf_centroids": {
+          "definition-version": 1,
+          "properties": {
+            "location": "ivf_centroids.parquet"
+          }
+        },
+        "ivf_postings": {
+          "definition-version": 1,
+          "properties": {
+            "location": "ivf_postings/"
+          }
+        }
+      },
       "indexed-rows": 3,
       "metric": "l2_squared",
       "parameters": {
@@ -37,6 +51,21 @@
       "source-key-fields": [
         "document_id"
       ],
+      "source-table": {
+        "identifier": {
+          "catalog": "datafusion",
+          "name": "source",
+          "namespace": [
+            "public"
+          ]
+        },
+        "properties": {
+          "definition-version": "1",
+          "location": "source.parquet",
+          "table-identity": "source.parquet"
+        },
+        "provider": "parquet"
+      },
       "summary": {
         "operation": "create"
       },

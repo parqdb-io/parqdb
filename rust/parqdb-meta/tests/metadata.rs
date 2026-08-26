@@ -1,15 +1,26 @@
 //! Integration tests for `ParqDB` metadata validation.
 
 use parqdb_meta::{
-    IndexMetadata, IndexSnapshot, PostingEncoding, RelationReference, SnapshotLogEntry,
+    IndexMetadata, IndexProviderDefinition, IndexSnapshot, IndexTableDefinition, PostingEncoding,
+    SnapshotLogEntry, TableDefinition, TableIdentifier,
 };
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
-fn parquet(uri: &str) -> RelationReference {
-    RelationReference::Parquet {
-        uri: uri.to_owned(),
-    }
+fn source_table() -> TableDefinition {
+    TableDefinition::new(
+        TableIdentifier::new("datafusion", vec!["public".into()], "documents").unwrap(),
+        "parquet",
+        BTreeMap::from([
+            ("definition-version".into(), "1".into()),
+            ("location".into(), "file:///tmp/source.parquet".into()),
+        ]),
+    )
+    .unwrap()
+}
+
+fn index_table(location: &str) -> IndexTableDefinition {
+    IndexTableDefinition::new(1, BTreeMap::from([("location".into(), location.into())])).unwrap()
 }
 
 fn valid_snapshot() -> IndexSnapshot {
@@ -18,6 +29,7 @@ fn valid_snapshot() -> IndexSnapshot {
         sequence_number: 1,
         timestamp_ms: 1_750_000_000_000,
         summary: BTreeMap::from([("operation".into(), "create".into())]),
+        source_table: source_table(),
         vector_field: "embedding".into(),
         source_key_fields: vec!["document_id".into()],
         indexed_rows: 4,
@@ -42,9 +54,10 @@ fn valid_snapshot() -> IndexSnapshot {
                 "metadata/centroid-artifacts/v1.metadata.json".into(),
             ),
         ]),
-        index_relations: BTreeMap::from([
-            ("ivf_centroids".into(), "centroids/".into()),
-            ("ivf_postings".into(), "postings/".into()),
+        index_provider: IndexProviderDefinition::new("parquet", BTreeMap::new()).unwrap(),
+        index_tables: BTreeMap::from([
+            ("ivf_centroids".into(), index_table("centroids/")),
+            ("ivf_postings".into(), index_table("postings/")),
         ]),
     }
 }
@@ -112,10 +125,11 @@ fn accepts_all_posting_encodings() {
                 "artifact_uuid".into(),
                 "64502d1f-d5bd-4e2e-910e-c1f62171a76a".into(),
             );
-            snapshot.index_relations = BTreeMap::from([(
-                "artifact_manifest".into(),
-                "artifacts/64502d1fd5bd4e2e910ec1f62171a76a/manifest.json".into(),
-            )]);
+            let table = index_table("artifacts/64502d1fd5bd4e2e910ec1f62171a76a/manifest.json");
+            snapshot.index_tables = BTreeMap::from([
+                ("ivf_centroids".into(), table.clone()),
+                ("ivf_postings".into(), table),
+            ]);
         }
 
         metadata.validate().unwrap();
@@ -211,11 +225,11 @@ fn accepts_rolling_back_to_a_retained_snapshot() {
 }
 
 #[test]
-fn rejects_unknown_ivf_relation_role() {
+fn rejects_unknown_ivf_table_role() {
     let mut metadata = valid_metadata();
     metadata.snapshots[0]
-        .index_relations
-        .insert("future_role".into(), "future/".into());
+        .index_tables
+        .insert("future_role".into(), index_table("future/"));
 
     assert!(metadata.validate().is_err());
 }
@@ -313,42 +327,13 @@ fn rejects_non_lowercase_uuid_json() {
 }
 
 #[test]
-fn rejects_unknown_relation_reference_fields() {
+fn rejects_unknown_table_definition_fields() {
     let json = r#"{
-        "profile": "parquet",
-        "uri": "file:///tmp/source.parquet",
+        "identifier": {"catalog":"datafusion","namespace":["public"],"name":"source"},
+        "provider": "parquet",
+        "properties": {"definition-version":"1","location":"file:///tmp/source.parquet"},
         "unexpected": "value"
     }"#;
 
-    assert!(serde_json::from_str::<RelationReference>(json).is_err());
-}
-
-#[test]
-fn enforces_canonical_parquet_uris() {
-    let invalid = [
-        "S3://bucket/index",
-        "s3://Bucket/index",
-        "s3://bucket/a//b",
-        "s3://bucket/a/./b",
-        "s3://bucket/a/../b",
-        "s3://bucket/a%2fb",
-        "s3://bucket/%41",
-        "s3://user@bucket/index",
-        "s3://bucket/index?version=1",
-        "s3://bucket/index#fragment",
-    ];
-
-    for uri in invalid {
-        assert!(parquet(uri).validate().is_err(), "{uri} must be rejected");
-    }
-
-    for uri in [
-        "file:///tmp/index.parquet",
-        "file:///tmp/partition=*/part-*.parquet",
-        "s3://bucket/index",
-        "s3://bucket/partition=*/part-*.parquet",
-        "s3://bucket/path%20with%20spaces",
-    ] {
-        parquet(uri).validate().unwrap();
-    }
+    assert!(serde_json::from_str::<TableDefinition>(json).is_err());
 }

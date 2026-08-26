@@ -7,8 +7,19 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Rust table and index-provider registries now separate logical metadata,
+  physical table access, and index-table access. Table and index catalogs can
+  be supplied independently without changing session or execution code.
+
 ### Changed
 
+- **Breaking:** metadata format v1 now embeds the exact `source-table`, an
+  `index-provider`, and versioned provider-defined `index-tables` in every
+  snapshot. The unreleased `index-relations` string map is not accepted.
+  Table and index providers are selected through registered DataFusion and
+  ParqDB factories rather than closed format enums.
 - **Breaking:** immutable publication format v1 now has one authoritative
   top-level `manifest.json`. It contains the complete index inventory and
   optional source and embedding sections; the separate source manifest,
@@ -18,6 +29,13 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   location rather than a native `vN.metadata.json` location. Catalog schema
   `user_version` remains `1`, but catalogs and warehouses created by earlier
   `0.2.0` release candidates must be rebuilt.
+
+### Removed
+
+- **Breaking:** the unreleased `connect(..., iceberg=catalog)` Python adapter
+  and the `parqdb[iceberg]` PyIceberg extra. Parquet remains the only public
+  source-table registration path; native Rust providers validate the extension
+  boundary without making Python catalog objects part of it.
 
 ## [0.2.0rc3] - 2026-08-21
 
@@ -124,7 +142,7 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Server implementation is organized into `server`, `transport`, and `runtime`
   packages. The public `parqdb.server` factory remains unchanged.
 - Embedded sessions and server deployment now use a required local `root` plus
-  an optional `warehouse` for index relations. SQLite catalog placement is no
+  an optional `warehouse` for index tables. SQLite catalog placement is no
   longer a public configuration parameter.
 - A session uses one warehouse for all index metadata and relations. Published
   locations are warehouse-relative, while each catalog owns its source

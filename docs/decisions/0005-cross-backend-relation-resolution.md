@@ -10,7 +10,7 @@
 ## Context
 
 ParqDB metadata already identifies every source and index table with a portable
-`RelationReference`. The first DataFusion implementation nevertheless assumed
+`TableDefinition`. The first DataFusion implementation nevertheless assumed
 that every reference was Parquet, while the first Spark implementation assumed
 that every reference was Iceberg. The metadata was portable, but a physical
 index could not actually move between the two query runtimes.
@@ -23,8 +23,7 @@ Query sessions resolve each relation from its metadata profile:
   references through a native Iceberg `TableProvider` compiled into the same
   DataFusion extension.
 - Spark reads Parquet URIs through `SparkSession.read.parquet` and reads
-  Iceberg references through the caller's registered Spark and PyIceberg
-  catalog.
+  Iceberg references through the caller's registered Spark catalog.
 
 Iceberg reads verify the table UUID and select the exact referenced snapshot.
 Parquet reads preserve the canonical URI as the relation state. The ParqDB

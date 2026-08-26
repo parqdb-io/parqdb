@@ -12,7 +12,7 @@ use parqdb_local::{
     ParquetWriterOptions, PersistentParquetOptions, PostingEncoding, SearchRequest,
     parqdb_session_config,
 };
-use parqdb_meta::RelationReference;
+use parqdb_meta::TableDefinition;
 use pyo3::prelude::*;
 use tokio::runtime::Runtime;
 
@@ -66,7 +66,7 @@ fn search_request(
     bypass_index: bool,
 ) -> PyResult<SearchRequest> {
     Ok(SearchRequest {
-        source: parse_relation_reference(source)?,
+        source: parse_table_definition(source)?,
         index_namespace,
         index,
         column,
@@ -255,21 +255,14 @@ impl PyNativeSession {
     }
 
     #[allow(clippy::type_complexity)]
-    fn persistent_table(
-        &self,
-        table_name: &str,
-    ) -> PyResult<Option<(String, Vec<String>, String, String)>> {
+    fn persistent_table_definition(&self, table_name: &str) -> PyResult<Option<String>> {
         self.session
-            .persistent_table(table_name)
-            .map(|binding| {
-                binding.map(|(identifier, source)| {
-                    (
-                        identifier.catalog().to_owned(),
-                        identifier.namespace().to_vec(),
-                        identifier.name().to_owned(),
-                        source,
-                    )
-                })
+            .persistent_table_definition(table_name)
+            .and_then(|definition| {
+                definition
+                    .map(|definition| serde_json::to_string(&definition))
+                    .transpose()
+                    .map_err(parqdb_local::Error::from)
             })
             .map_err(|error| core_error(&error))
     }
@@ -293,7 +286,7 @@ impl PyNativeSession {
             .map_err(|error| core_error(&error))
     }
 
-    fn persistent_table_source_by_identifier(
+    fn persistent_table_definition_by_identifier(
         &self,
         catalog: String,
         namespace: Vec<String>,
@@ -302,7 +295,13 @@ impl PyNativeSession {
         let identifier = parqdb_catalog::TableIdentifier::new(catalog, namespace, name)
             .map_err(|error| core_error(&error.into()))?;
         self.session
-            .persistent_table_source_by_identifier(identifier)
+            .persistent_table_definition_by_identifier(&identifier)
+            .and_then(|definition| {
+                definition
+                    .map(|definition| serde_json::to_string(&definition))
+                    .transpose()
+                    .map_err(parqdb_local::Error::from)
+            })
             .map_err(|error| core_error(&error))
     }
 
@@ -320,11 +319,11 @@ impl PyNativeSession {
         name: String,
         manifest_location: String,
     ) -> PyResult<()> {
-        let source = parse_relation_reference(source)?;
+        let source = parse_table_definition(source)?;
         let session = Arc::clone(&self.session);
         let runtime = Arc::clone(&self.runtime);
         py.detach(move || {
-            runtime.block_on(session.register_relation_index_in(
+            runtime.block_on(session.register_table_index_in(
                 &index_namespace,
                 &source,
                 &name,
@@ -342,7 +341,7 @@ impl PyNativeSession {
         index: Option<String>,
         column: Option<String>,
     ) -> PyResult<String> {
-        let source = parse_relation_reference(source)?;
+        let source = parse_table_definition(source)?;
         let session = Arc::clone(&self.session);
         let runtime = Arc::clone(&self.runtime);
         py.detach(move || {
@@ -353,27 +352,6 @@ impl PyNativeSession {
                 column.as_deref(),
             ))
         })
-        .map_err(|error| core_error(&error))
-    }
-
-    fn register_iceberg_relation(
-        &self,
-        py: Python<'_>,
-        reference: &str,
-        metadata_location: String,
-        file_io_properties: HashMap<String, String>,
-    ) -> PyResult<PyDataFrame> {
-        let reference = parse_relation_reference(reference)?;
-        let session = Arc::clone(&self.session);
-        let runtime = Arc::clone(&self.runtime);
-        py.detach(move || {
-            runtime.block_on(session.register_iceberg_relation(
-                reference,
-                &metadata_location,
-                file_io_properties,
-            ))
-        })
-        .map(PyDataFrame::new)
         .map_err(|error| core_error(&error))
     }
 
@@ -432,11 +410,11 @@ impl PyNativeSession {
         source: &str,
         index_namespace: Vec<String>,
     ) -> PyResult<Vec<PyIndexInfo>> {
-        let source = parse_relation_reference(source)?;
+        let source = parse_table_definition(source)?;
         let session = Arc::clone(&self.session);
         let runtime = Arc::clone(&self.runtime);
         py.detach(move || {
-            runtime.block_on(session.list_relation_indexes_in(&index_namespace, &source))
+            runtime.block_on(session.list_table_indexes_in(&index_namespace, &source))
         })
         .map(|indexes| {
             indexes
@@ -463,11 +441,11 @@ impl PyNativeSession {
         index_namespace: Vec<String>,
         name: String,
     ) -> PyResult<()> {
-        let source = parse_relation_reference(source)?;
+        let source = parse_table_definition(source)?;
         let session = Arc::clone(&self.session);
         let runtime = Arc::clone(&self.runtime);
         py.detach(move || {
-            runtime.block_on(session.drop_relation_index_in(&index_namespace, &source, &name))
+            runtime.block_on(session.drop_table_index_in(&index_namespace, &source, &name))
         })
         .map_err(|error| core_error(&error))
     }
@@ -499,7 +477,7 @@ impl PyNativeSession {
         writer_options: &PyParquetWriterOptions,
         partitions: Option<usize>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let source = parse_relation_reference(source)?;
+        let source = parse_table_definition(source)?;
         let session = Arc::clone(&self.session);
         let runtime = Arc::clone(&self.runtime);
         let build_runtime = Arc::clone(&runtime);
@@ -550,7 +528,7 @@ impl PyNativeSession {
         writer_options: &PyParquetWriterOptions,
         partitions: Option<usize>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let source = parse_relation_reference(source)?;
+        let source = parse_table_definition(source)?;
         let session = Arc::clone(&self.session);
         let runtime = Arc::clone(&self.runtime);
         let build_runtime = Arc::clone(&runtime);
@@ -596,7 +574,7 @@ impl PyNativeSession {
         index_namespace: Vec<String>,
         index_name: String,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let source = parse_relation_reference(source)?;
+        let source = parse_table_definition(source)?;
         let session = Arc::clone(&self.session);
         let runtime = Arc::clone(&self.runtime);
         let build_runtime = Arc::clone(&runtime);
@@ -636,7 +614,7 @@ impl PyNativeSession {
         index_namespace: Vec<String>,
         index_name: String,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let source = parse_relation_reference(source)?;
+        let source = parse_table_definition(source)?;
         let session = Arc::clone(&self.session);
         let runtime = Arc::clone(&self.runtime);
         let build_runtime = Arc::clone(&runtime);
@@ -883,8 +861,8 @@ fn new_session_config() -> PySessionConfig {
     parqdb_session_config().into()
 }
 
-fn parse_relation_reference(value: &str) -> PyResult<RelationReference> {
-    let reference: RelationReference = serde_json::from_str(value)
+fn parse_table_definition(value: &str) -> PyResult<TableDefinition> {
+    let reference: TableDefinition = serde_json::from_str(value)
         .map_err(|error| InvalidArgumentError::new_err(error.to_string()))?;
     reference
         .validate()

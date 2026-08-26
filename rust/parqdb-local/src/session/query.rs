@@ -13,24 +13,24 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::execution::context::SQLOptions;
 use datafusion::logical_expr::Expr;
 use datafusion::prelude::{SessionContext, col, lit};
-use parqdb_index::{LoadedIndex, resolve_artifact_object};
-use parqdb_meta::{DistanceMetric, IndexArtifactManifest, PostingEncoding, RelationReference};
+use parqdb_index::{IndexSelection, IndexTableRole, LoadedIndex};
+use parqdb_meta::{DistanceMetric, PostingEncoding};
 use uuid::Uuid;
 
 use super::LocalSession;
-use super::index_relation::IndexRelationLayout;
+use super::index_table::IndexTableLayout;
 use super::source::{
-    SourceBinding, exact_vector_field, relation_key, resolve_search_projection,
-    validate_index_source_schema, vector_elements_are_f64,
+    SourceBinding, exact_vector_field, resolve_search_projection, validate_index_source_schema,
+    vector_elements_are_f64,
 };
 use crate::query::{
     ManagedQueryStream, compile_datafusion_sql, compile_index_only_plan,
-    datafusion_centroid_relation_required, datafusion_cluster_relation_required,
-    datafusion_source_relation_required, use_native_cluster_routing, validated_cluster_search,
+    datafusion_centroid_table_required, datafusion_cluster_table_required,
+    datafusion_source_table_required, use_native_cluster_routing, validated_cluster_search,
 };
 use crate::{ClusterSelection, Error, ResolvedSearch, Result, SearchRequest};
 
-struct RegisteredSearchRelations {
+struct RegisteredSearchTables {
     execution: ResolvedSearch,
     source: Option<String>,
     postings: Option<String>,
@@ -38,7 +38,7 @@ struct RegisteredSearchRelations {
     selected_clusters: Option<String>,
 }
 
-impl RegisteredSearchRelations {
+impl RegisteredSearchTables {
     fn deregister_temporary(&self, context: &SessionContext) -> Result<()> {
         for name in [
             self.postings.as_deref(),
@@ -120,9 +120,9 @@ impl LocalSession {
     pub async fn search_sql(&self, request: &SearchRequest) -> Result<String> {
         let resolved = self.resolve_search(request).await?;
         let mut execution = resolved.clone();
-        let source_name = if datafusion_source_relation_required(&resolved)? {
+        let source_name = if datafusion_source_table_required(&resolved)? {
             Some(
-                self.source_binding(&resolved.source_relation_key)?
+                self.source_binding(&resolved.source_table_key)?
                     .ok_or_else(|| {
                         Error::InvalidArgument(
                             "resolved source is not bound to this session".into(),
@@ -133,28 +133,24 @@ impl LocalSession {
         } else {
             None
         };
-        let postings_name = match (&resolved.postings_relation_key, &resolved.cluster_selection) {
+        let postings_name = match (&resolved.postings_table_key, &resolved.cluster_selection) {
             (Some(key), Some(ClusterSelection::Native(cids))) => {
                 execution.cluster_selection = Some(ClusterSelection::All);
                 Some(self.register_sql_manifested_cids(key, cids).await?)
             }
             (Some(key), _) => Some(
-                self.register_sql_relation("postings", key, IndexRelationLayout::ManifestedCid)
+                self.register_sql_table("postings", key, IndexTableLayout::ManifestedCid)
                     .await?,
             ),
             (None, _) => None,
         };
         let centroids_name = match &resolved.cluster_selection {
-            Some(ClusterSelection::Relational {
-                centroids_relation_key,
+            Some(ClusterSelection::DataFusion {
+                centroids_table_key,
                 ..
             }) => Some(
-                self.register_sql_relation(
-                    "centroids",
-                    centroids_relation_key,
-                    IndexRelationLayout::Plain,
-                )
-                .await?,
+                self.register_sql_table("centroids", centroids_table_key, IndexTableLayout::Plain)
+                    .await?,
             ),
             _ => None,
         };
@@ -175,7 +171,7 @@ impl LocalSession {
             Some(self.coordination.read()?)
         };
         validate_search_request(request)?;
-        let source = self.bind_relation(&request.source).await?;
+        let source = self.bind_table(&request.source).await?;
         let projection =
             resolve_search_projection(source.schema.as_ref(), request.projection.as_deref())?;
 
@@ -201,37 +197,41 @@ impl LocalSession {
             )
             .await?;
         let snapshot = loaded.metadata.current_snapshot()?;
+        self.index_providers
+            .open(&self.context.state(), &snapshot.index_provider)
+            .await?
+            .validate_snapshot(snapshot)
+            .await?;
         validate_index_source_schema(source.schema.as_ref(), snapshot)?;
         let metric = DistanceMetric::from_metadata(&snapshot.metric).ok_or_else(|| {
             Error::InvalidMetadata(format!("unsupported IVF metric: {}", snapshot.metric))
         })?;
         let query = crate::vector::transform_query(&request.query, metric)?;
         let posting_encoding = PostingEncoding::from_snapshot(snapshot)?;
-        let (postings_relation_key, cluster_selection, nlist) = if matches!(
+        let (postings_table_key, cluster_selection, nlist) = if matches!(
             posting_encoding,
             PostingEncoding::Lvq4 | PostingEncoding::Lvq8
         ) {
-            let manifest_location = artifact_manifest_location(&self.warehouse, &loaded)?;
-            let manifest = self
-                .indexes
-                .metadata_store()
-                .load_artifact_manifest(&manifest_location)
-                .await?;
-            validate_artifact_snapshot(snapshot, &manifest)?;
+            let postings_table_key = bound_index_table_key(&loaded, "ivf_postings");
+            self.bind_index_table(
+                &postings_table_key,
+                snapshot,
+                "ivf_postings",
+                "ivf_postings",
+            )?;
             let (selection, nlist) = self
-                .resolve_artifact_cluster_selection(
-                    snapshot,
-                    &manifest_location,
-                    &manifest,
-                    &query,
-                    request.nprobe,
-                )
+                .resolve_artifact_cluster_selection(snapshot, &loaded, &query, request.nprobe)
                 .await?;
-            (manifest_location, selection, nlist)
+            (postings_table_key, selection, nlist)
         } else {
             let centroid_artifact = self.indexes.load_snapshot_ivf_centroids(&loaded).await?;
-            let postings_relation = index_relation(&self.warehouse, &loaded, "ivf_postings")?;
-            let postings_relation_key = relation_key(&postings_relation);
+            let postings_table_key = bound_index_table_key(&loaded, "ivf_postings");
+            self.bind_index_table(
+                &postings_table_key,
+                snapshot,
+                "ivf_postings",
+                "ivf_postings",
+            )?;
             let centroid_cache_key = format!(
                 "{}\0ivf_centroids",
                 centroid_artifact.entry.metadata_location
@@ -239,10 +239,10 @@ impl LocalSession {
             let (selection, nlist) = self
                 .resolve_cluster_selection(&loaded, &centroid_cache_key, &query, request.nprobe)
                 .await?;
-            (postings_relation_key, selection, nlist)
+            (postings_table_key, selection, nlist)
         };
         Ok(ResolvedSearch {
-            source_relation_key: source.key.clone(),
+            source_table_key: source.key.clone(),
             query,
             metric,
             vector_field: snapshot.vector_field.clone(),
@@ -251,7 +251,7 @@ impl LocalSession {
                 &snapshot.vector_field,
             )?,
             source_key_fields: snapshot.source_key_fields.clone(),
-            postings_relation_key: Some(postings_relation_key),
+            postings_table_key: Some(postings_table_key),
             posting_encoding,
             cluster_selection: Some(cluster_selection),
             nlist: Some(nlist),
@@ -289,7 +289,7 @@ impl LocalSession {
             return compile_index_only_plan(postings, resolved);
         }
 
-        let registered = self.register_search_relations(resolved, &context).await?;
+        let registered = self.register_search_tables(resolved, &context).await?;
         let result = compile_registered_search(
             &context,
             &registered.execution,
@@ -305,16 +305,16 @@ impl LocalSession {
         Ok(plan)
     }
 
-    async fn register_search_relations(
+    async fn register_search_tables(
         &self,
         resolved: &ResolvedSearch,
         context: &SessionContext,
-    ) -> Result<RegisteredSearchRelations> {
+    ) -> Result<RegisteredSearchTables> {
         let mut execution = resolved.clone();
         let token = Uuid::new_v4().simple().to_string();
-        let source = if datafusion_source_relation_required(resolved)? {
+        let source = if datafusion_source_table_required(resolved)? {
             Some(
-                self.source_binding(&resolved.source_relation_key)?
+                self.source_binding(&resolved.source_table_key)?
                     .ok_or_else(|| {
                         Error::InvalidArgument(
                             "resolved source is not bound to this session".into(),
@@ -326,37 +326,34 @@ impl LocalSession {
             None
         };
         let postings = resolved
-            .postings_relation_key
+            .postings_table_key
             .as_ref()
             .map(|_| format!("parqdb_postings_{token}"));
-        if let (Some(key), Some(name)) = (&resolved.postings_relation_key, &postings) {
+        if let (Some(key), Some(name)) = (&resolved.postings_table_key, &postings) {
             let dataframe = match &resolved.cluster_selection {
                 Some(ClusterSelection::Native(cids)) => {
                     execution.cluster_selection = Some(ClusterSelection::All);
-                    select_clusters(
-                        self.index_relation_dataframe_for_cids(key, cids).await?,
-                        cids,
-                    )?
+                    select_clusters(self.index_table_dataframe_for_cids(key, cids).await?, cids)?
                 }
                 _ => {
-                    self.index_relation_dataframe(key, IndexRelationLayout::ManifestedCid)
+                    self.index_table_dataframe(key, IndexTableLayout::ManifestedCid)
                         .await?
                 }
             };
             context.register_table(name.clone(), dataframe.into_view())?;
         }
-        let centroids = if datafusion_centroid_relation_required(&execution)? {
+        let centroids = if datafusion_centroid_table_required(&execution)? {
             let name = format!("parqdb_centroids_{token}");
-            let Some(ClusterSelection::Relational {
-                centroids_relation_key,
+            let Some(ClusterSelection::DataFusion {
+                centroids_table_key,
                 ..
             }) = &resolved.cluster_selection
             else {
-                unreachable!("validated relational cluster selection")
+                unreachable!("validated DataFusion cluster selection")
             };
             context.register_table(
                 name.clone(),
-                self.index_relation_dataframe(centroids_relation_key, IndexRelationLayout::Plain)
+                self.index_table_dataframe(centroids_table_key, IndexTableLayout::Plain)
                     .await?
                     .into_view(),
             )?;
@@ -364,7 +361,7 @@ impl LocalSession {
         } else {
             None
         };
-        let selected_clusters = if datafusion_cluster_relation_required(&execution)? {
+        let selected_clusters = if datafusion_cluster_table_required(&execution)? {
             let name = format!("parqdb_selected_clusters_{token}");
             let Some(ClusterSelection::Native(selected_clusters)) = &resolved.cluster_selection
             else {
@@ -379,7 +376,7 @@ impl LocalSession {
         } else {
             None
         };
-        Ok(RegisteredSearchRelations {
+        Ok(RegisteredSearchTables {
             execution,
             source,
             postings,
@@ -388,15 +385,16 @@ impl LocalSession {
         })
     }
 
-    async fn read_index_relation(&self, loaded: &LoadedIndex, role: &str) -> Result<RecordBatch> {
-        let reference = index_relation(&self.warehouse, loaded, role)?;
+    async fn read_index_table(&self, loaded: &LoadedIndex, role: &str) -> Result<RecordBatch> {
+        let reference = bound_index_table_key(loaded, role);
+        self.bind_index_table(&reference, loaded.metadata.current_snapshot()?, role, role)?;
         let dataframe = self
-            .index_relation_dataframe(
-                &relation_key(&reference),
+            .index_table_dataframe(
+                &reference,
                 if role == "ivf_postings" {
-                    IndexRelationLayout::ManifestedCid
+                    IndexTableLayout::ManifestedCid
                 } else {
-                    IndexRelationLayout::Plain
+                    IndexTableLayout::Plain
                 },
             )
             .await?;
@@ -404,62 +402,138 @@ impl LocalSession {
         Ok(concat_batches(&schema, &dataframe.collect().await?)?)
     }
 
-    async fn index_relation_dataframe(
+    async fn index_table_dataframe(
         &self,
         key: &str,
-        layout: IndexRelationLayout,
+        layout: IndexTableLayout,
     ) -> Result<datafusion::dataframe::DataFrame> {
+        if let Some(binding) = self.index_table_binding(key)? {
+            let provider = self
+                .index_providers
+                .open(&self.context.state(), &binding.provider)
+                .await?
+                .open_index_table(&binding.role, &binding.table, &IndexSelection::default())
+                .await?;
+            return Ok(self.context.read_table(provider)?);
+        }
         let provider = self
-            .index_relation_providers
+            .index_table_providers
             .get_or_create_parquet(key, layout, &self.context.state())
             .await?;
         Ok(self.context.read_table(provider)?)
     }
 
-    async fn index_relation_dataframe_for_cids(
+    async fn index_table_dataframe_for_cids(
         &self,
         key: &str,
         cids: &[i32],
     ) -> Result<datafusion::dataframe::DataFrame> {
+        if let Some(binding) = self.index_table_binding(key)? {
+            let mut selected = cids.to_vec();
+            selected.sort_unstable();
+            selected.dedup();
+            let selection = IndexSelection::cids(Arc::<[i32]>::from(selected))?;
+            let provider = self
+                .index_providers
+                .open(&self.context.state(), &binding.provider)
+                .await?
+                .open_index_table(&binding.role, &binding.table, &selection)
+                .await?;
+            return Ok(self.context.read_table(provider)?);
+        }
         let provider = self
-            .index_relation_providers
+            .index_table_providers
             .manifested_cid_provider(key, cids, &self.context.state())
             .await?;
         Ok(self.context.read_table(provider)?)
     }
 
-    async fn register_sql_relation(
+    fn bind_index_table(
+        &self,
+        key: &str,
+        snapshot: &parqdb_meta::IndexSnapshot,
+        role: &str,
+        metadata_role: &str,
+    ) -> Result<()> {
+        let table = snapshot
+            .index_tables
+            .get(metadata_role)
+            .cloned()
+            .ok_or_else(|| {
+                Error::InvalidMetadata(format!("missing index table role: {metadata_role}"))
+            })?;
+        let binding = super::index_table::IndexTableBinding {
+            provider: snapshot.index_provider.clone(),
+            role: IndexTableRole::new(role)?,
+            table,
+        };
+        let mut bindings = self
+            .index_table_bindings
+            .write()
+            .map_err(|_| Error::InvalidArgument("index table binding lock is poisoned".into()))?;
+        if let Some(existing) = bindings.get(key) {
+            if existing != &binding {
+                return Err(Error::InvalidMetadata(format!(
+                    "index table key was rebound with a different definition: {key}"
+                )));
+            }
+            return Ok(());
+        }
+        bindings.insert(key.to_owned(), binding);
+        Ok(())
+    }
+
+    fn index_table_binding(
+        &self,
+        key: &str,
+    ) -> Result<Option<super::index_table::IndexTableBinding>> {
+        Ok(self
+            .index_table_bindings
+            .read()
+            .map_err(|_| Error::InvalidArgument("index table binding lock is poisoned".into()))?
+            .get(key)
+            .cloned())
+    }
+
+    async fn register_sql_table(
         &self,
         role: &str,
-        relation_key: &str,
-        layout: IndexRelationLayout,
+        table_key: &str,
+        layout: IndexTableLayout,
     ) -> Result<String> {
-        let key = format!("{role}\0{relation_key}");
+        let key = format!("{role}\0{table_key}");
         if let Some(name) = self
-            .sql_relations
+            .sql_tables
             .read()
-            .map_err(|_| sql_relation_lock_error())?
+            .map_err(|_| sql_table_lock_error())?
             .get(&key)
             .cloned()
         {
             return Ok(name);
         }
 
-        let provider = self
-            .index_relation_providers
-            .deferred_parquet_provider(relation_key, layout, &self.context.state())
-            .await?;
+        let provider = if let Some(binding) = self.index_table_binding(table_key)? {
+            self.index_providers
+                .open(&self.context.state(), &binding.provider)
+                .await?
+                .open_index_table(&binding.role, &binding.table, &IndexSelection::default())
+                .await?
+        } else {
+            self.index_table_providers
+                .deferred_parquet_provider(table_key, layout, &self.context.state())
+                .await?
+        };
         let identifier = Uuid::new_v5(&Uuid::NAMESPACE_URL, key.as_bytes());
         let name = format!("__parqdb_{role}_{}", identifier.simple());
-        let mut relations = self
-            .sql_relations
+        let mut tables = self
+            .sql_tables
             .write()
-            .map_err(|_| sql_relation_lock_error())?;
-        if let Some(existing) = relations.get(&key) {
+            .map_err(|_| sql_table_lock_error())?;
+        if let Some(existing) = tables.get(&key) {
             return Ok(existing.clone());
         }
         self.context.register_table(name.clone(), provider)?;
-        relations.insert(key, name.clone());
+        tables.insert(key, name.clone());
         Ok(name)
     }
 
@@ -477,28 +551,26 @@ impl LocalSession {
         let name = format!("parqdb_postings_selected_{token}");
         let cache_key = format!("postings-selected\0{token}");
         if let Some(existing) = self
-            .sql_relations
+            .sql_tables
             .read()
-            .map_err(|_| sql_relation_lock_error())?
+            .map_err(|_| sql_table_lock_error())?
             .get(&cache_key)
             .cloned()
         {
             return Ok(existing);
         }
-        let dataframe = select_clusters(
-            self.index_relation_dataframe_for_cids(key, cids).await?,
-            cids,
-        )?;
-        let mut relations = self
-            .sql_relations
+        let dataframe =
+            select_clusters(self.index_table_dataframe_for_cids(key, cids).await?, cids)?;
+        let mut tables = self
+            .sql_tables
             .write()
-            .map_err(|_| sql_relation_lock_error())?;
-        if let Some(existing) = relations.get(&cache_key) {
+            .map_err(|_| sql_table_lock_error())?;
+        if let Some(existing) = tables.get(&cache_key) {
             return Ok(existing.clone());
         }
         self.context
             .register_table(name.clone(), dataframe.into_view())?;
-        relations.insert(cache_key, name.clone());
+        tables.insert(cache_key, name.clone());
         Ok(name)
     }
 
@@ -506,22 +578,22 @@ impl LocalSession {
         &self,
         resolved: &ResolvedSearch,
     ) -> Result<Option<datafusion::dataframe::DataFrame>> {
-        if datafusion_source_relation_required(resolved)? {
+        if datafusion_source_table_required(resolved)? {
             return Ok(None);
         }
-        let Some(key) = &resolved.postings_relation_key else {
+        let Some(key) = &resolved.postings_table_key else {
             return Ok(None);
         };
         match &resolved.cluster_selection {
             Some(ClusterSelection::Native(cids)) => Ok(Some(select_clusters(
-                self.index_relation_dataframe_for_cids(key, cids).await?,
+                self.index_table_dataframe_for_cids(key, cids).await?,
                 cids,
             )?)),
             Some(ClusterSelection::All) => Ok(Some(
-                self.index_relation_dataframe(key, IndexRelationLayout::ManifestedCid)
+                self.index_table_dataframe(key, IndexTableLayout::ManifestedCid)
                     .await?,
             )),
-            Some(ClusterSelection::Relational { .. }) | None => Ok(None),
+            Some(ClusterSelection::DataFusion { .. }) | None => Ok(None),
         }
     }
 
@@ -539,11 +611,11 @@ impl LocalSession {
             ClusterSelection::All
         } else if use_native_cluster_routing(nlist, dimension) {
             let centroids = self
-                .index_relation_providers
+                .index_table_providers
                 .get_or_load_centroids(cache_key, || async {
-                    let centroids = self.read_index_relation(loaded, "ivf_centroids").await?;
+                    let centroids = self.read_index_table(loaded, "ivf_centroids").await?;
                     let values = crate::ivf::read_centroids(&centroids, nlist, dimension)?;
-                    super::index_relation::CentroidNavigator::new(nlist, dimension, &values)
+                    super::index_table::CentroidNavigator::new(nlist, dimension, &values)
                 })
                 .await?;
             centroids.validate_shape(nlist, dimension)?;
@@ -558,10 +630,15 @@ impl LocalSession {
                 .collect::<Result<Vec<_>>>()?;
             ClusterSelection::Native(selected)
         } else {
-            let centroids_relation_key =
-                relation_key(&index_relation(&self.warehouse, loaded, "ivf_centroids")?);
+            let centroids_table_key = bound_index_table_key(loaded, "ivf_centroids");
+            self.bind_index_table(
+                &centroids_table_key,
+                snapshot,
+                "ivf_centroids",
+                "ivf_centroids",
+            )?;
             ClusterSelection::Native(
-                self.route_centroids_with_datafusion(&centroids_relation_key, query, nprobe)
+                self.route_centroids_with_datafusion(&centroids_table_key, query, nprobe)
                     .await?,
             )
         };
@@ -571,8 +648,7 @@ impl LocalSession {
     async fn resolve_artifact_cluster_selection(
         &self,
         snapshot: &parqdb_meta::IndexSnapshot,
-        manifest_location: &str,
-        manifest: &IndexArtifactManifest,
+        loaded: &LoadedIndex,
         query: &[f32],
         requested_nprobe: Option<usize>,
     ) -> Result<(ClusterSelection, usize)> {
@@ -581,21 +657,18 @@ impl LocalSession {
         if nprobe == nlist {
             return Ok((ClusterSelection::All, nlist));
         }
-        let cache_key = format!("{manifest_location}\0centroids");
-        let centroid_location =
-            resolve_artifact_object(manifest_location, &manifest.hierarchy.centroids.path)?;
+        let cache_key = bound_index_table_key(loaded, "ivf_centroids");
+        self.bind_index_table(&cache_key, snapshot, "ivf_centroids", "ivf_centroids")?;
         let centroids = self
-            .index_relation_providers
+            .index_table_providers
             .get_or_load_centroids(&cache_key, || async {
-                let batch = self
-                    .parquet
-                    .read(
-                        &centroid_location,
-                        Some(&["cid", "offset", "scale", "code"]),
-                    )
+                let dataframe = self
+                    .index_table_dataframe(&cache_key, IndexTableLayout::Plain)
                     .await?;
+                let schema = Arc::clone(dataframe.schema().inner());
+                let batch = concat_batches(&schema, &dataframe.collect().await?)?;
                 let values = decode_lvq8_centroids(&batch, nlist, dimension)?;
-                super::index_relation::CentroidNavigator::new(nlist, dimension, &values)
+                super::index_table::CentroidNavigator::new(nlist, dimension, &values)
             })
             .await?;
         let selected = centroids
@@ -612,7 +685,7 @@ impl LocalSession {
 
     pub(super) async fn route_centroids_with_datafusion(
         &self,
-        relation_key: &str,
+        table_key: &str,
         query: &[f32],
         nprobe: usize,
     ) -> Result<Vec<i32>> {
@@ -631,7 +704,7 @@ impl LocalSession {
         );
         let distance = self.context.udf("parqdb_lvq8_l2")?;
         let batches = self
-            .index_relation_dataframe(relation_key, IndexRelationLayout::Plain)
+            .index_table_dataframe(table_key, IndexTableLayout::Plain)
             .await?
             .select(vec![
                 col("cid"),
@@ -705,13 +778,13 @@ fn resolve_exact_search(
     let query = crate::vector::transform_query(&request.query, DistanceMetric::L2Squared)?;
     let vector_field = exact_vector_field(source.schema.as_ref(), request.column.as_deref())?;
     Ok(ResolvedSearch {
-        source_relation_key: source.key.clone(),
+        source_table_key: source.key.clone(),
         query,
         metric: DistanceMetric::L2Squared,
         source_vector_is_f64: source_vector_uses_f64(source.schema.as_ref(), &vector_field)?,
         vector_field,
         source_key_fields: Vec::new(),
-        postings_relation_key: None,
+        postings_table_key: None,
         posting_encoding: PostingEncoding::Source,
         cluster_selection: None,
         nlist: None,
@@ -747,7 +820,7 @@ async fn compile_registered_search(
 ) -> Result<datafusion::dataframe::DataFrame> {
     if let Some(filter) = &resolved.filter {
         let source = source_name.ok_or_else(|| {
-            Error::InvalidArgument("a filtered search requires the source relation".into())
+            Error::InvalidArgument("a filtered search requires the source table".into())
         })?;
         let source = quote_identifier(source);
         context
@@ -769,88 +842,12 @@ fn quote_identifier(identifier: &str) -> String {
     format!("\"{}\"", identifier.replace('"', "\"\""))
 }
 
-fn index_relation(
-    warehouse: &parqdb_storage::Warehouse,
-    loaded: &LoadedIndex,
-    role: &str,
-) -> Result<RelationReference> {
-    let relative = loaded
-        .metadata
-        .current_snapshot()?
-        .index_relations
-        .get(role)
-        .ok_or_else(|| Error::InvalidMetadata(format!("missing relation role: {role}")))?;
-    Ok(RelationReference::Parquet {
-        uri: resolve_snapshot_location(warehouse, relative, relative.ends_with('/'))?,
-    })
-}
-
-fn artifact_manifest_location(
-    warehouse: &parqdb_storage::Warehouse,
-    loaded: &LoadedIndex,
-) -> Result<String> {
-    let location = loaded
-        .metadata
-        .current_snapshot()?
-        .index_relations
-        .get("artifact_manifest")
-        .ok_or_else(|| Error::InvalidMetadata("missing relation role: artifact_manifest".into()))?;
-    resolve_snapshot_location(warehouse, location, false)
-}
-
-fn resolve_snapshot_location(
-    warehouse: &parqdb_storage::Warehouse,
-    location: &str,
-    directory: bool,
-) -> Result<String> {
-    if url::Url::parse(location).is_ok() {
-        parqdb_meta::validate_absolute_location(location)?;
-        Ok(location.to_owned())
-    } else {
-        Ok(warehouse.location(location, directory)?)
-    }
-}
-
-fn validate_artifact_snapshot(
-    snapshot: &parqdb_meta::IndexSnapshot,
-    manifest: &IndexArtifactManifest,
-) -> Result<()> {
-    let artifact_uuid = snapshot
-        .parameters
-        .get("artifact_uuid")
-        .and_then(|value| Uuid::parse_str(value).ok());
-    let source_keys = manifest
-        .index
-        .source_key_fields
-        .iter()
-        .map(|field| field.name.as_str())
-        .collect::<Vec<_>>();
-    if artifact_uuid != Some(manifest.artifact_uuid)
-        || snapshot.vector_field != manifest.index.vector_field
-        || snapshot
-            .source_key_fields
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>()
-            != source_keys
-        || snapshot.metric != manifest.index.metric.as_str()
-        || PostingEncoding::from_snapshot(snapshot)? != manifest.index.posting_encoding
-        || snapshot.parameter_usize("dimension")?
-            != usize::try_from(manifest.index.dimension).unwrap_or_default()
-        || snapshot.parameter_usize("nlist")?
-            != usize::try_from(manifest.index.nlist).unwrap_or_default()
-        || snapshot.parameter_usize("ntotal")?
-            != usize::try_from(manifest.index.ntotal).unwrap_or_default()
-    {
-        return Err(Error::InvalidMetadata(
-            "catalog snapshot does not match its artifact manifest".into(),
-        ));
-    }
-    Ok(())
+fn bound_index_table_key(loaded: &LoadedIndex, role: &str) -> String {
+    format!("{}\0{role}", loaded.entry.metadata_location)
 }
 
 fn decode_lvq8_centroids(batch: &RecordBatch, nlist: usize, dimension: usize) -> Result<Vec<f32>> {
-    if batch.num_rows() != nlist || batch.num_columns() != 4 {
+    if batch.num_rows() != nlist || batch.num_columns() != 5 {
         return Err(Error::InvalidSchema(
             "artifact centroid table has the wrong shape".into(),
         ));
@@ -859,6 +856,10 @@ fn decode_lvq8_centroids(batch: &RecordBatch, nlist: usize, dimension: usize) ->
         .column_by_name("cid")
         .and_then(|array| array.as_any().downcast_ref::<Int32Array>())
         .ok_or_else(|| Error::InvalidSchema("artifact centroid cid must be int32".into()))?;
+    let cid_buckets = batch
+        .column_by_name("cid_bucket")
+        .and_then(|array| array.as_any().downcast_ref::<Int32Array>())
+        .ok_or_else(|| Error::InvalidSchema("artifact centroid cid_bucket must be int32".into()))?;
     let offsets = batch
         .column_by_name("offset")
         .and_then(|array| array.as_any().downcast_ref::<Float32Array>())
@@ -871,6 +872,7 @@ fn decode_lvq8_centroids(batch: &RecordBatch, nlist: usize, dimension: usize) ->
         .column_by_name("code")
         .ok_or_else(|| Error::InvalidSchema("artifact centroid code is missing".into()))?;
     if cids.null_count() != 0
+        || cid_buckets.null_count() != 0
         || offsets.null_count() != 0
         || scales.null_count() != 0
         || codes.null_count() != 0
@@ -912,6 +914,6 @@ fn decode_lvq8_centroids(batch: &RecordBatch, nlist: usize, dimension: usize) ->
     Ok(decoded)
 }
 
-fn sql_relation_lock_error() -> Error {
-    Error::InvalidArgument("SQL relation lock is poisoned".into())
+fn sql_table_lock_error() -> Error {
+    Error::InvalidArgument("SQL table lock is poisoned".into())
 }

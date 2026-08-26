@@ -173,7 +173,6 @@ chunking and the search UI, see
 | --- | --- | --- | --- |
 | Embedded DataFusion | Parquet | Build and query IVF, IVF-LVQ4, and IVF-LVQ8 indexes | Supported |
 | Browser/WASM | Public HTTPS object storage | Query immutable IVF-LVQ4 and IVF-LVQ8 indexes over HTTP Range | Experimental |
-| Embedded DataFusion | Iceberg | Query exact table snapshots through PyIceberg | Experimental |
 | Client/server | Authorized Parquet sources | Build and query through the HTTP API | Experimental |
 
 The first supported product surface is the embedded DataFusion runtime. The

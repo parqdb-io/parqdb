@@ -1,12 +1,12 @@
-# Parquet Relation Profile
+# Parquet Provider Profile
 
 ## Overview
 
-This profile represents source and index tables as Parquet files resolved by
-the host engine. ParqDB does not parse Parquet.
+The `parquet` table and index providers represent source and index tables as
+Parquet files resolved by the host engine.
 
-The resolution context for this profile supplies host-engine access to the URI
-schemes used by the selected index snapshot.
+Runtime storage configuration supplies access to the URI schemes used by the
+selected index snapshot. Credentials are not stored in provider definitions.
 
 Parquet provides no table UUID, snapshot identity, or portable multi-file
 transaction. ParqDB metadata that references Parquet is still published through
@@ -38,16 +38,16 @@ Family schemas determine which mappings are used.
 
 ## IVF Postings Layout
 
-For IVF schema version `1`, an `ivf_postings` Parquet relation is discovered
-from exactly one `manifest.json` below the relation root. Readers must not list
-the relation prefix. The strict manifest contains `format-version`, `nlist`,
+For IVF schema version `1`, an `ivf_postings` Parquet table is discovered
+from exactly one `manifest.json` below the table root. Readers must not list
+the table prefix. The strict manifest contains `format-version`, `nlist`,
 `ntotal`, the hierarchy's `cid-offsets`, and the complete ordered `files`
 inventory. Each file entry contains `path`, `cid-bucket`, inclusive `min-cid`
 and `max-cid`, `rows`, `size`, and the lowercase whole-object `sha256`.
 
 The canonical object paths are
 `cid_bucket=<six-digit-root-id>/part-<five-digit-sequence>.parquet`.
-`cid_bucket` is physical layout metadata and is not exposed as a relation
+`cid_bucket` is physical layout metadata and is not exposed as a table
 column. Each file belongs to one hierarchical root and may contain multiple
 consecutive CIDs. The required physical `INT32` `cid` column remains in every
 Parquet file.
@@ -64,21 +64,41 @@ create-if-absent semantics. File sizes and row totals in the manifest must
 match the completed objects. This layout does not change the logical
 `ivf_postings` schema in the IVF index specification.
 
-## Relation Reference
+## Provider Definitions
 
-A Parquet relation reference contains exactly:
+A Parquet source uses a `table-definition`:
 
 ```json
 {
-  "profile": "parquet",
-  "uri": "<absolute table URI or URI pattern>"
+  "identifier": {
+    "catalog": "datafusion",
+    "namespace": ["public"],
+    "name": "documents"
+  },
+  "provider": "parquet",
+  "properties": {
+    "definition-version": "1",
+    "location": "<absolute table URI or URI pattern>",
+    "table-identity": "<stable logical identity>"
+  }
 }
 ```
 
-No other field is defined. The canonical `uri` is the table identity and is
-compared byte-for-byte. A source URI may contain `*` wildcards in its path.
-The pattern itself is the identity; metadata does not expand it into a file
-list. Index-table writers should use concrete URIs.
+`identifier` is the runtime table name. Provider properties are versioned,
+non-secret strings. `location` is canonical and may contain `*` wildcards for
+a source table; the pattern itself is persisted rather than an expanded file
+list. `table-identity` is the provider's stable semantic identity and defaults
+to the serialized logical identifier when omitted. An implementation may
+persist additional versioned properties required to reconstruct schema,
+partition columns, sort order, and scan options.
+
+A Parquet index uses an `index-provider-definition` with `provider` equal to
+`parquet`. Its `index-table-definition` has `definition-version` equal to `1`
+and a required `location` property. The optional `layout` value
+`artifact-manifest` means `location` names the authoritative top-level
+`manifest.json`; otherwise it names a Parquet table directly. Index-table
+locations are warehouse-relative unless the provider explicitly supports an
+absolute external location.
 
 The URI must:
 
@@ -114,7 +134,7 @@ contents can provide stable reads and usable history, but this profile does not
 require it. A writer that replaces a URI must not assume that index snapshots
 referring to the old contents remain readable.
 
-For a Parquet source, metadata captures only its URI or URI pattern. It does not
-capture a file listing, content hash, or snapshot. A reader validates URI and
-schema but cannot detect content replacement at the same URI or changes to the
-set of files matched by the same pattern.
+For a Parquet source, metadata captures provider properties rather than a file
+inventory. It does not capture a content hash or snapshot. A reader validates
+location and schema but cannot detect content replacement at the same location
+or changes to the set of files matched by the same pattern.

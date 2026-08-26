@@ -160,7 +160,6 @@ HTTP Range 和 CORS 行为。
 | --- | --- | --- | --- |
 | 内嵌 DataFusion | Parquet | 构建和查询 IVF、IVF-LVQ4 与 IVF-LVQ8 索引 | 已支持 |
 | 浏览器/WASM | 公共 HTTPS 对象存储 | 通过 HTTP Range 查询不可变 IVF-LVQ4 与 IVF-LVQ8 索引 | 实验性 |
-| 内嵌 DataFusion | Iceberg | 通过 PyIceberg 查询精确表快照 | 实验性 |
 | 客户端/服务端 | 已授权的 Parquet 数据源 | 通过 HTTP API 构建和查询索引 | 实验性 |
 
 首个正式支持的产品形态是内嵌 DataFusion 运行时。索引规范仍独立于该运行

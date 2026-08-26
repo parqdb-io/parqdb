@@ -210,7 +210,6 @@ def test_http_transport_matches_embedded_query_surface(tmp_path: Path) -> None:
             root,
             warehouse=None,
             storage_options=None,
-            iceberg=None,
             config=None,
             runtime=None,
         )
@@ -272,7 +271,6 @@ def test_http_registers_an_index_already_published_in_the_warehouse(
             root,
             warehouse=None,
             storage_options=None,
-            iceberg=None,
             config=None,
             runtime=None,
         )
@@ -318,7 +316,6 @@ def test_transport_lifecycle_conformance(tmp_path: Path, mode: str) -> None:
             root,
             warehouse=None,
             storage_options=None,
-            iceberg=None,
             config=None,
             runtime=None,
         )
@@ -427,7 +424,6 @@ def test_http_server_denies_unconfigured_source_roots(tmp_path: Path) -> None:
             tmp_path / "parqdb-data",
             warehouse=None,
             storage_options=None,
-            iceberg=None,
             config=None,
             runtime=None,
         )
@@ -456,7 +452,6 @@ def test_http_server_validates_routes_and_publishes_openapi(tmp_path: Path) -> N
             tmp_path / "parqdb-data",
             warehouse=None,
             storage_options=None,
-            iceberg=None,
             config=None,
             runtime=None,
         )

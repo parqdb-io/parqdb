@@ -10,9 +10,9 @@ import pytest
 from _support import (
     WAIT,
     build_index,
+    index_table_files,
     load_table_index,
     register_source,
-    relation_files,
     vector_type,
 )
 
@@ -310,7 +310,7 @@ def test_nullable_source_schema_accepts_non_null_values(tmp_path: Path) -> None:
         "snapshots"
     ][0]
     postings = pq.read_schema(
-        relation_files(snapshot["index-relations"]["ivf_postings"], session.warehouse)[
+        index_table_files(snapshot["index-tables"]["ivf_postings"], session.warehouse)[
             0
         ]
     )
@@ -357,7 +357,7 @@ def test_duplicate_source_key_is_a_caller_contract(tmp_path: Path) -> None:
     ][0]
     assert snapshot["parameters"]["ntotal"] == "2"
     postings = pq.read_table(
-        relation_files(snapshot["index-relations"]["ivf_postings"], session.warehouse)
+        index_table_files(snapshot["index-tables"]["ivf_postings"], session.warehouse)
     )
     assert postings.num_rows == 2
     assert postings["key_1"].to_pylist() == ["same", "same"]
@@ -407,7 +407,7 @@ def test_supported_source_key_types_round_trip_through_postings(
         "snapshots"
     ][0]
     posting_schema = pq.read_schema(
-        relation_files(snapshot["index-relations"]["ivf_postings"], session.warehouse)[
+        index_table_files(snapshot["index-tables"]["ivf_postings"], session.warehouse)[
             0
         ]
     )

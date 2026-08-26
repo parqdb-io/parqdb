@@ -15,7 +15,10 @@ use datafusion::common::ScalarValue;
 use datafusion::logical_expr::registry::FunctionRegistry;
 use datafusion::prelude::{Expr, SessionContext, col};
 use object_store::local::LocalFileSystem;
-use parqdb_meta::{DistanceMetric, IndexMetadata, PostingEncoding};
+use parqdb_meta::{
+    DistanceMetric, IndexMetadata, IndexProviderDefinition, PostingEncoding, TableDefinition,
+    TableIdentifier,
+};
 use parqdb_storage::StorageRegistry;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -33,6 +36,19 @@ fn query_literal(query: &[f32]) -> Expr {
         ScalarValue::List(ScalarValue::new_list(&values, &DataType::Float32, false)),
         None,
     )
+}
+
+fn source_table() -> TableDefinition {
+    TableDefinition::new(
+        TableIdentifier::new("datafusion", vec!["public".into()], "source").unwrap(),
+        "parquet",
+        BTreeMap::from([
+            ("definition-version".into(), "1".into()),
+            ("location".into(), "file:///source".into()),
+            ("table-identity".into(), "file:///source".into()),
+        ]),
+    )
+    .unwrap()
 }
 use crate::builder::{IvfTables, build_ivf_tables};
 use crate::parquet::ParquetStore;
@@ -109,11 +125,11 @@ fn shared_query_fixture() -> (TempDir, ParquetStore, IndexMetadata) {
 
 fn resolved_search(nlist: usize, cluster_selection: ClusterSelection) -> ResolvedSearch {
     ResolvedSearch {
-        source_relation_key: "file:///source".into(),
+        source_table_key: "file:///source".into(),
         query: vec![0.0, 0.0],
         vector_field: "embedding".into(),
         source_key_fields: vec!["id".into()],
-        postings_relation_key: Some("file:///postings".into()),
+        postings_table_key: Some("file:///postings".into()),
         posting_encoding: PostingEncoding::Source,
         metric: DistanceMetric::L2Squared,
         source_vector_is_f64: false,
@@ -127,39 +143,39 @@ fn resolved_search(nlist: usize, cluster_selection: ClusterSelection) -> Resolve
 }
 
 #[test]
-fn datafusion_cluster_filter_uses_inline_relation_and_full_scan_modes() {
+fn datafusion_cluster_filter_uses_inline_table_and_full_scan_modes() {
     let inline = resolved_search(64, ClusterSelection::Native(vec![0, 3, 7]));
-    assert!(!datafusion_cluster_relation_required(&inline).unwrap());
+    assert!(!datafusion_cluster_table_required(&inline).unwrap());
     let inline_sql =
         compile_datafusion_sql(&inline, Some("source"), Some("postings"), None, None).unwrap();
     assert!(inline_sql.contains("p.\"cid\" IN (0, 3, 7)"));
 
-    let relation = resolved_search(256, ClusterSelection::Native((0..129).collect()));
-    assert!(datafusion_cluster_relation_required(&relation).unwrap());
-    let embedded_relation_sql =
-        compile_datafusion_sql(&relation, Some("source"), Some("postings"), None, None).unwrap();
+    let table = resolved_search(256, ClusterSelection::Native((0..129).collect()));
+    assert!(datafusion_cluster_table_required(&table).unwrap());
+    let embedded_table_sql =
+        compile_datafusion_sql(&table, Some("source"), Some("postings"), None, None).unwrap();
     assert!(
-        embedded_relation_sql
+        embedded_table_sql
             .contains("parqdb_selected_clusters(\"cid\") AS (\n        VALUES (0), (1), (2), (3)")
     );
-    assert!(embedded_relation_sql.contains(
+    assert!(embedded_table_sql.contains(
         "LEFT SEMI JOIN \"parqdb_selected_clusters\" AS selected ON p.\"cid\" = selected.\"cid\""
     ));
-    let relation_sql = compile_datafusion_sql(
-        &relation,
+    let table_sql = compile_datafusion_sql(
+        &table,
         Some("source"),
         Some("postings"),
         None,
         Some("selected_clusters"),
     )
     .unwrap();
-    assert!(relation_sql.contains(
+    assert!(table_sql.contains(
         "LEFT SEMI JOIN \"selected_clusters\" AS selected ON p.\"cid\" = selected.\"cid\""
     ));
-    assert!(!relation_sql.contains("p.\"cid\" IN"));
+    assert!(!table_sql.contains("p.\"cid\" IN"));
 
     let all = resolved_search(64, ClusterSelection::All);
-    assert!(!datafusion_cluster_relation_required(&all).unwrap());
+    assert!(!datafusion_cluster_table_required(&all).unwrap());
     let all_sql =
         compile_datafusion_sql(&all, Some("source"), Some("postings"), None, None).unwrap();
     assert!(all_sql.contains("SELECT * FROM \"postings\" AS p"));
@@ -171,30 +187,30 @@ fn datafusion_cluster_filter_uses_inline_relation_and_full_scan_modes() {
 fn datafusion_cluster_filter_rejects_invalid_selected_cids() {
     for selected in [vec![], vec![-1], vec![0, 0], vec![64]] {
         let resolved = resolved_search(64, ClusterSelection::Native(selected));
-        assert!(datafusion_cluster_relation_required(&resolved).is_err());
+        assert!(datafusion_cluster_table_required(&resolved).is_err());
     }
 }
 
 #[test]
-fn source_encoding_requires_the_source_relation() {
+fn source_encoding_requires_the_source_table() {
     let mut resolved = resolved_search(2, ClusterSelection::All);
-    assert!(datafusion_source_relation_required(&resolved).unwrap());
+    assert!(datafusion_source_table_required(&resolved).unwrap());
     resolved.projection = vec!["title".into()];
-    assert!(datafusion_source_relation_required(&resolved).unwrap());
+    assert!(datafusion_source_table_required(&resolved).unwrap());
 }
 
 #[test]
-fn datafusion_cluster_filter_builds_relational_centroid_top_k() {
+fn datafusion_cluster_filter_builds_datafusion_centroid_top_k() {
     let resolved = resolved_search(
         4096,
-        ClusterSelection::Relational {
-            centroids_relation_key: "file:///centroids".into(),
+        ClusterSelection::DataFusion {
+            centroids_table_key: "file:///centroids".into(),
             nprobe: 64,
         },
     );
 
-    assert!(datafusion_centroid_relation_required(&resolved).unwrap());
-    assert!(!datafusion_cluster_relation_required(&resolved).unwrap());
+    assert!(datafusion_centroid_table_required(&resolved).unwrap());
+    assert!(!datafusion_cluster_table_required(&resolved).unwrap());
     assert!(
         compile_datafusion_sql(&resolved, Some("source"), Some("postings"), None, None).is_err()
     );
@@ -227,7 +243,7 @@ fn cluster_router_uses_centroid_matrix_size() {
 }
 
 #[tokio::test]
-async fn relational_cluster_routing_matches_native_routing() {
+async fn datafusion_cluster_routing_matches_native_routing() {
     let source = source();
     let artifacts = build_ivf_tables(&source, "embedding", &["id".into()], 2).unwrap();
     let snapshot = snapshot(&artifacts);
@@ -245,35 +261,35 @@ async fn relational_cluster_routing_matches_native_routing() {
         .unwrap();
 
     let native = resolved_search(2, ClusterSelection::Native(selected));
-    let relational = resolved_search(
+    let datafusion = resolved_search(
         2,
-        ClusterSelection::Relational {
-            centroids_relation_key: "file:///centroids".into(),
+        ClusterSelection::DataFusion {
+            centroids_table_key: "file:///centroids".into(),
             nprobe: 1,
         },
     );
     let native_sql =
         compile_datafusion_sql(&native, Some("source"), Some("postings"), None, None).unwrap();
-    let relational_sql = compile_datafusion_sql(
-        &relational,
+    let datafusion_sql = compile_datafusion_sql(
+        &datafusion,
         Some("source"),
         Some("postings"),
         Some("centroids"),
         None,
     )
     .unwrap();
-    let relational_plan = context
-        .sql(&relational_sql)
+    let datafusion_plan = context
+        .sql(&datafusion_sql)
         .await
         .unwrap()
         .create_physical_plan()
         .await
         .unwrap();
-    let relational_plan = datafusion::physical_plan::displayable(relational_plan.as_ref())
+    let datafusion_plan = datafusion::physical_plan::displayable(datafusion_plan.as_ref())
         .indent(false)
         .to_string();
-    assert!(relational_plan.contains("TopK(fetch=1)"));
-    assert!(relational_plan.contains("join_type=RightSemi"));
+    assert!(datafusion_plan.contains("TopK(fetch=1)"));
+    assert!(datafusion_plan.contains("join_type=RightSemi"));
     let native_batches = context
         .sql(&native_sql)
         .await
@@ -281,8 +297,8 @@ async fn relational_cluster_routing_matches_native_routing() {
         .collect()
         .await
         .unwrap();
-    let relational_batches = context
-        .sql(&relational_sql)
+    let datafusion_batches = context
+        .sql(&datafusion_sql)
         .await
         .unwrap()
         .collect()
@@ -304,7 +320,7 @@ async fn relational_cluster_routing_matches_native_routing() {
             })
             .collect::<Vec<_>>()
     };
-    assert_eq!(ids(&relational_batches), ids(&native_batches));
+    assert_eq!(ids(&datafusion_batches), ids(&native_batches));
 }
 
 #[tokio::test]
@@ -432,9 +448,16 @@ async fn datafusion_execution_matches_the_shared_query_fixtures() {
     let source_uri = format!("{fixture_root}source/");
     let centroids_uri = format!(
         "{fixture_root}{}",
-        snapshot.index_relations["ivf_centroids"]
+        snapshot.index_tables["ivf_centroids"]
+            .required_property("location")
+            .unwrap()
     );
-    let postings_uri = format!("{fixture_root}{}", snapshot.index_relations["ivf_postings"]);
+    let postings_uri = format!(
+        "{fixture_root}{}",
+        snapshot.index_tables["ivf_postings"]
+            .required_property("location")
+            .unwrap()
+    );
     let centroids = parquet.read(&centroids_uri, None).await.unwrap();
     let source = parquet.read(&source_uri, None).await.unwrap();
     let postings = parquet.dataframe(&postings_uri).await.unwrap();
@@ -469,11 +492,11 @@ async fn datafusion_execution_matches_the_shared_query_fixtures() {
             .collect();
         let selected = selected_cluster_ids(snapshot, &centroids, &query, Some(nprobe)).unwrap();
         let resolved = ResolvedSearch {
-            source_relation_key: source_uri.clone(),
+            source_table_key: source_uri.clone(),
             query,
             vector_field: snapshot.vector_field.clone(),
             source_key_fields: snapshot.source_key_fields.clone(),
-            postings_relation_key: Some(postings_uri.clone()),
+            postings_table_key: Some(postings_uri.clone()),
             posting_encoding: PostingEncoding::from_snapshot(snapshot).unwrap(),
             metric: DistanceMetric::L2Squared,
             source_vector_is_f64: false,
@@ -488,7 +511,7 @@ async fn datafusion_execution_matches_the_shared_query_fixtures() {
             filter,
             limit,
         };
-        let source_name = datafusion_source_relation_required(&resolved)
+        let source_name = datafusion_source_table_required(&resolved)
             .unwrap()
             .then_some("source");
         let sql =
@@ -504,6 +527,7 @@ fn snapshot(artifacts: &IvfTables) -> IndexSnapshot {
         sequence_number: 1,
         timestamp_ms: 1,
         summary: BTreeMap::new(),
+        source_table: source_table(),
         vector_field: "embedding".into(),
         source_key_fields: vec!["id".into()],
         indexed_rows: i64::try_from(artifacts.ntotal).unwrap(),
@@ -528,7 +552,8 @@ fn snapshot(artifacts: &IvfTables) -> IndexSnapshot {
                 "metadata/fe985f6d-3592-4385-a1ca-71347057a210/v1.metadata.json".into(),
             ),
         ]),
-        index_relations: BTreeMap::new(),
+        index_provider: IndexProviderDefinition::new("parquet", BTreeMap::new()).unwrap(),
+        index_tables: BTreeMap::new(),
     }
 }
 
@@ -579,7 +604,7 @@ fn executes_spec_distance_ordering_projection_and_exact_distance() {
 }
 
 #[test]
-fn validates_query_inputs_and_relation_cardinality() {
+fn validates_query_inputs_and_table_cardinality() {
     let source = source();
     let artifacts = build_ivf_tables(&source, "embedding", &["id".into()], 2).unwrap();
     let snapshot = snapshot(&artifacts);

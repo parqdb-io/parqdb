@@ -29,12 +29,6 @@ With uv:
 uv add parqdb
 ```
 
-Install Iceberg support separately when needed:
-
-```bash
-python -m pip install "parqdb[iceberg]"
-```
-
 Use `python -m pip install --pre parqdb` when explicitly opting into a future
 pre-release while a stable release is also available.
 
