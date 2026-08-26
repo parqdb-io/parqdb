@@ -3771,7 +3771,7 @@ dependencies = [
 
 [[package]]
 name = "parallite"
-version = "0.2.0-rc.3"
+version = "0.3.0"
 dependencies = [
  "rayon",
 ]
@@ -3807,14 +3807,14 @@ dependencies = [
 
 [[package]]
 name = "parqdb-browser-kernels"
-version = "0.2.0-rc.3"
+version = "0.3.0"
 dependencies = [
  "parqdb-kernels",
 ]
 
 [[package]]
 name = "parqdb-catalog"
-version = "0.2.0-rc.3"
+version = "0.3.0"
 dependencies = [
  "parqdb-meta",
  "rusqlite",
@@ -3827,7 +3827,7 @@ dependencies = [
 
 [[package]]
 name = "parqdb-core"
-version = "0.2.0-rc.3"
+version = "0.3.0"
 dependencies = [
  "parqdb-catalog",
  "parqdb-meta",
@@ -3835,7 +3835,7 @@ dependencies = [
 
 [[package]]
 name = "parqdb-iceberg"
-version = "0.2.0-rc.3"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "datafusion",
@@ -3849,7 +3849,7 @@ dependencies = [
 
 [[package]]
 name = "parqdb-index"
-version = "0.2.0-rc.3"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3868,7 +3868,7 @@ dependencies = [
 
 [[package]]
 name = "parqdb-kernels"
-version = "0.2.0-rc.3"
+version = "0.3.0"
 dependencies = [
  "matrixmultiply",
  "thiserror",
@@ -3876,7 +3876,7 @@ dependencies = [
 
 [[package]]
 name = "parqdb-kmeans"
-version = "0.2.0-rc.3"
+version = "0.3.0"
 dependencies = [
  "num-traits",
  "parallite",
@@ -3886,7 +3886,7 @@ dependencies = [
 
 [[package]]
 name = "parqdb-local"
-version = "0.2.0-rc.3"
+version = "0.3.0"
 dependencies = [
  "arrow",
  "arrow-data",
@@ -3924,7 +3924,7 @@ dependencies = [
 
 [[package]]
 name = "parqdb-meta"
-version = "0.2.0-rc.3"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3934,7 +3934,7 @@ dependencies = [
 
 [[package]]
 name = "parqdb-python"
-version = "0.2.0-rc.3"
+version = "0.3.0"
 dependencies = [
  "arrow",
  "arrow-ipc",
@@ -3952,7 +3952,7 @@ dependencies = [
 
 [[package]]
 name = "parqdb-storage"
-version = "0.2.0-rc.3"
+version = "0.3.0"
 dependencies = [
  "bytes",
  "futures",

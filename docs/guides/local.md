@@ -1,6 +1,6 @@
 # Local DataFusion and Parquet
 
-The embedded runtime runs in the Python process and is the stable ParqDB 0.1
+The embedded runtime runs in the Python process and is ParqDB's stable primary
 path. It uses DataFusion for relational execution, native Rust code for index
 construction and distance kernels, SQLite for catalog state, and Parquet for
 the index tables.

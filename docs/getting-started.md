@@ -7,13 +7,13 @@ required.
 
 ## Requirements
 
-ParqDB 0.1 supports standard CPython 3.11 through 3.14 on:
+ParqDB supports standard CPython 3.11 through 3.14 on:
 
 - Linux x86_64 with glibc 2.28 or later; and
 - macOS arm64 11 or later.
 
 Free-threaded Python and other operating-system or architecture combinations
-are outside the initial binary release scope.
+are outside the current binary release scope.
 
 ## Install
 
