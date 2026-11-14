@@ -150,22 +150,17 @@ jobs:
           cache-dependency-glob: uv.lock
           python-version: "3.12"
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
-        with:
-          toolchain: "1.96.0"
-
-      - name: Restore Rust build cache
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          shared-key: ci
-          save-if: false
-
       - name: Install build and verification dependencies
         run: uv sync --locked --no-install-project
 
       - name: Build wheel
-        run: uv run --no-sync maturin build --release --locked --compatibility pypi --out dist
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
+        with:
+          maturin-version: v1.14.1
+          rust-toolchain: "1.96.0"
+          target: x86_64-unknown-linux-gnu
+          manylinux: "2_28"
+          args: --release --locked --compatibility pypi --out dist
 
       - name: Verify installed wheel on Python 3.11
         shell: bash
