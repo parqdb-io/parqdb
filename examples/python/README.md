@@ -24,4 +24,4 @@ uv run python -m examples.python.local.index_lifecycle
 ```
 
 See the [documentation index](../../docs/README.md) and
-[embedded guide](../../docs/guides/local.md) for the corresponding workflows.
+[embedded guide](../../docs/guides/embedded.md) for the corresponding workflows.

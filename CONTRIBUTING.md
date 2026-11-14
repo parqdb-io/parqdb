@@ -4,6 +4,17 @@ ParqDB is an early-stage implementation of the formats and behavior in
 [`spec/`](spec/README.md). Contributions should keep the portable contract and
 the implementation synchronized.
 
+## Getting Help
+
+- Installation, API, and usage questions belong in
+  [GitHub Discussions (Q&A)](https://github.com/orgs/parqdb-io/discussions/new?category=q-a).
+- Bugs and feature requests belong in
+  [GitHub Issues](https://github.com/parqdb-io/parqdb/issues).
+- Security reports must follow [`SECURITY.md`](SECURITY.md) and must not be
+  posted in a public issue or discussion.
+
+See [`SUPPORT.md`](SUPPORT.md) for what to include in a report.
+
 ## Development Setup
 
 Install Python 3.12 for the canonical development environment,

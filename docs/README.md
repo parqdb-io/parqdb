@@ -15,7 +15,7 @@ lakehouse tables and querying them with an embedded SQL runtime.
 
 | Goal | Guide | Status |
 | --- | --- | --- |
-| Build and query Parquet indexes in one Python process | [Embedded DataFusion and Parquet](guides/local.md) | Supported |
+| Build and query Parquet indexes in one Python process | [Embedded DataFusion and Parquet](guides/embedded.md) | Supported |
 | Build and query through a ParqDB server | [ParqDB server](guides/server.md) | Experimental |
 | Run maintained examples | [Python examples](../examples/python/README.md) | Tested |
 
