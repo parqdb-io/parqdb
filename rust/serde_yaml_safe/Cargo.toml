@@ -1,0 +1,12 @@
+[package]
+name = "serde_yaml"
+version = "0.9.34"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "Safe serde_yaml stand-in backed by serde-saphyr for the substrait build"
+
+[dependencies]
+serde = { version = "1.0.228", default-features = false, features = ["derive"] }
+serde-saphyr = { version = "2.1.1", default-features = false, features = ["deserialize"] }
