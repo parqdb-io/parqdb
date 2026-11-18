@@ -2,9 +2,12 @@
 
 ## Supported Versions
 
-ParqDB has not published a stable release. Security fixes are applied to the
-latest code on `main`. After releases begin, only the newest release line will
-receive fixes until a longer support policy is announced.
+ParqDB 0.3 is the current stable release line. The latest published 0.3.x
+release is 0.3.0. Security fixes are applied to the latest 0.3.x release and,
+when appropriate, to `main`.
+
+Older pre-release lines, including 0.2.x release candidates, are not supported.
+A longer support window for previous stable lines has not been announced.
 
 ## Reporting a Vulnerability
 

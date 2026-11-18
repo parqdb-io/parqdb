@@ -47,6 +47,8 @@ publish = [
 parqdb = "parqdb.cli:main"
 
 [project.urls]
+Homepage = "https://parqdb.io"
+Demo = "https://search.parqdb.io"
 Documentation = "https://parqdb.io/docs"
 Repository = "https://github.com/parqdb-io/parqdb"
 Issues = "https://github.com/parqdb-io/parqdb/issues"

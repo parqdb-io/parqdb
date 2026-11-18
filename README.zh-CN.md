@@ -60,8 +60,9 @@ ParqDB 是一个嵌入式向量数据库，用于在内存容量有限的环境�
   同一执行计划中将其与过滤、Join 和聚合组合。
 - **同时面向在线服务与分析。** 单查询内并行降低分析查询和大 K 检索延迟，
   查询间并行提升在线服务吞吐。
-- **从单核扩展到数千核。** 既可嵌入单机运行，也可通过 Spark 或 StarRocks
-  在集群规模上使用同一份 Parquet 索引。
+- **从单核扩展到数千核。** 既可嵌入单机运行。索引是普通 Parquet 文件，因此
+  Spark 或 StarRocks 等引擎也可以在集群规模上读取同一份文件。这些集群适配器
+  并不包含在 Python 包中。
 
 ## 快速开始
 
@@ -100,6 +101,12 @@ query = (
 print(session.collect(query).to_pylist())
 ```
 
+期望输出（ParqDB 0.3.0，于 Linux x86_64 / CPython 3.13 上实际运行得到）：
+
+```python
+[{'document_id': 1, 'title': 'Vector indexing', 'category': 'search', '_distance': 0.04000000283122063}, {'document_id': 2, 'title': 'Lakehouse tables', 'category': 'storage', '_distance': 0.64000004529953}, {'document_id': 5, 'title': 'Distributed execution', 'category': 'compute', '_distance': 77.44000244140625}]
+```
+
 在 ParqDB 中，向量检索本身是关系查询的一部分。将它编译为 SQL 子查询后，
 可以继续参与 Join 和聚合：
 
@@ -123,10 +130,19 @@ summary = session.sql(f"""
 print(summary.to_pydict())
 ```
 
+期望输出：
+
+```python
+{'category': ['compute', 'search', 'storage'], 'matches': [1, 1, 1], 'avg_distance': [77.44000244140625, 0.04000000283122063, 0.64000004529953], 'max_popularity': [95, 91, 74]}
+```
+
 上述示例无需额外下载数据。持久化表、已有索引、执行计划检查和源表 Schema
 要求参见[入门指南](https://github.com/parqdb-io/parqdb/blob/main/docs/getting-started.md)。
 
-一条命令即可发布源表和不可变浏览器索引。对于原始文本，ParqDB 使用固定
+### 可选：发布索引
+
+本地查询跑通之后，可以用一条命令发布源表和不可变浏览器索引。该步骤需要
+对象存储凭证，不属于上面的五分钟上手路径。对于原始文本，ParqDB 使用固定
 revision 的 MiniLM ONNX 模型生成离线 embedding 和浏览器一致性元数据，随后
 构建分层 IVF-LVQ8，并在公开唯一的顶层 `manifest.json` 前上传全部对象：
 
@@ -171,8 +187,11 @@ HTTP Range 和 CORS 行为。
 
 ## 文档
 
-公共文档在 [parqdb.io/docs](https://parqdb.io/docs) 独立维护，可通过版本选择器
-切换 `latest` 和历史版本快照。
+公共文档在 [parqdb.io/docs](https://parqdb.io/docs) 独立维护。可通过版本选择器
+在当前文档（`latest`，对应 `/docs`）与历史快照
+[`/docs/0.3`](https://parqdb.io/docs/0.3)、
+[`/docs/0.2`](https://parqdb.io/docs/0.2) 之间切换。`/docs/latest` 和
+`/docs/0.3.0` 这两个路径并未发布。
 
 - [入门指南](https://parqdb.io/docs/getting-started)
   和 [Python 示例](https://github.com/parqdb-io/parqdb/tree/main/examples/python)
@@ -185,39 +204,6 @@ HTTP Range 和 CORS 行为。
 - [当前限制](https://parqdb.io/docs/reference/limitations)、
   [故障排查](https://parqdb.io/docs/reference/troubleshooting)和
   [路线图](https://parqdb.io/docs/project/roadmap)
-
-## TEngineDB-V 与 ParqDB
-
-[TEngineDB-V: An OLAP-Native Vector Search System for Large-k Workloads at
-Tencent](https://arxiv.org/abs/2608.00650) 是腾讯用于大 K 向量检索的生产系统。
-它将查询优化和执行算子深度集成到 TEngineDB 中，在百亿向量部署上相比旧
-系统最高加速 52 倍。
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/parqdb-io/parqdb/main/assets/tenginedb-v-figure-7.png" alt="图 7：不同系统的延迟与召回率权衡" width="760">
-</p>
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/parqdb-io/parqdb/main/assets/tenginedb-v-figure-13.png" alt="图 13：百亿规模生产环境性能" width="760">
-</p>
-
-ParqDB 与 TEngineDB-V 的设计思路相通，但代码和运行时完全独立。ParqDB 以
-开放索引格式适配现有 SQL 引擎，目标是在不绑定专有引擎的前提下实现
-TEngineDB-V 级别的大 K 检索性能。
-
-如果你在研究中使用 ParqDB，请引用我们的 VLDB 2026 Industry Track 论文：
-
-```bibtex
-@misc{wu2026tenginedbvolapnativevectorsearch,
-  title         = {{TEngineDB-V}: An {OLAP}-Native Vector Search System for Large-$k$ Workloads at Tencent},
-  author        = {Xufei Wu and Pengcheng Zhang and Yitong Song and Xiaobo Zhang and Anqi Liang and Kai Wang and Jijun Du and Yidi Xiong and Guangxu Cheng and Zhe Chen and Peng Chen and Guoliang Li and Xuanhe Zhou and Fan Wu},
-  year          = {2026},
-  eprint        = {2608.00650},
-  archivePrefix = {arXiv},
-  primaryClass  = {cs.DB},
-  url           = {https://arxiv.org/abs/2608.00650},
-}
-```
 
 ## 参与开发
 
@@ -234,6 +220,11 @@ ParqDB 下一阶段的方向正在公开讨论。我们欢迎真实使用场景�
 如果你正在研究 RAG、Agent 轨迹存储、Parquet 性能或嵌入式湖仓，欢迎在
 相关 Issue 中说明工作负载和需求。开始较大改动前请先留言，以便提前确认
 范围和接口。
+
+安装、API 和使用问题请到
+[GitHub Discussions（Q&A）](https://github.com/orgs/parqdb-io/discussions/new?category=q-a)。
+缺陷报告和功能请求请到
+[GitHub Issues](https://github.com/parqdb-io/parqdb/issues)。
 
 本地开发使用 uv、Maturin、Cargo 和 Makefile：
 
@@ -264,6 +255,25 @@ make check
     </picture>
   </a>
 </p>
+
+## 相关工作
+
+[TEngineDB-V: An OLAP-Native Vector Search System for Large-k Workloads at
+Tencent](https://arxiv.org/abs/2608.00650) 是相关工作，不是同一实现。它是腾讯
+用于大 K 向量检索的生产系统。ParqDB 并不共享其代码或运行时；ParqDB 以开放的
+Parquet 索引格式和现有 SQL 引擎重新实现表原生向量检索。
+
+```bibtex
+@misc{wu2026tenginedbvolapnativevectorsearch,
+  title         = {{TEngineDB-V}: An {OLAP}-Native Vector Search System for Large-$k$ Workloads at Tencent},
+  author        = {Xufei Wu and Pengcheng Zhang and Yitong Song and Xiaobo Zhang and Anqi Liang and Kai Wang and Jijun Du and Yidi Xiong and Guangxu Cheng and Zhe Chen and Peng Chen and Guoliang Li and Xuanhe Zhou and Fan Wu},
+  year          = {2026},
+  eprint        = {2608.00650},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.DB},
+  url           = {https://arxiv.org/abs/2608.00650},
+}
+```
 
 ## 许可证
 

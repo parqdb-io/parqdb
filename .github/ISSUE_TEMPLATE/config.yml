@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Ask a question
+    url: https://github.com/orgs/parqdb-io/discussions/new?category=q-a
+    about: Installation, API, and usage questions belong in Discussions. Please search existing threads first.
   - name: Report a security vulnerability
     url: https://github.com/parqdb-io/parqdb/blob/main/SECURITY.md
     about: Read the private reporting instructions. Do not disclose details publicly.

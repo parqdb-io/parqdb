@@ -64,8 +64,10 @@ on billion-scale multimodal data, with Parquet storage and Arrow-native executio
 - **Built for serving and analytics.** Use intra-query parallelism for
   low-latency analytical and large-k searches, and inter-query parallelism for
   high-throughput online serving.
-- **Scale from one core to thousands.** Run embedded on a single machine, then
-  use the same Parquet index with Spark or StarRocks at cluster scale.
+- **Scale from one core to thousands.** Run embedded on a single machine.
+  Because indexes are ordinary Parquet, other engines such as Spark or
+  StarRocks can read the same files at cluster scale. Those adapters are not
+  bundled in the Python package.
 
 ## Quick Start
 
@@ -104,6 +106,12 @@ query = (
 print(session.collect(query).to_pylist())
 ```
 
+Expected output (ParqDB 0.3.0, captured on Linux x86_64 / CPython 3.13):
+
+```python
+[{'document_id': 1, 'title': 'Vector indexing', 'category': 'search', '_distance': 0.04000000283122063}, {'document_id': 2, 'title': 'Lakehouse tables', 'category': 'storage', '_distance': 0.64000004529953}, {'document_id': 5, 'title': 'Distributed execution', 'category': 'compute', '_distance': 77.44000244140625}]
+```
+
 Vector search remains relational rather than becoming a terminal service call.
 Compile it as a SQL subquery and compose it with the rest of the analysis:
 
@@ -127,15 +135,25 @@ summary = session.sql(f"""
 print(summary.to_pydict())
 ```
 
+Expected output:
+
+```python
+{'category': ['compute', 'search', 'storage'], 'matches': [1, 1, 1], 'avg_distance': [77.44000244140625, 0.04000000283122063, 0.64000004529953], 'max_popularity': [95, 91, 74]}
+```
+
 The packaged dataset makes this example self-contained. The
 [getting-started guide](https://parqdb.io/docs/getting-started)
 covers persistent tables, existing indexes, query inspection, and source schema
 requirements.
 
-Publish a source table and an immutable browser index in one command. For raw
-text, ParqDB uses the pinned MiniLM ONNX model for both offline embeddings and
-browser parity metadata, then builds hierarchical IVF-LVQ8 and uploads every
-object before exposing the single top-level `manifest.json`:
+### Optional: publish an index
+
+After the local query works, you can publish a source table and an immutable
+browser index in one command. This step needs object-storage credentials and is
+not required for the five-minute path above. For raw text, ParqDB uses the
+pinned MiniLM ONNX model for both offline embeddings and browser parity
+metadata, then builds hierarchical IVF-LVQ8 and uploads every object before
+exposing the single top-level `manifest.json`:
 
 ```bash
 python -m pip install "parqdb[publish]"
@@ -188,7 +206,10 @@ The experimental HTTP server is documented in the
 ## Documentation
 
 Public documentation is maintained at [parqdb.io/docs](https://parqdb.io/docs).
-Use the version selector there to switch between `latest` and release snapshots.
+Use the version selector there to switch between the current docs (`latest`,
+served at `/docs`) and release snapshots at [`/docs/0.3`](https://parqdb.io/docs/0.3)
+and [`/docs/0.2`](https://parqdb.io/docs/0.2). The paths `/docs/latest` and
+`/docs/0.3.0` are not published.
 
 - [Getting started](https://parqdb.io/docs/getting-started)
   and [Python examples](https://github.com/parqdb-io/parqdb/tree/main/examples/python)
@@ -201,40 +222,6 @@ Use the version selector there to switch between `latest` and release snapshots.
 - [Current limitations](https://parqdb.io/docs/reference/limitations),
   [troubleshooting](https://parqdb.io/docs/reference/troubleshooting),
   and [roadmap](https://parqdb.io/docs/project/roadmap)
-
-## TEngineDB-V and ParqDB
-
-[TEngineDB-V: An OLAP-Native Vector Search System for Large-k Workloads at
-Tencent](https://arxiv.org/abs/2608.00650) is Tencent's production system for
-large-k vector search. On a 10-billion-vector deployment, its deep integration
-with TEngineDB delivers up to a 52x speedup over the legacy system.
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/parqdb-io/parqdb/main/assets/tenginedb-v-figure-7.png" alt="Figure 7: Latency-Recall Trade-off Across Systems" width="760">
-</p>
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/parqdb-io/parqdb/main/assets/tenginedb-v-figure-13.png" alt="Figure 13: Production performance at 10-billion scale" width="760">
-</p>
-
-ParqDB shares the idea, not the implementation. It rebuilds table-native vector
-search around open index formats and existing SQL engines, aiming for
-TEngineDB-V-class performance without requiring a proprietary engine.
-
-If you use ParqDB in your research, please cite our VLDB 2026 Industry Track
-paper:
-
-```bibtex
-@misc{wu2026tenginedbvolapnativevectorsearch,
-  title         = {{TEngineDB-V}: An {OLAP}-Native Vector Search System for Large-$k$ Workloads at Tencent},
-  author        = {Xufei Wu and Pengcheng Zhang and Yitong Song and Xiaobo Zhang and Anqi Liang and Kai Wang and Jijun Du and Yidi Xiong and Guangxu Cheng and Zhe Chen and Peng Chen and Guoliang Li and Xuanhe Zhou and Fan Wu},
-  year          = {2026},
-  eprint        = {2608.00650},
-  archivePrefix = {arXiv},
-  primaryClass  = {cs.DB},
-  url           = {https://arxiv.org/abs/2608.00650},
-}
-```
 
 ## Development
 
@@ -252,6 +239,11 @@ If you are working on RAG, agent trajectory storage, Parquet performance, or
 embedded lakehouse systems, share your workload and requirements in the
 relevant issue. Comment before starting a large change so that scope and
 interfaces can be agreed on first.
+
+Questions about installation, APIs, or usage belong in
+[GitHub Discussions (Q&A)](https://github.com/orgs/parqdb-io/discussions/new?category=q-a).
+Bugs and feature requests belong in
+[GitHub Issues](https://github.com/parqdb-io/parqdb/issues).
 
 ParqDB uses uv, Maturin, Cargo, and a small Makefile orchestration layer:
 
@@ -280,6 +272,26 @@ Made with [contrib.rocks](https://contrib.rocks).
   <img alt="ParqDB Star History" src="https://raw.githubusercontent.com/parqdb-io/parqdb/star-history-data/assets/star-history/star-history-light.svg">
 </picture>
 <!-- star-history:end -->
+
+## Related Work
+
+[TEngineDB-V: An OLAP-Native Vector Search System for Large-k Workloads at
+Tencent](https://arxiv.org/abs/2608.00650) is related work, not the same
+implementation. It is Tencent's production system for large-k vector search.
+ParqDB does not share its code or runtime; it rebuilds table-native vector
+search around open Parquet index formats and existing SQL engines.
+
+```bibtex
+@misc{wu2026tenginedbvolapnativevectorsearch,
+  title         = {{TEngineDB-V}: An {OLAP}-Native Vector Search System for Large-$k$ Workloads at Tencent},
+  author        = {Xufei Wu and Pengcheng Zhang and Yitong Song and Xiaobo Zhang and Anqi Liang and Kai Wang and Jijun Du and Yidi Xiong and Guangxu Cheng and Zhe Chen and Peng Chen and Guoliang Li and Xuanhe Zhou and Fan Wu},
+  year          = {2026},
+  eprint        = {2608.00650},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.DB},
+  url           = {https://arxiv.org/abs/2608.00650},
+}
+```
 
 ## License
 
