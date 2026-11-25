@@ -222,7 +222,7 @@ search around open index formats and existing SQL engines, aiming for
 TEngineDB-V-class performance without requiring a proprietary engine.
 
 If you use ParqDB in your research, please cite our VLDB 2026 Industry Track
-paper:
+paper or our library:
 
 ```bibtex
 @misc{wu2026tenginedbvolapnativevectorsearch,
@@ -233,6 +233,14 @@ paper:
   archivePrefix = {arXiv},
   primaryClass  = {cs.DB},
   url           = {https://arxiv.org/abs/2608.00650},
+}
+```
+```bibtex
+@misc{parqdb,
+  author       = {{Pengcheng Zhang, Yitong Song, Shuhang Lu, Jianliang Xu}},
+  title        = {{ParqDB}: Billion-scale embedded vector database built entirely on Parquet and Arrow},
+  howpublished = {\url{https://github.com/parqdb-io/parqdb}},
+  note         = {Accessed: (your access time)}
 }
 ```
 
